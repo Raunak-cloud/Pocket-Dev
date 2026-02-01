@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "name": "pocket-dev",
   "version": "0.1.0",
   "private": true,
@@ -9,9 +10,14 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "@pinecone-database/pinecone": "^7.0.0",
+    "dotenv": "^17.2.3",
     "next": "16.1.6",
+    "openai": "^6.17.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -21,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
