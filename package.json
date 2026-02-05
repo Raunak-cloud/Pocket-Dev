@@ -7,16 +7,23 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "mcp:eslint": "tsx mcp/eslint-server.ts",
+    "mcp:test": "tsx mcp/test-eslint.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.72.1",
+    "@codesandbox/sandpack-react": "^2.20.0",
+    "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.25.3",
-    "@pinecone-database/pinecone": "^7.0.0",
-    "dotenv": "^17.2.3",
+    "@stackblitz/sdk": "^1.11.0",
+    "firebase": "^12.8.0",
+    "firebase-admin": "^13.6.1",
+    "jszip": "^3.10.1",
     "next": "16.1.6",
-    "openai": "^6.17.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "stripe": "^20.3.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

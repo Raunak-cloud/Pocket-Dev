@@ -1,113 +1,48 @@
-// app/actions.ts
 "use server";
 
 import "server-only";
 
-import { pinecone } from "@/lib/pinecone";
-import { generateEmbedding } from "@/lib/embedder";
+import {
+  generateWebsite,
+  editWebsite as editWebsiteFn,
+  type GeneratedWebsite,
+} from "@/lib/website-generator";
 
-export interface SearchResult {
-  id: string;
-  score: number;
-  text: string;
-  category?: string;
-  author?: string;
-  templateType?: "business" | "ecommerce";
-  htmlContent?: string;
-  features?: string;
-}
-
-export async function searchVectorDB(query: string, topK: number = 5) {
+export async function createWebsite(prompt: string): Promise<{
+  success: boolean;
+  data?: GeneratedWebsite;
+  error?: string;
+}> {
   try {
-    // Generate embedding for the query
-    const queryEmbedding = await generateEmbedding(query);
-
-    // Query Pinecone
-    const index = pinecone.index("documents");
-    const queryResponse = await index.query({
-      vector: queryEmbedding,
-      topK,
-      includeMetadata: true,
-    });
-
-    // Format results
-    const results: SearchResult[] = queryResponse.matches.map((match) => ({
-      id: match.id,
-      score: match.score || 0,
-      text: (match.metadata?.text as string) || "",
-      category: match.metadata?.category as string,
-      author: match.metadata?.author as string,
-      templateType: match.metadata?.templateType as "business" | "ecommerce",
-      htmlContent: match.metadata?.htmlContent as string,
-      features: match.metadata?.features as string,
-    }));
-
-    return {
-      success: true,
-      data: results,
-    };
+    const result = await generateWebsite(prompt);
+    return { success: true, data: result };
   } catch (error) {
-    console.error("Search Error:", error);
+    console.error("Website generation error:", error);
     return {
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to search vector database",
+        error instanceof Error ? error.message : "Failed to generate website",
     };
   }
 }
 
-export async function generateWebsiteTemplate(query: string) {
+export async function editWebsite(
+  currentHtml: string,
+  editPrompt: string
+): Promise<{
+  success: boolean;
+  data?: GeneratedWebsite;
+  error?: string;
+}> {
   try {
-    // Generate embedding for the query
-    const queryEmbedding = await generateEmbedding(query);
-
-    // Query Pinecone with template filter
-    const index = pinecone.index("documents");
-    const queryResponse = await index.query({
-      vector: queryEmbedding,
-      topK: 1,
-      includeMetadata: true,
-      filter: {
-        category: "template",
-      },
-    });
-
-    // Check if we have a match
-    const bestMatch = queryResponse.matches[0];
-    if (!bestMatch || !bestMatch.score || bestMatch.score < 0.5) {
-      return {
-        success: false,
-        error:
-          "No matching website template found. Try: 'generate business website' or 'create ecommerce store'",
-      };
-    }
-
-    // Return the template data
-    const result: SearchResult = {
-      id: bestMatch.id,
-      score: bestMatch.score,
-      text: (bestMatch.metadata?.text as string) || "",
-      category: bestMatch.metadata?.category as string,
-      author: bestMatch.metadata?.author as string,
-      templateType: bestMatch.metadata?.templateType as "business" | "ecommerce",
-      htmlContent: bestMatch.metadata?.htmlContent as string,
-      features: bestMatch.metadata?.features as string,
-    };
-
-    return {
-      success: true,
-      data: [result],
-    };
+    const result = await editWebsiteFn(currentHtml, editPrompt);
+    return { success: true, data: result };
   } catch (error) {
-    console.error("Template Generation Error:", error);
+    console.error("Website edit error:", error);
     return {
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Failed to generate website template",
+        error instanceof Error ? error.message : "Failed to edit website",
     };
   }
 }
