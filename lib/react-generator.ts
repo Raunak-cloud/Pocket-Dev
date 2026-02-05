@@ -48,14 +48,15 @@ const SYSTEM_PROMPT = `You are an expert React developer who creates professiona
 6. Every component must be complete with real content (no placeholders)
 
 📸 USER-UPLOADED IMAGES:
-If the user provides images with paths like /images/user-image-1.jpg, you MUST:
-- Use EXACTLY those image paths in your img src attributes
-- Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="w-full h-auto" />
+If the user provides image URLs (Firebase Storage URLs starting with https://), you MUST:
+- Use EXACTLY those URLs in your img src attributes
+- Example: <img src="https://firebasestorage.googleapis.com/..." alt="User uploaded image" className="w-full h-auto" />
 - DO NOT use placeholder URLs like via.placeholder.com or unsplash when user has uploaded images
 - Place the user's images prominently (hero sections, galleries, cards, etc.)
 - The user expects to see their ACTUAL uploaded images in the generated website
+- These are real hosted images, not placeholders
 
-For design reference images:
+For design reference (when images are shown visually):
 - Carefully analyze the design, layout, colors, typography, and style from the images
 - Replicate the visual design as closely as possible using Tailwind CSS
 - Match the color scheme (use exact hex colors when possible)

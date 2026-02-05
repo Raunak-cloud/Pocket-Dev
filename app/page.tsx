@@ -22,7 +22,8 @@ import {
   serverTimestamp,
   increment,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, storage } from "@/lib/firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 interface GeneratedFile {
   path: string;
@@ -43,6 +44,7 @@ interface UploadedFile {
   name: string;
   type: string;
   dataUrl: string;
+  downloadUrl?: string; // Firebase Storage URL
 }
 
 interface SavedProject {
@@ -111,51 +113,6 @@ const EXAMPLES = [
   },
 ];
 
-// Helper function to get image extension from MIME type
-function getImageExtension(mimeType: string): string {
-  const extensions: Record<string, string> = {
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-    "image/svg+xml": ".svg",
-  };
-  return extensions[mimeType] || ".jpg";
-}
-
-// Helper function to replace image paths with data URLs in code
-function injectImageDataUrls(
-  files: { path: string; content: string }[],
-  uploadedFiles: UploadedFile[]
-): { path: string; content: string }[] {
-  const imageFiles = uploadedFiles.filter((f) => f.type.startsWith("image/"));
-  if (imageFiles.length === 0) return files;
-
-  // Create a map of image paths to data URLs
-  const imageMap: Record<string, string> = {};
-  imageFiles.forEach((f, i) => {
-    const ext = getImageExtension(f.type);
-    imageMap[`/images/user-image-${i + 1}${ext}`] = f.dataUrl;
-    imageMap[`images/user-image-${i + 1}${ext}`] = f.dataUrl;
-  });
-
-  // Replace image paths with data URLs in all code files
-  return files.map((file) => {
-    if (!file.path.endsWith(".jsx") && !file.path.endsWith(".js") && !file.path.endsWith(".tsx") && !file.path.endsWith(".ts")) {
-      return file;
-    }
-
-    let content = file.content;
-    for (const [path, dataUrl] of Object.entries(imageMap)) {
-      // Replace both quoted versions: "/images/..." and '/images/...'
-      content = content.replace(new RegExp(`"${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'g'), `"${dataUrl}"`);
-      content = content.replace(new RegExp(`'${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`, 'g'), `'${dataUrl}'`);
-    }
-    return { ...file, content };
-  });
-}
-
 function ReactGeneratorContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
@@ -192,6 +149,8 @@ function ReactGeneratorContent() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [currentProjectTier, setCurrentProjectTier] = useState<"free" | "premium">("free");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -336,12 +295,14 @@ function ReactGeneratorContent() {
         orderBy("createdAt", "desc"),
       );
       const snapshot = await getDocs(projectsQuery);
-      const projects: SavedProject[] = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt?.toDate() || new Date(),
-        updatedAt: doc.data().updatedAt?.toDate() || new Date(),
-      })) as SavedProject[];
+      const projects: SavedProject[] = snapshot.docs
+        .filter((doc) => !doc.data().deleted) // Filter out deleted projects
+        .map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt?.toDate() || new Date(),
+          updatedAt: doc.data().updatedAt?.toDate() || new Date(),
+        })) as SavedProject[];
       setSavedProjects(projects);
     } catch (error) {
       console.error("Error loading projects:", error);
@@ -364,6 +325,37 @@ function ReactGeneratorContent() {
     setCurrentProjectTier(savedProject.tier || "free");
     setStatus("success");
     setActiveSection("create");
+  };
+
+  // Delete project
+  const deleteProject = async (projectId: string) => {
+    if (!user) return;
+
+    try {
+      // Delete from Firestore
+      const projectRef = doc(db, "projects", projectId);
+      await updateDoc(projectRef, {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      });
+
+      // If this is the currently open project, close it
+      if (currentProjectId === projectId) {
+        setProject(null);
+        setCurrentProjectId(null);
+        setStatus("idle");
+        setGenerationPrompt("");
+        setPublishedUrl(null);
+      }
+
+      // Refresh projects list
+      await loadSavedProjects();
+      setShowDeleteModal(false);
+      setProjectToDelete(null);
+    } catch (error) {
+      console.error("Error deleting project:", error);
+      setError("Failed to delete project. Please try again.");
+    }
   };
 
   // Upgrade project to premium
@@ -579,25 +571,42 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
   };
 
   const handleFileUpload = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
-      if (!files) return;
+      if (!files || !user) return;
 
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          setUploadedFiles((prev) => [
-            ...prev,
-            { name: file.name, type: file.type, dataUrl },
-          ]);
-        };
-        reader.readAsDataURL(file);
-      });
+      for (const file of Array.from(files)) {
+        try {
+          // Create a unique filename with timestamp
+          const timestamp = Date.now();
+          const filename = `${user.uid}/${timestamp}-${file.name}`;
+          const storageRef = ref(storage, `user-images/${filename}`);
+
+          // Upload file to Firebase Storage
+          const snapshot = await uploadBytes(storageRef, file);
+
+          // Get download URL
+          const downloadUrl = await getDownloadURL(snapshot.ref);
+
+          // Also keep dataUrl for vision API (sending to AI)
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const dataUrl = ev.target?.result as string;
+            setUploadedFiles((prev) => [
+              ...prev,
+              { name: file.name, type: file.type, dataUrl, downloadUrl },
+            ]);
+          };
+          reader.readAsDataURL(file);
+        } catch (error) {
+          console.error("Error uploading file:", error);
+          setError(`Failed to upload ${file.name}. Please try again.`);
+        }
+      }
 
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [],
+    [user],
   );
 
   const removeFile = useCallback((index: number) => {
@@ -605,25 +614,42 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
   }, []);
 
   const handleEditFileUpload = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
-      if (!files) return;
+      if (!files || !user) return;
 
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          setEditFiles((prev) => [
-            ...prev,
-            { name: file.name, type: file.type, dataUrl },
-          ]);
-        };
-        reader.readAsDataURL(file);
-      });
+      for (const file of Array.from(files)) {
+        try {
+          // Create a unique filename with timestamp
+          const timestamp = Date.now();
+          const filename = `${user.uid}/${timestamp}-${file.name}`;
+          const storageRef = ref(storage, `user-images/${filename}`);
+
+          // Upload file to Firebase Storage
+          const snapshot = await uploadBytes(storageRef, file);
+
+          // Get download URL
+          const downloadUrl = await getDownloadURL(snapshot.ref);
+
+          // Also keep dataUrl for vision API (sending to AI)
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const dataUrl = ev.target?.result as string;
+            setEditFiles((prev) => [
+              ...prev,
+              { name: file.name, type: file.type, dataUrl, downloadUrl },
+            ]);
+          };
+          reader.readAsDataURL(file);
+        } catch (error) {
+          console.error("Error uploading file:", error);
+          setError(`Failed to upload ${file.name}. Please try again.`);
+        }
+      }
 
       if (editFileInputRef.current) editFileInputRef.current.value = "";
     },
-    [],
+    [user],
   );
 
   const removeEditFile = useCallback((index: number) => {
@@ -700,19 +726,19 @@ ${editPrompt}
     if (editFiles.length > 0) {
       const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
       if (imageFiles.length > 0) {
-        const imagePathList = imageFiles
-          .map((f, i) => `- /images/user-image-${i + 1}${getImageExtension(f.type)} (originally: ${f.name})`)
+        const imageUrlList = imageFiles
+          .map((f, i) => `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`)
           .join("\n");
         editFullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
-${imagePathList}
+${imageUrlList}
 
 🚨 YOU MUST:
-1. Use these EXACT image paths in your img src attributes
-2. Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="..." />
+1. Use these EXACT image URLs in your img src attributes
+2. Example: <img src="${imageFiles[0]?.downloadUrl || ''}" alt="User uploaded image" className="..." />
 3. Replace existing placeholder images with these actual images
 4. Embed these images prominently in the relevant sections
-5. DO NOT use placeholder images or external URLs - use ONLY the paths listed above
+5. DO NOT use placeholder images - use ONLY the URLs listed above
 
 The user expects to see their ACTUAL uploaded images in the updated website.`;
       }
@@ -749,12 +775,10 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         }
       });
 
-      // Inject uploaded image data URLs into the merged files
-      const filesWithImages = injectImageDataUrls(mergedFiles, editFiles);
-
+      // Images are now hosted on Firebase Storage with URLs embedded in code
       const mergedProject = {
         ...result,
-        files: filesWithImages,
+        files: mergedFiles,
       };
 
       setProject(mergedProject);
@@ -795,18 +819,18 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) => f.type.startsWith("image/"));
       if (imageFiles.length > 0) {
-        const imagePathList = imageFiles
-          .map((f, i) => `- /images/user-image-${i + 1}${getImageExtension(f.type)} (originally: ${f.name})`)
+        const imageUrlList = imageFiles
+          .map((f, i) => `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`)
           .join("\n");
         fullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
-${imagePathList}
+${imageUrlList}
 
 🚨 YOU MUST:
-1. Use these EXACT image paths in your img src attributes
-2. Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="..." />
+1. Use these EXACT image URLs in your img src attributes
+2. Example: <img src="${imageFiles[0]?.downloadUrl || ''}" alt="User uploaded image" className="..." />
 3. Embed these images prominently in the website (hero sections, galleries, cards, etc.)
-4. DO NOT use placeholder images or external URLs - use ONLY the paths listed above
+4. DO NOT use placeholder images like via.placeholder.com - use ONLY the URLs listed above
 5. The user uploaded these images specifically to see them in the generated website
 
 The user expects to see their ACTUAL uploaded images in the final website.`;
@@ -839,22 +863,16 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
 
       const result = await generateReact(fullPrompt, imageFiles);
       clearInterval(progressInterval);
-      setProgressMessages([...progressSteps, "Embedding images..."]);
-
-      // Replace image paths with actual data URLs in the generated code
-      const filesWithImages = injectImageDataUrls(result.files, uploadedFiles);
-      const projectWithImages = {
-        ...result,
-        files: filesWithImages,
-      };
-
       setProgressMessages([...progressSteps, "Saving project..."]);
-      setProject(projectWithImages);
+
+      // Images are now hosted on Firebase Storage with URLs embedded in code
+      // No need for data URL injection - AI uses the Firebase URLs directly
+      setProject(result);
 
       // Save project to Firestore
       if (user) {
         try {
-          const projectId = await saveProjectToFirestore(projectWithImages, prompt);
+          const projectId = await saveProjectToFirestore(result, prompt);
           setCurrentProjectId(projectId);
           // Refresh projects list
           loadSavedProjects();
@@ -1923,6 +1941,59 @@ Examples:
             </div>
           </div>
         )}
+
+        {/* Delete Confirmation Modal */}
+        {showDeleteModal && projectToDelete && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+              {/* Modal Header */}
+              <div className="relative px-6 pt-8 pb-4 text-center">
+                <button
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setProjectToDelete(null);
+                  }}
+                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-red-500/20 rounded-2xl">
+                  <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-bold text-white mb-2">Delete Project?</h3>
+                <p className="text-slate-400 text-sm">
+                  This action cannot be undone. The project will be permanently deleted.
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="px-6 pb-6 space-y-3">
+                <button
+                  onClick={() => deleteProject(projectToDelete)}
+                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete Project
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setProjectToDelete(null);
+                  }}
+                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2351,6 +2422,29 @@ Examples:
                       Live
                     </span>
                   )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProjectToDelete(savedProject.id);
+                      setShowDeleteModal(true);
+                    }}
+                    className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
+                    title="Delete project"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  </button>
                   <svg
                     className="w-5 h-5 text-slate-500 group-hover:text-blue-400 transition"
                     fill="none"
