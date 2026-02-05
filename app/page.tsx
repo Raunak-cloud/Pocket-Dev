@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { generateReact } from "./react-actions";
 import Logo from "./components/Logo";
-import { SandpackProvider, SandpackPreview } from "@codesandbox/sandpack-react";
+import { SandpackProvider, SandpackPreview, useSandpack } from "@codesandbox/sandpack-react";
 import sdk from "@stackblitz/sdk";
 import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
@@ -113,8 +113,64 @@ const EXAMPLES = [
   },
 ];
 
+// Preview component with loading state
+function PreviewWithLoader() {
+  const { sandpack } = useSandpack();
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (sandpack.status === "running") {
+      // Add a small delay to ensure content is rendered
+      const timer = setTimeout(() => {
+        setIsLoading(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    } else {
+      setIsLoading(true);
+    }
+  }, [sandpack.status]);
+
+  return (
+    <div className="relative h-full">
+      {isLoading && (
+        <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-center">
+          <div className="text-center">
+            {/* Modern loading animation */}
+            <div className="relative w-20 h-20 mx-auto mb-4">
+              {/* Outer rotating ring */}
+              <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full"></div>
+              {/* Spinning gradient ring */}
+              <div className="absolute inset-0 border-4 border-transparent border-t-blue-500 border-r-violet-500 rounded-full animate-spin"></div>
+              {/* Inner pulsing dot */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse"></div>
+              </div>
+            </div>
+            <p className="text-sm font-medium text-slate-300 mb-1">
+              {sandpack.status === "idle" && "Initializing..."}
+              {sandpack.status === "running" && "Loading preview..."}
+              {!["idle", "running"].includes(sandpack.status) && "Preparing environment..."}
+            </p>
+            <p className="text-xs text-slate-500">
+              {sandpack.status === "idle" && "Setting up Sandpack"}
+              {sandpack.status === "running" && "Almost ready"}
+              {!["idle", "running"].includes(sandpack.status) && "Installing dependencies"}
+            </p>
+          </div>
+        </div>
+      )}
+      <SandpackPreview
+        showNavigator={false}
+        showOpenInCodeSandbox={false}
+        showRefreshButton={false}
+        style={{ height: "85vh" }}
+      />
+    </div>
+  );
+}
+
 function ReactGeneratorContent() {
-  const { user } = useAuth();
+  const { user, userData, loading: authLoading } = useAuth();
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState<
@@ -154,8 +210,13 @@ function ReactGeneratorContent() {
     "free" | "premium"
   >("free");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isProcessingBasicPayment, setIsProcessingBasicPayment] = useState(false);
+  const [isProcessingPremiumPayment, setIsProcessingPremiumPayment] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [showAppPaymentModal, setShowAppPaymentModal] = useState(false);
+  const [pendingPromptForPayment, setPendingPromptForPayment] = useState("");
+  const [pendingProjectTier, setPendingProjectTier] = useState<"free" | "premium">("free");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -248,16 +309,45 @@ function ReactGeneratorContent() {
     } else if (payment === "cancelled") {
       window.history.replaceState({}, "", "/");
     }
+
+    // Handle app creation payment success
+    const appPayment = searchParams.get("app_payment");
+    const paidPrompt = searchParams.get("prompt");
+    const tier = searchParams.get("tier") as "free" | "premium" | null;
+
+    if (appPayment === "success" && paidPrompt && user) {
+      // Automatically start generation after successful payment
+      const decodedPrompt = decodeURIComponent(paidPrompt);
+      const projectTier = tier === "premium" ? "premium" : "free";
+
+      window.history.replaceState({}, "", "/");
+      setPrompt(decodedPrompt);
+      setActiveSection("create");
+      setPendingProjectTier(projectTier);
+
+      if (projectTier === "premium") {
+        setCurrentProjectTier("premium");
+      }
+
+      // Trigger generation with the decoded prompt
+      setTimeout(() => {
+        startGeneration(decodedPrompt);
+      }, 300);
+    } else if (appPayment === "cancelled") {
+      window.history.replaceState({}, "", "/");
+      setError("Payment cancelled. You can try again when ready.");
+    }
   }, [searchParams, user]);
 
   // Save project to Firestore
   const saveProjectToFirestore = async (
     projectData: ReactProject,
     projectPrompt: string,
+    tier: "free" | "premium" = "free",
   ): Promise<string> => {
     if (!user) throw new Error("User not logged in");
 
-    const projectDoc = {
+    const projectDoc: any = {
       userId: user.uid,
       prompt: projectPrompt,
       files: projectData.files,
@@ -265,7 +355,13 @@ function ReactGeneratorContent() {
       lintReport: projectData.lintReport,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      tier: tier,
     };
+
+    // If premium tier, add premium-specific fields
+    if (tier === "premium") {
+      projectDoc.paidAt = serverTimestamp();
+    }
 
     const docRef = await addDoc(collection(db, "projects"), projectDoc);
 
@@ -417,6 +513,102 @@ function ReactGeneratorContent() {
           : "Payment failed. Please try again.",
       );
       setIsProcessingPayment(false);
+    }
+  };
+
+  // Pay for new app creation
+  const payForNewApp = async () => {
+    if (!user) return;
+
+    setIsProcessingBasicPayment(true);
+    setError("");
+    try {
+      // Create Stripe checkout session for app creation
+      const response = await fetch("/api/create-app-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email,
+          prompt: pendingPromptForPayment,
+        }),
+      });
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error("Non-JSON response:", text.substring(0, 200));
+        throw new Error("Server error. Please try again.");
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create checkout session");
+      }
+
+      if (!data.url) {
+        throw new Error("No checkout URL received");
+      }
+
+      // Redirect to Stripe Checkout
+      window.location.href = data.url;
+    } catch (error) {
+      console.error("Error creating app checkout:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Payment failed. Please try again.",
+      );
+      setIsProcessingBasicPayment(false);
+    }
+  };
+
+  // Pay for premium app creation
+  const payForPremiumApp = async () => {
+    if (!user) return;
+
+    setIsProcessingPremiumPayment(true);
+    setError("");
+    try {
+      // Create Stripe checkout session for premium app creation
+      const response = await fetch("/api/create-premium-app-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email,
+          prompt: pendingPromptForPayment,
+        }),
+      });
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error("Non-JSON response:", text.substring(0, 200));
+        throw new Error("Server error. Please try again.");
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create checkout session");
+      }
+
+      if (!data.url) {
+        throw new Error("No checkout URL received");
+      }
+
+      // Redirect to Stripe Checkout
+      window.location.href = data.url;
+    } catch (error) {
+      console.error("Error creating premium app checkout:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Payment failed. Please try again.",
+      );
+      setIsProcessingPremiumPayment(false);
     }
   };
 
@@ -839,15 +1031,16 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     }
   };
 
-  const startGeneration = async () => {
+  const startGeneration = async (promptOverride?: string) => {
+    const generationPrompt = promptOverride || prompt;
     setStatus("loading");
     setError("");
     setProject(null);
     setProgressMessages([]);
-    setGenerationPrompt(prompt);
+    setGenerationPrompt(generationPrompt);
     setIsGenerationMinimized(false);
 
-    let fullPrompt = prompt;
+    let fullPrompt = generationPrompt;
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) =>
         f.type.startsWith("image/"),
@@ -909,8 +1102,10 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
       // Save project to Firestore
       if (user) {
         try {
-          const projectId = await saveProjectToFirestore(result, prompt);
+          const projectId = await saveProjectToFirestore(result, generationPrompt, pendingProjectTier);
           setCurrentProjectId(projectId);
+          // Reset pending tier after saving
+          setPendingProjectTier("free");
           // Refresh projects list
           loadSavedProjects();
         } catch (saveError) {
@@ -936,12 +1131,22 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!prompt.trim() || status === "loading") return;
 
     // Check if user is logged in
     if (!user) {
       setPendingGeneration(true);
       setShowSignInModal(true);
+      return;
+    }
+
+    // Check if payment is required (after 2 free projects)
+    const projectCount = userData?.projectCount || 0;
+
+    if (projectCount >= 2) {
+      setPendingPromptForPayment(prompt);
+      setShowAppPaymentModal(true);
       return;
     }
 
@@ -1330,7 +1535,7 @@ export default defineConfig({ plugins: [react()] });`;
             <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-900/30">
               {/* Editing overlay */}
               {isEditing && !isEditMinimized && (
-                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-20 flex items-center justify-center overflow-auto p-4">
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50 flex items-center justify-center overflow-auto p-4 pt-32">
                   <GenerationProgress
                     prompt={`Editing: ${editPrompt}`}
                     progressMessages={editProgressMessages}
@@ -1420,12 +1625,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
                       }}
                       theme="dark"
                     >
-                      <SandpackPreview
-                        showNavigator={false}
-                        showOpenInCodeSandbox={false}
-                        showRefreshButton={false}
-                        style={{ height: "85vh" }}
-                      />
+                      <PreviewWithLoader />
                     </SandpackProvider>
                   </div>
                 </div>
@@ -2771,6 +2971,44 @@ Examples:
     }
   };
 
+  // Show loading screen while auth state is being resolved
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        {/* Background effects */}
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-3xl" />
+          <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-violet-500/5 rounded-full blur-3xl" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-500/3 rounded-full blur-3xl" />
+        </div>
+
+        {/* Loading animation */}
+        <div className="text-center relative z-10">
+          <div className="inline-flex items-center justify-center mb-6">
+            <Logo size={64} animate />
+          </div>
+
+          {/* Modern spinner */}
+          <div className="relative w-24 h-24 mx-auto mb-6">
+            {/* Outer rotating ring */}
+            <div className="absolute inset-0 border-4 border-blue-500/10 rounded-full"></div>
+            {/* Spinning gradient ring */}
+            <div className="absolute inset-0 border-4 border-transparent border-t-blue-500 border-r-violet-500 rounded-full animate-spin"></div>
+            {/* Middle ring */}
+            <div className="absolute inset-2 border-4 border-transparent border-b-blue-400 border-l-violet-400 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+            {/* Inner pulsing dot */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-4 h-4 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse"></div>
+            </div>
+          </div>
+
+          <h1 className="text-2xl font-bold text-white mb-2">Pocket Dev</h1>
+          <p className="text-slate-400">Initializing...</p>
+        </div>
+      </div>
+    );
+  }
+
   // IDLE/ERROR STATE
   return (
     <div className="min-h-screen bg-slate-950 flex">
@@ -2808,6 +3046,225 @@ Examples:
         }}
         onSuccess={handleSignInSuccess}
       />
+
+      {/* App Payment Modal */}
+      {showAppPaymentModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Modal Header */}
+            <div className="relative px-6 pt-8 pb-4 text-center">
+              <button
+                onClick={() => {
+                  setShowAppPaymentModal(false);
+                  setPendingPromptForPayment("");
+                }}
+                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+              <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-gradient-to-br from-blue-500 to-violet-500 rounded-2xl">
+                <svg
+                  className="w-8 h-8 text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 4v16m8-8H4"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">
+                Choose Your Plan
+              </h3>
+              <p className="text-slate-400 text-sm">
+                You've used your 2 free projects. Choose a plan to continue.
+              </p>
+            </div>
+
+            {/* Pricing Options */}
+            <div className="px-6 py-4 space-y-3">
+              {/* Basic Plan */}
+              <div className="p-4 bg-gradient-to-br from-blue-500/10 to-violet-500/10 border-2 border-blue-500/30 rounded-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-lg font-bold text-white">Basic</h4>
+                    <p className="text-xs text-slate-400">One-time payment</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-2xl font-bold text-white">$5</span>
+                    <span className="text-slate-400 text-sm ml-1">AUD</span>
+                  </div>
+                </div>
+                <ul className="space-y-1.5">
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    AI-generated application
+                  </li>
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Download & deploy anywhere
+                  </li>
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Saved to your account
+                  </li>
+                </ul>
+              </div>
+
+              {/* Premium Plan */}
+              <div className="p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-2 border-amber-500/30 rounded-xl relative overflow-hidden">
+                <div className="absolute top-2 right-2">
+                  <span className="px-2 py-0.5 bg-amber-500 text-white text-xs font-bold rounded-full">BEST VALUE</span>
+                </div>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-lg font-bold text-white flex items-center gap-2">
+                      Premium
+                      <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                      </svg>
+                    </h4>
+                    <p className="text-xs text-amber-400 font-medium">$5 + $60 = $65 AUD</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-2xl font-bold text-white">$65</span>
+                    <span className="text-slate-400 text-sm ml-1">AUD</span>
+                  </div>
+                </div>
+                <ul className="space-y-1.5">
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="font-semibold text-white">Everything in Basic</span>
+                  </li>
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Unlimited AI edits
+                  </li>
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Backend functionalities
+                  </li>
+                  <li className="flex items-center gap-2 text-sm text-slate-300">
+                    <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Priority human support
+                  </li>
+                </ul>
+              </div>
+
+            </div>
+
+            {/* Payment Options */}
+            <div className="px-6 pb-6 space-y-3">
+              {/* Basic Option */}
+              <button
+                onClick={payForNewApp}
+                disabled={isProcessingBasicPayment || isProcessingPremiumPayment}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isProcessingBasicPayment ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing Basic...
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
+                      />
+                    </svg>
+                    Pay $5 AUD - Basic
+                  </>
+                )}
+              </button>
+
+              {/* Premium Option */}
+              <button
+                onClick={payForPremiumApp}
+                disabled={isProcessingBasicPayment || isProcessingPremiumPayment}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isProcessingPremiumPayment ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing Premium...
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
+                      />
+                    </svg>
+                    Pay $65 AUD - Premium
+                  </>
+                )}
+              </button>
+              <p className="text-xs text-slate-400 text-center">
+                Premium includes unlimited edits, backend functionalities & priority support
+              </p>
+              <button
+                onClick={() => {
+                  setShowAppPaymentModal(false);
+                  setPendingPromptForPayment("");
+                }}
+                className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+              >
+                Cancel
+              </button>
+              <p className="text-xs text-slate-500 text-center">
+                Secure payment powered by Stripe
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating generation progress indicator (when on other sections or minimized) */}
       {status === "loading" &&
