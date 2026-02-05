@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import Logo from "./Logo";
 
@@ -48,6 +49,7 @@ export default function DashboardSidebar({
   isCollapsed: externalIsCollapsed,
   onToggleCollapse
 }: DashboardSidebarProps) {
+  const router = useRouter();
   const { user, userData, signOut } = useAuth();
   const [internalIsCollapsed, setInternalIsCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -73,10 +75,13 @@ export default function DashboardSidebar({
     >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-slate-800">
-        <div className={`flex items-center gap-3 ${isCollapsed ? "justify-center w-full" : ""}`}>
+        <button
+          onClick={() => onSectionChange("create")}
+          className={`flex items-center gap-3 hover:opacity-80 transition ${isCollapsed ? "justify-center w-full" : ""}`}
+        >
           <Logo size={28} />
           {!isCollapsed && <span className="font-semibold text-white">Pocket Dev</span>}
-        </div>
+        </button>
         <button
           onClick={toggleCollapse}
           className={`p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition ${
@@ -202,6 +207,7 @@ export default function DashboardSidebar({
                 onClick={async () => {
                   await signOut();
                   setShowUserMenu(false);
+                  window.location.href = "/";
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition"
               >

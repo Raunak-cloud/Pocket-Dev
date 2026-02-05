@@ -139,15 +139,20 @@ function ReactGeneratorContent() {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
+  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
-  const [editProgressMessages, setEditProgressMessages] = useState<string[]>([]);
+  const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
+    [],
+  );
   const [isEditMinimized, setIsEditMinimized] = useState(false);
   const [showDomainModal, setShowDomainModal] = useState(false);
   const [customDomain, setCustomDomain] = useState("");
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [currentProjectTier, setCurrentProjectTier] = useState<"free" | "premium">("free");
+  const [currentProjectTier, setCurrentProjectTier] = useState<
+    "free" | "premium"
+  >("free");
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
@@ -208,9 +213,11 @@ function ReactGeneratorContent() {
 
           // Find and open the upgraded project
           const updatedProjects = await getDocs(
-            query(collection(db, "projects"), where("userId", "==", user.uid))
+            query(collection(db, "projects"), where("userId", "==", user.uid)),
           );
-          const upgradedProject = updatedProjects.docs.find(d => d.id === projectId);
+          const upgradedProject = updatedProjects.docs.find(
+            (d) => d.id === projectId,
+          );
           if (upgradedProject) {
             const projectData = upgradedProject.data();
             setProject({
@@ -226,10 +233,14 @@ function ReactGeneratorContent() {
 
           // Clear URL params and show success
           window.history.replaceState({}, "", "/");
-          alert("Payment successful! Your project is now Premium with unlimited edits.");
+          alert(
+            "Payment successful! Your project is now Premium with unlimited edits.",
+          );
         } catch (error) {
           console.error("Error updating project tier:", error);
-          setError("Payment received but failed to update project. Please refresh the page.");
+          setError(
+            "Payment received but failed to update project. Please refresh the page.",
+          );
         }
       };
 
@@ -323,6 +334,7 @@ function ReactGeneratorContent() {
     setPublishedUrl(savedProject.publishedUrl || null);
     setCustomDomain(savedProject.customDomain || "");
     setCurrentProjectTier(savedProject.tier || "free");
+    setHasUnpublishedChanges(false);
     setStatus("success");
     setActiveSection("create");
   };
@@ -346,6 +358,7 @@ function ReactGeneratorContent() {
         setStatus("idle");
         setGenerationPrompt("");
         setPublishedUrl(null);
+        setHasUnpublishedChanges(false);
       }
 
       // Refresh projects list
@@ -398,7 +411,11 @@ function ReactGeneratorContent() {
       window.location.href = data.url;
     } catch (error) {
       console.error("Error creating checkout:", error);
-      setError(error instanceof Error ? error.message : "Payment failed. Please try again.");
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Payment failed. Please try again.",
+      );
       setIsProcessingPayment(false);
     }
   };
@@ -517,6 +534,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
       });
 
       setPublishedUrl(publishUrl);
+      setHasUnpublishedChanges(false);
       loadSavedProjects();
     } catch (error) {
       console.error("Error publishing project:", error);
@@ -563,6 +581,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
       setPublishedUrl(null);
       setCustomDomain("");
       setShowDomainModal(false);
+      setHasUnpublishedChanges(false);
       loadSavedProjects();
     } catch (error) {
       console.error("Error unpublishing project:", error);
@@ -692,7 +711,10 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
     let stepIndex = 0;
     const editProgressInterval = setInterval(() => {
       if (stepIndex < editProgressSteps.length) {
-        setEditProgressMessages((prev) => [...prev, editProgressSteps[stepIndex]]);
+        setEditProgressMessages((prev) => [
+          ...prev,
+          editProgressSteps[stepIndex],
+        ]);
         stepIndex++;
       }
     }, 2500);
@@ -703,7 +725,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
       .join("\n\n---\n\n");
 
     // List all existing file paths
-    const existingFilePaths = project.files.map(f => f.path).join(", ");
+    const existingFilePaths = project.files.map((f) => f.path).join(", ");
 
     let editFullPrompt = `I have an existing React app with the following files:
 
@@ -727,7 +749,10 @@ ${editPrompt}
       const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
       if (imageFiles.length > 0) {
         const imageUrlList = imageFiles
-          .map((f, i) => `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`)
+          .map(
+            (f, i) =>
+              `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+          )
           .join("\n");
         editFullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
@@ -735,7 +760,7 @@ ${imageUrlList}
 
 🚨 YOU MUST:
 1. Use these EXACT image URLs in your img src attributes
-2. Example: <img src="${imageFiles[0]?.downloadUrl || ''}" alt="User uploaded image" className="..." />
+2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Replace existing placeholder images with these actual images
 4. Embed these images prominently in the relevant sections
 5. DO NOT use placeholder images - use ONLY the URLs listed above
@@ -760,16 +785,18 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setEditProgressMessages([...editProgressSteps, "Merging changes..."]);
 
       // Validate and merge: ensure no files are lost
-      const existingFileMap = new Map(project.files.map(f => [f.path, f]));
-      const newFileMap = new Map(result.files.map(f => [f.path, f]));
+      const existingFileMap = new Map(project.files.map((f) => [f.path, f]));
+      const newFileMap = new Map(result.files.map((f) => [f.path, f]));
 
       // Merge: keep all existing files, update with new versions if provided
-      const mergedFiles = Array.from(existingFileMap.entries()).map(([path, oldFile]) => {
-        return newFileMap.get(path) || oldFile; // Use new version if exists, otherwise keep old
-      });
+      const mergedFiles = Array.from(existingFileMap.entries()).map(
+        ([path, oldFile]) => {
+          return newFileMap.get(path) || oldFile; // Use new version if exists, otherwise keep old
+        },
+      );
 
       // Add any completely new files from the result
-      result.files.forEach(newFile => {
+      result.files.forEach((newFile) => {
         if (!existingFileMap.has(newFile.path)) {
           mergedFiles.push(newFile);
         }
@@ -786,12 +813,17 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setEditFiles([]); // Clear edit files after successful edit
 
       // Force preview refresh by updating key
-      setPreviewKey(prev => prev + 1);
+      setPreviewKey((prev) => prev + 1);
 
       // Update project in Firestore if we have a project ID
       if (currentProjectId && user) {
         try {
           await updateProjectInFirestore(currentProjectId, mergedProject);
+
+          // Mark that there are unpublished changes
+          if (publishedUrl) {
+            setHasUnpublishedChanges(true);
+          }
         } catch (saveError) {
           console.error("Error updating project:", saveError);
         }
@@ -817,10 +849,15 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
 
     let fullPrompt = prompt;
     if (uploadedFiles.length > 0) {
-      const imageFiles = uploadedFiles.filter((f) => f.type.startsWith("image/"));
+      const imageFiles = uploadedFiles.filter((f) =>
+        f.type.startsWith("image/"),
+      );
       if (imageFiles.length > 0) {
         const imageUrlList = imageFiles
-          .map((f, i) => `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`)
+          .map(
+            (f, i) =>
+              `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+          )
           .join("\n");
         fullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
@@ -828,7 +865,7 @@ ${imageUrlList}
 
 🚨 YOU MUST:
 1. Use these EXACT image URLs in your img src attributes
-2. Example: <img src="${imageFiles[0]?.downloadUrl || ''}" alt="User uploaded image" className="..." />
+2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Embed these images prominently in the website (hero sections, galleries, cards, etc.)
 4. DO NOT use placeholder images like via.placeholder.com - use ONLY the URLs listed above
 5. The user uploaded these images specifically to see them in the generated website
@@ -1046,7 +1083,11 @@ export default defineConfig({ plugins: [react()] });`;
                 <div className="h-4 w-px bg-slate-700" />
                 {currentProjectTier === "premium" ? (
                   <span className="inline-flex items-center gap-1.5 text-xs text-amber-400 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full">
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <svg
+                      className="w-3 h-3"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
                       <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                     </svg>
                     Premium
@@ -1172,25 +1213,57 @@ export default defineConfig({ plugins: [react()] });`;
                   StackBlitz
                 </button>
                 {publishedUrl ? (
-                  <button
-                    onClick={() => setShowDomainModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
+                  hasUnpublishedChanges ? (
+                    <button
+                      onClick={publishProject}
+                      disabled={isPublishing}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                      />
-                    </svg>
-                    Published
-                  </button>
+                      {isPublishing ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Publishing...
+                        </>
+                      ) : (
+                        <>
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                            />
+                          </svg>
+                          Publish Changes
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setShowDomainModal(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                        />
+                      </svg>
+                      Published
+                    </button>
+                  )
                 ) : (
                   <button
                     onClick={publishProject}
@@ -1228,6 +1301,7 @@ export default defineConfig({ plugins: [react()] });`;
                     setEditPrompt("");
                     setPublishedUrl(null);
                     setCurrentProjectId(null);
+                    setHasUnpublishedChanges(false);
                   }}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition"
                 >
@@ -1279,8 +1353,12 @@ export default defineConfig({ plugins: [react()] });`;
                     className="flex items-center gap-3 px-4 py-2 bg-blue-900/40 border-2 border-dashed border-blue-500/40 rounded-lg hover:bg-blue-900/60 transition backdrop-blur-sm"
                   >
                     <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-                    <span className="text-sm text-white font-medium">Editing in progress...</span>
-                    <span className="text-xs text-blue-300">(Click to view)</span>
+                    <span className="text-sm text-white font-medium">
+                      Editing in progress...
+                    </span>
+                    <span className="text-xs text-blue-300">
+                      (Click to view)
+                    </span>
                   </button>
                 </div>
               )}
@@ -1380,10 +1458,16 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
               {currentProjectTier !== "premium" && (
                 <div className="px-4 py-3 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border-b border-amber-500/20">
                   <div className="flex items-center gap-2 mb-2">
-                    <svg className="w-4 h-4 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                    <svg
+                      className="w-4 h-4 text-amber-400"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
                       <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                     </svg>
-                    <span className="text-xs font-medium text-amber-300">Upgrade to Edit</span>
+                    <span className="text-xs font-medium text-amber-300">
+                      Upgrade to Edit
+                    </span>
                   </div>
                   <p className="text-xs text-slate-400 mb-2">
                     Get unlimited edits for $60 AUD
@@ -1831,12 +1915,24 @@ Examples:
                   Close
                 </button>
                 {publishedUrl && (
-                  <button
-                    onClick={unpublishProject}
-                    className="px-4 py-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition text-sm font-medium"
-                  >
-                    Unpublish
-                  </button>
+                  <>
+                    {hasUnpublishedChanges ? (
+                      <button
+                        onClick={publishProject}
+                        disabled={isPublishing}
+                        className="px-4 py-2 text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isPublishing ? "Publishing..." : "Publish Changes"}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={unpublishProject}
+                        className="px-4 py-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition text-sm font-medium"
+                      >
+                        Unpublish
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -1853,16 +1949,38 @@ Examples:
                   onClick={() => setShowUpgradeModal(false)}
                   className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
                 <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-gradient-to-br from-amber-400 to-orange-500 rounded-2xl">
-                  <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                  <svg
+                    className="w-8 h-8 text-white"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
+                    />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">Upgrade to Premium</h3>
+                <h3 className="text-xl font-bold text-white mb-2">
+                  Upgrade to Premium
+                </h3>
                 <p className="text-slate-400 text-sm">
                   Unlock unlimited AI-powered edits for this project
                 </p>
@@ -1872,7 +1990,9 @@ Examples:
               <div className="px-6 py-4">
                 <div className="p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-slate-300 font-medium">Premium Project</span>
+                    <span className="text-slate-300 font-medium">
+                      Premium Project
+                    </span>
                     <div className="text-right">
                       <span className="text-2xl font-bold text-white">$60</span>
                       <span className="text-slate-400 text-sm ml-1">AUD</span>
@@ -1880,26 +2000,66 @@ Examples:
                   </div>
                   <ul className="space-y-2">
                     <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-4 h-4 text-emerald-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                       Unlimited AI-powered edits
                     </li>
                     <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-4 h-4 text-emerald-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                       Upload images for design reference
                     </li>
                     <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-4 h-4 text-emerald-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                       One-time payment, lifetime access
                     </li>
                     <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-4 h-4 text-emerald-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                       Priority support
                     </li>
@@ -1921,8 +2081,18 @@ Examples:
                     </>
                   ) : (
                     <>
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
+                        />
                       </svg>
                       Upgrade Now - $60 AUD
                     </>
@@ -1955,18 +2125,41 @@ Examples:
                   }}
                   className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
                 <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-red-500/20 rounded-2xl">
-                  <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  <svg
+                    className="w-8 h-8 text-red-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">Delete Project?</h3>
+                <h3 className="text-xl font-bold text-white mb-2">
+                  Delete Project?
+                </h3>
                 <p className="text-slate-400 text-sm">
-                  This action cannot be undone. The project will be permanently deleted.
+                  This action cannot be undone. The project will be permanently
+                  deleted.
                 </p>
               </div>
 
@@ -1976,8 +2169,18 @@ Examples:
                   onClick={() => deleteProject(projectToDelete)}
                   className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
                   </svg>
                   Delete Project
                 </button>
@@ -2064,9 +2267,28 @@ Examples:
             <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3 tracking-tight">
               Pocket Dev
             </h1>
-            <p className="text-lg text-slate-400 max-w-md mx-auto">
+            <p className="text-lg text-slate-400 max-w-md mx-auto mb-6">
               Describe your app and watch it come to life
             </p>
+            <button
+              onClick={() => setShowSignInModal(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M18 12l-3-3m0 0l3-3m-3 3h8.25"
+                />
+              </svg>
+              Sign In to Get Started
+            </button>
           </div>
         )}
 
@@ -2398,7 +2620,11 @@ Examples:
                 <div className="flex items-center gap-2 flex-shrink-0 ml-4">
                   {savedProject.tier === "premium" && (
                     <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-400 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-full">
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      <svg
+                        className="w-3 h-3"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
                         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                       </svg>
                       Premium
@@ -2571,13 +2797,6 @@ Examples:
         <main className="flex-1 flex flex-col items-center justify-center px-4 py-12 relative z-10">
           {renderContent()}
         </main>
-
-        {/* Footer - only show when not logged in */}
-        {!user && (
-          <footer className="py-4 text-center border-t border-slate-900">
-            <p className="text-xs text-slate-600">Powered by Claude AI</p>
-          </footer>
-        )}
       </div>
 
       {/* Sign In Modal */}
@@ -2606,34 +2825,35 @@ Examples:
         )}
 
       {/* Floating edit progress indicator (when on other sections or minimized while editing) */}
-      {isEditing &&
-        (activeSection !== "create" || isEditMinimized) && (
-          <GenerationProgress
-            prompt={`Editing: ${editPrompt}`}
-            progressMessages={editProgressMessages}
-            onCancel={() => {
-              setIsEditing(false);
-              setEditProgressMessages([]);
-              setError("Edit cancelled");
-            }}
-            isMinimized={true}
-            onToggleMinimize={() => {
-              setActiveSection("create");
-              setIsEditMinimized(false);
-            }}
-          />
-        )}
+      {isEditing && (activeSection !== "create" || isEditMinimized) && (
+        <GenerationProgress
+          prompt={`Editing: ${editPrompt}`}
+          progressMessages={editProgressMessages}
+          onCancel={() => {
+            setIsEditing(false);
+            setEditProgressMessages([]);
+            setError("Edit cancelled");
+          }}
+          isMinimized={true}
+          onToggleMinimize={() => {
+            setActiveSection("create");
+            setIsEditMinimized(false);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 export default function ReactGenerator() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+        </div>
+      }
+    >
       <ReactGeneratorContent />
     </Suspense>
   );
