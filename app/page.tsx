@@ -139,6 +139,8 @@ function ReactGeneratorContent() {
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+  const [editProgressMessages, setEditProgressMessages] = useState<string[]>([]);
+  const [isEditMinimized, setIsEditMinimized] = useState(false);
   const [showDomainModal, setShowDomainModal] = useState(false);
   const [customDomain, setCustomDomain] = useState("");
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
@@ -602,11 +604,35 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
 
     setIsEditing(true);
     setError("");
+    setEditProgressMessages([]);
+    setIsEditMinimized(false);
+
+    // Start progress simulation
+    const editProgressSteps = [
+      "Analyzing current code structure...",
+      "Understanding your edit request...",
+      "Planning code modifications...",
+      "Applying changes to components...",
+      "Updating styles and layout...",
+      "Validating code integrity...",
+      "Finalizing changes...",
+    ];
+
+    let stepIndex = 0;
+    const editProgressInterval = setInterval(() => {
+      if (stepIndex < editProgressSteps.length) {
+        setEditProgressMessages((prev) => [...prev, editProgressSteps[stepIndex]]);
+        stepIndex++;
+      }
+    }, 2500);
 
     // Build context from current project
     const currentFiles = project.files
       .map((f) => `// ${f.path}\n${f.content}`)
       .join("\n\n---\n\n");
+
+    // List all existing file paths
+    const existingFilePaths = project.files.map(f => f.path).join(", ");
 
     let editFullPrompt = `I have an existing React app with the following files:
 
@@ -623,14 +649,43 @@ ${editPrompt}`;
       editFullPrompt += `\n\nReference files provided for design inspiration:\n${fileDescriptions}`;
     }
 
-    editFullPrompt += `\n\nKeep the same file structure and only modify what's necessary. Return the complete updated files.`;
+    editFullPrompt += `\n\n🚨 CRITICAL REQUIREMENT:
+You MUST return ALL of these exact files in your response: ${existingFilePaths}
+
+Even if you only modify 1-2 files, you must include ALL files in the output JSON.
+Do not skip any files. Keep unmodified files exactly as they are.`;
 
     try {
       // Filter for image files only (Anthropic API supports images)
       const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
 
       const result = await generateReact(editFullPrompt, imageFiles);
-      setProject(result);
+
+      clearInterval(editProgressInterval);
+      setEditProgressMessages([...editProgressSteps, "Merging changes..."]);
+
+      // Validate and merge: ensure no files are lost
+      const existingFileMap = new Map(project.files.map(f => [f.path, f]));
+      const newFileMap = new Map(result.files.map(f => [f.path, f]));
+
+      // Merge: keep all existing files, update with new versions if provided
+      const mergedFiles = Array.from(existingFileMap.entries()).map(([path, oldFile]) => {
+        return newFileMap.get(path) || oldFile; // Use new version if exists, otherwise keep old
+      });
+
+      // Add any completely new files from the result
+      result.files.forEach(newFile => {
+        if (!existingFileMap.has(newFile.path)) {
+          mergedFiles.push(newFile);
+        }
+      });
+
+      const mergedProject = {
+        ...result,
+        files: mergedFiles,
+      };
+
+      setProject(mergedProject);
       setEditPrompt("");
       setEditFiles([]); // Clear edit files after successful edit
 
@@ -640,15 +695,19 @@ ${editPrompt}`;
       // Update project in Firestore if we have a project ID
       if (currentProjectId && user) {
         try {
-          await updateProjectInFirestore(currentProjectId, result);
+          await updateProjectInFirestore(currentProjectId, mergedProject);
         } catch (saveError) {
           console.error("Error updating project:", saveError);
         }
       }
     } catch (err) {
+      clearInterval(editProgressInterval);
       setError(err instanceof Error ? err.message : "Edit failed");
     } finally {
       setIsEditing(false);
+      setTimeout(() => {
+        setEditProgressMessages([]);
+      }, 1000);
     }
   };
 
@@ -854,7 +913,8 @@ export default defineConfig({ plugins: [react()] });`;
             activeSection={activeSection}
             onSectionChange={(section) => {
               setActiveSection(section);
-              if (section !== "create") {
+              if (section !== "create" && !isEditing) {
+                // Don't reset status if currently editing
                 setStatus("idle");
                 setEditPrompt("");
               }
@@ -1082,22 +1142,33 @@ export default defineConfig({ plugins: [react()] });`;
             {/* Preview Area */}
             <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-900/30">
               {/* Editing overlay */}
-              {isEditing && (
-                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-20 flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="inline-flex items-center justify-center mb-4">
-                      <div className="relative">
-                        <div className="absolute inset-0 blur-2xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-30 animate-pulse" />
-                        <Logo size={48} animate className="relative" />
-                      </div>
-                    </div>
-                    <h3 className="text-xl font-semibold text-white mb-2">
-                      Updating your app...
-                    </h3>
-                    <p className="text-slate-400 text-sm">
-                      Applying your changes
-                    </p>
-                  </div>
+              {isEditing && !isEditMinimized && (
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-20 flex items-center justify-center overflow-auto p-4">
+                  <GenerationProgress
+                    prompt={`Editing: ${editPrompt}`}
+                    progressMessages={editProgressMessages}
+                    onCancel={() => {
+                      setIsEditing(false);
+                      setEditProgressMessages([]);
+                      setError("Edit cancelled");
+                    }}
+                    isMinimized={false}
+                    onToggleMinimize={() => setIsEditMinimized(true)}
+                  />
+                </div>
+              )}
+
+              {/* Editing minimized banner */}
+              {isEditing && isEditMinimized && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+                  <button
+                    onClick={() => setIsEditMinimized(false)}
+                    className="flex items-center gap-3 px-4 py-2 bg-blue-900/40 border-2 border-dashed border-blue-500/40 rounded-lg hover:bg-blue-900/60 transition backdrop-blur-sm"
+                  >
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                    <span className="text-sm text-white font-medium">Editing in progress...</span>
+                    <span className="text-xs text-blue-300">(Click to view)</span>
+                  </button>
                 </div>
               )}
 
@@ -2341,6 +2412,25 @@ Examples:
             onToggleMinimize={() => {
               setActiveSection("create");
               setIsGenerationMinimized(false);
+            }}
+          />
+        )}
+
+      {/* Floating edit progress indicator (when on other sections or minimized while editing) */}
+      {isEditing &&
+        (activeSection !== "create" || isEditMinimized) && (
+          <GenerationProgress
+            prompt={`Editing: ${editPrompt}`}
+            progressMessages={editProgressMessages}
+            onCancel={() => {
+              setIsEditing(false);
+              setEditProgressMessages([]);
+              setError("Edit cancelled");
+            }}
+            isMinimized={true}
+            onToggleMinimize={() => {
+              setActiveSection("create");
+              setIsEditMinimized(false);
             }}
           />
         )}
