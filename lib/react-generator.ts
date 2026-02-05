@@ -47,14 +47,19 @@ const SYSTEM_PROMPT = `You are an expert React developer who creates professiona
 5. All code must be properly linted (no unused vars, use const/let, semicolons)
 6. Every component must be complete with real content (no placeholders)
 
-📸 REFERENCE IMAGES:
-If the user provides reference images, you MUST:
+📸 USER-UPLOADED IMAGES:
+If the user provides images with paths like /images/user-image-1.jpg, you MUST:
+- Use EXACTLY those image paths in your img src attributes
+- Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="w-full h-auto" />
+- DO NOT use placeholder URLs like via.placeholder.com or unsplash when user has uploaded images
+- Place the user's images prominently (hero sections, galleries, cards, etc.)
+- The user expects to see their ACTUAL uploaded images in the generated website
+
+For design reference images:
 - Carefully analyze the design, layout, colors, typography, and style from the images
 - Replicate the visual design as closely as possible using Tailwind CSS
 - Match the color scheme (use exact hex colors when possible)
 - Match the layout structure and spacing
-- Match the typography style and hierarchy
-- Include similar UI components and patterns shown in the images
 
 TECH STACK:
 - React 18
@@ -156,6 +161,15 @@ function App() {
 
 export default App;
 \`\`\`
+
+EDITING EXISTING CODE:
+When modifying an existing app, follow these rules strictly:
+- Do EXACTLY what the user requested - nothing more, nothing less
+- DO NOT add unrequested features, components, or improvements
+- DO NOT refactor or reorganize code unless specifically asked
+- DO NOT change styling, colors, or layout unless specifically asked
+- Keep all unmodified parts of the code EXACTLY as they were
+- Only touch the specific files/sections needed for the requested change
 
 OUTPUT FORMAT (CRITICAL):
 
@@ -310,7 +324,7 @@ function buildUserContent(
   // Add the text prompt
   let textPrompt = prompt;
   if (images && images.length > 0) {
-    textPrompt = `I've uploaded ${images.length} reference image(s) above. Please analyze these images and use them as inspiration for the design, layout, colors, and style of the website.\n\n${prompt}`;
+    textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration. The data URLs for embedding these images are included in the prompt below.\n\n${prompt}`;
   }
 
   content.push({
@@ -354,7 +368,7 @@ async function generateWithGemini(
   // Add text prompt
   let textPrompt = prompt;
   if (images && images.length > 0) {
-    textPrompt = `I've uploaded ${images.length} reference image(s) above. Please analyze these images and use them as inspiration for the design, layout, colors, and style of the website.\n\n${prompt}`;
+    textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration. The data URLs for embedding these images are included in the prompt below.\n\n${prompt}`;
   }
   parts.push({ text: SYSTEM_PROMPT + "\n\nUser Request: " + textPrompt });
 

@@ -111,6 +111,51 @@ const EXAMPLES = [
   },
 ];
 
+// Helper function to get image extension from MIME type
+function getImageExtension(mimeType: string): string {
+  const extensions: Record<string, string> = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+  };
+  return extensions[mimeType] || ".jpg";
+}
+
+// Helper function to replace image paths with data URLs in code
+function injectImageDataUrls(
+  files: { path: string; content: string }[],
+  uploadedFiles: UploadedFile[]
+): { path: string; content: string }[] {
+  const imageFiles = uploadedFiles.filter((f) => f.type.startsWith("image/"));
+  if (imageFiles.length === 0) return files;
+
+  // Create a map of image paths to data URLs
+  const imageMap: Record<string, string> = {};
+  imageFiles.forEach((f, i) => {
+    const ext = getImageExtension(f.type);
+    imageMap[`/images/user-image-${i + 1}${ext}`] = f.dataUrl;
+    imageMap[`images/user-image-${i + 1}${ext}`] = f.dataUrl;
+  });
+
+  // Replace image paths with data URLs in all code files
+  return files.map((file) => {
+    if (!file.path.endsWith(".jsx") && !file.path.endsWith(".js") && !file.path.endsWith(".tsx") && !file.path.endsWith(".ts")) {
+      return file;
+    }
+
+    let content = file.content;
+    for (const [path, dataUrl] of Object.entries(imageMap)) {
+      // Replace both quoted versions: "/images/..." and '/images/...'
+      content = content.replace(new RegExp(`"${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'g'), `"${dataUrl}"`);
+      content = content.replace(new RegExp(`'${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`, 'g'), `'${dataUrl}'`);
+    }
+    return { ...file, content };
+  });
+}
+
 function ReactGeneratorContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
@@ -638,15 +683,39 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
 
 ${currentFiles}
 
-Please modify this app based on the following request:
-${editPrompt}`;
+USER'S EDIT REQUEST:
+${editPrompt}
+
+🎯 CRITICAL INSTRUCTIONS:
+1. Do EXACTLY what the user requested - nothing more, nothing less
+2. DO NOT add features, components, or changes the user did not ask for
+3. DO NOT refactor, reorganize, or "improve" code unless specifically asked
+4. DO NOT change styling, colors, or layout unless specifically asked
+5. DO NOT add comments, documentation, or explanations unless asked
+6. DO NOT remove or modify content/features the user didn't mention
+7. Only modify the specific parts needed to fulfill the user's exact request
+8. Keep everything else EXACTLY as it was before`;
 
     // Add reference to uploaded files if any
     if (editFiles.length > 0) {
-      const fileDescriptions = editFiles
-        .map((f) => `- ${f.name} (${f.type})`)
-        .join("\n");
-      editFullPrompt += `\n\nReference files provided for design inspiration:\n${fileDescriptions}`;
+      const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
+      if (imageFiles.length > 0) {
+        const imagePathList = imageFiles
+          .map((f, i) => `- /images/user-image-${i + 1}${getImageExtension(f.type)} (originally: ${f.name})`)
+          .join("\n");
+        editFullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
+
+${imagePathList}
+
+🚨 YOU MUST:
+1. Use these EXACT image paths in your img src attributes
+2. Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="..." />
+3. Replace existing placeholder images with these actual images
+4. Embed these images prominently in the relevant sections
+5. DO NOT use placeholder images or external URLs - use ONLY the paths listed above
+
+The user expects to see their ACTUAL uploaded images in the updated website.`;
+      }
     }
 
     editFullPrompt += `\n\n🚨 CRITICAL REQUIREMENT:
@@ -680,9 +749,12 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         }
       });
 
+      // Inject uploaded image data URLs into the merged files
+      const filesWithImages = injectImageDataUrls(mergedFiles, editFiles);
+
       const mergedProject = {
         ...result,
-        files: mergedFiles,
+        files: filesWithImages,
       };
 
       setProject(mergedProject);
@@ -721,10 +793,24 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
 
     let fullPrompt = prompt;
     if (uploadedFiles.length > 0) {
-      const fileDescriptions = uploadedFiles
-        .map((f) => `- ${f.name} (${f.type})`)
-        .join("\n");
-      fullPrompt += `\n\nReference files provided:\n${fileDescriptions}`;
+      const imageFiles = uploadedFiles.filter((f) => f.type.startsWith("image/"));
+      if (imageFiles.length > 0) {
+        const imagePathList = imageFiles
+          .map((f, i) => `- /images/user-image-${i + 1}${getImageExtension(f.type)} (originally: ${f.name})`)
+          .join("\n");
+        fullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
+
+${imagePathList}
+
+🚨 YOU MUST:
+1. Use these EXACT image paths in your img src attributes
+2. Example: <img src="/images/user-image-1.jpg" alt="User uploaded image" className="..." />
+3. Embed these images prominently in the website (hero sections, galleries, cards, etc.)
+4. DO NOT use placeholder images or external URLs - use ONLY the paths listed above
+5. The user uploaded these images specifically to see them in the generated website
+
+The user expects to see their ACTUAL uploaded images in the final website.`;
+      }
     }
 
     const progressSteps = [
@@ -753,13 +839,22 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
 
       const result = await generateReact(fullPrompt, imageFiles);
       clearInterval(progressInterval);
+      setProgressMessages([...progressSteps, "Embedding images..."]);
+
+      // Replace image paths with actual data URLs in the generated code
+      const filesWithImages = injectImageDataUrls(result.files, uploadedFiles);
+      const projectWithImages = {
+        ...result,
+        files: filesWithImages,
+      };
+
       setProgressMessages([...progressSteps, "Saving project..."]);
-      setProject(result);
+      setProject(projectWithImages);
 
       // Save project to Firestore
       if (user) {
         try {
-          const projectId = await saveProjectToFirestore(result, prompt);
+          const projectId = await saveProjectToFirestore(projectWithImages, prompt);
           setCurrentProjectId(projectId);
           // Refresh projects list
           loadSavedProjects();
