@@ -117,22 +117,28 @@ const EXAMPLES = [
 function PreviewWithLoader() {
   const { sandpack } = useSandpack();
   const [isLoading, setIsLoading] = useState(true);
+  const [showError, setShowError] = useState(false);
 
   useEffect(() => {
-    if (sandpack.status === "running") {
-      // Add a small delay to ensure content is rendered
+    // Reset states when sandpack status changes
+    if (sandpack.status === "idle") {
+      setIsLoading(true);
+      setShowError(false);
+    } else if (sandpack.status === "running") {
+      // Add longer delay to ensure content is fully rendered
       const timer = setTimeout(() => {
         setIsLoading(false);
-      }, 500);
+      }, 1000);
       return () => clearTimeout(timer);
-    } else {
-      setIsLoading(true);
+    } else if (sandpack.status === "timeout" || sandpack.status === "error") {
+      setIsLoading(false);
+      setShowError(true);
     }
   }, [sandpack.status]);
 
   return (
     <div className="relative h-full">
-      {isLoading && (
+      {isLoading && !showError && (
         <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-center">
           <div className="text-center">
             {/* Modern loading animation */}
@@ -159,10 +165,31 @@ function PreviewWithLoader() {
           </div>
         </div>
       )}
+      {showError && (
+        <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-center p-4">
+          <div className="text-center max-w-md">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 flex items-center justify-center">
+              <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-2">Preview Error</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              There was an issue loading the preview. Try refreshing the page or regenerating the project.
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition"
+            >
+              Refresh Page
+            </button>
+          </div>
+        </div>
+      )}
       <SandpackPreview
         showNavigator={false}
         showOpenInCodeSandbox={false}
-        showRefreshButton={false}
+        showRefreshButton={true}
         style={{ height: "85vh" }}
       />
     </div>
@@ -222,6 +249,11 @@ function ReactGeneratorContent() {
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+
   // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
@@ -231,6 +263,17 @@ function ReactGeneratorContent() {
       textareaRef.current.style.height = `${newHeight}px`;
     }
   }, [prompt]);
+
+  // Restore pending project tier from localStorage on mount
+  useEffect(() => {
+    const persistedTier = localStorage.getItem("pendingProjectTier") as "free" | "premium" | null;
+    if (persistedTier) {
+      setPendingProjectTier(persistedTier);
+      if (persistedTier === "premium") {
+        setCurrentProjectTier("premium");
+      }
+    }
+  }, []);
 
   // Load saved projects when user logs in
   useEffect(() => {
@@ -319,6 +362,9 @@ function ReactGeneratorContent() {
       // Automatically start generation after successful payment
       const decodedPrompt = decodeURIComponent(paidPrompt);
       const projectTier = tier === "premium" ? "premium" : "free";
+
+      // Persist tier to localStorage so it survives page refresh
+      localStorage.setItem("pendingProjectTier", projectTier);
 
       window.history.replaceState({}, "", "/");
       setPrompt(decodedPrompt);
@@ -433,6 +479,8 @@ function ReactGeneratorContent() {
     setHasUnpublishedChanges(false);
     setStatus("success");
     setActiveSection("create");
+    // Force Sandpack to re-initialize with new project data
+    setPreviewKey(prev => prev + 1);
   };
 
   // Delete project
@@ -1102,10 +1150,18 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
       // Save project to Firestore
       if (user) {
         try {
-          const projectId = await saveProjectToFirestore(result, generationPrompt, pendingProjectTier);
+          // Check localStorage for persisted tier (in case of page refresh during generation)
+          const persistedTier = localStorage.getItem("pendingProjectTier") as "free" | "premium" | null;
+          const tierToSave = persistedTier || pendingProjectTier;
+
+          const projectId = await saveProjectToFirestore(result, generationPrompt, tierToSave);
           setCurrentProjectId(projectId);
-          // Reset pending tier after saving
+          setCurrentProjectTier(tierToSave);
+
+          // Clear persisted tier and reset pending tier after saving
+          localStorage.removeItem("pendingProjectTier");
           setPendingProjectTier("free");
+
           // Refresh projects list
           loadSavedProjects();
         } catch (saveError) {
@@ -1151,6 +1207,66 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
     }
 
     startGeneration();
+  };
+
+  // Voice recording functions
+  const startRecording = () => {
+    // Clear any previous errors
+    setVoiceError(null);
+
+    // Check if browser supports speech recognition
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setVoiceError("Voice input is not supported in your browser. Please use Chrome, Edge, or Safari.");
+      setTimeout(() => setVoiceError(null), 5000);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+      setVoiceError(null);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = Array.from(event.results)
+        .map((result: any) => result[0].transcript)
+        .join("");
+      setPrompt(transcript);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error("Speech recognition error:", event.error);
+      setIsRecording(false);
+      if (event.error === "not-allowed") {
+        setVoiceError("Microphone access denied. Please allow microphone access in your browser settings and try again.");
+      } else if (event.error === "no-speech") {
+        setVoiceError("No speech detected. Please try speaking again.");
+      } else {
+        setVoiceError("Voice input error. Please try again.");
+      }
+      setTimeout(() => setVoiceError(null), 5000);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
   };
 
   const openInStackBlitz = () => {
@@ -2620,6 +2736,26 @@ Examples:
 
         {/* Input */}
         <div className="w-full max-w-2xl">
+          {/* Voice error notification */}
+          {voiceError && (
+            <div className="mb-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 duration-300">
+              <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm text-red-300 font-medium">{voiceError}</p>
+              </div>
+              <button
+                onClick={() => setVoiceError(null)}
+                className="text-red-400 hover:text-red-300 transition"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleGenerate}>
             <div className="relative bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl shadow-slate-950/50 overflow-hidden focus-within:border-slate-700 transition-colors">
               <textarea
@@ -2668,6 +2804,42 @@ Examples:
                         d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
                       />
                     </svg>
+                  </button>
+
+                  {/* Voice input button */}
+                  <button
+                    type="button"
+                    onClick={() => isRecording ? stopRecording() : startRecording()}
+                    className={`p-2 rounded-lg transition ${
+                      isRecording
+                        ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse"
+                        : "text-slate-500 hover:text-slate-300 hover:bg-slate-800"
+                    }`}
+                    title={isRecording ? "Stop recording" : "Voice input"}
+                  >
+                    {isRecording ? (
+                      <svg
+                        className="w-5 h-5"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                      </svg>
+                    ) : (
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+                        />
+                      </svg>
+                    )}
                   </button>
                 </div>
 
