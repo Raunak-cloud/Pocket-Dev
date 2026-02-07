@@ -117,7 +117,7 @@ const EXAMPLES = [
 ];
 
 // StackBlitz preview component with loading state
-function StackBlitzPreview({ project, previewKey }: { project: ReactProject | null; previewKey: number }) {
+function StackBlitzPreview({ project, previewKey, view = "preview" }: { project: ReactProject | null; previewKey: number; view?: "editor" | "preview" | "both" }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loadingState, setLoadingState] = useState<'initializing' | 'loading' | 'ready' | 'error'>('initializing');
   const [error, setError] = useState<string | null>(null);
@@ -155,12 +155,12 @@ function StackBlitzPreview({ project, previewKey }: { project: ReactProject | nu
           },
           {
             height: "100%",
-            view: "preview",
+            view: view,
             theme: "dark",
-            hideExplorer: false,
+            hideExplorer: view === "preview",
             hideDevTools: true,
             hideNavigation: false,
-            showSidebar: false,
+            showSidebar: view !== "preview",
           }
         );
 
@@ -195,7 +195,7 @@ function StackBlitzPreview({ project, previewKey }: { project: ReactProject | nu
         clearTimeout(initTimeout);
       }
     };
-  }, [project, previewKey, embedKey]);
+  }, [project, previewKey, embedKey, view]);
 
   return (
     <div className="relative h-full">
@@ -280,6 +280,9 @@ function ReactGeneratorContent() {
   const [previewMode, setPreviewMode] = useState<
     "mobile" | "tablet" | "desktop"
   >("desktop");
+  const [stackblitzView, setStackblitzView] = useState<
+    "editor" | "preview" | "both"
+  >("preview");
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
@@ -1950,7 +1953,7 @@ The easiest way to deploy is with [Vercel](https://vercel.com/new).
                         : "h-full"
                     }
                   >
-                    <StackBlitzPreview project={project} previewKey={previewKey} />
+                    <StackBlitzPreview project={project} previewKey={previewKey} view={stackblitzView} />
                   </div>
                 </div>
               </div>
