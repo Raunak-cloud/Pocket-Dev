@@ -3,7 +3,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "./eslint-lint";
 
 const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_FLASH_MODEL = "gemini-3-flash-preview"; // For code generation
+const GEMINI_PRO_MODEL = "gemini-3-pro"; // For architecture/planning
 const MAX_TOKENS = 64000; // Increased to support larger multi-file projects
 
 function getAnthropicClient() {
@@ -36,12 +37,12 @@ function isInsufficientCreditsError(error: any): boolean {
   );
 }
 
-const SYSTEM_PROMPT = `You are an expert React developer who creates professional, production-ready React applications.
+const SYSTEM_PROMPT = `You are an expert Next.js developer who creates professional, production-ready Next.js applications.
 
 🚨 MANDATORY REQUIREMENTS 🚨
 
-1. Generate a COMPLETE React project with multiple files
-2. Use React Router v6 for navigation
+1. Generate a COMPLETE Next.js project with multiple files
+2. Use Next.js 14 App Router for navigation (app/ directory structure)
 3. Use Tailwind CSS for styling
 4. Create at least 3-4 pages based on the prompt
 5. All code must be properly linted (no unused vars, use const/let, semicolons)
@@ -63,47 +64,59 @@ For design reference (when images are shown visually):
 - Match the layout structure and spacing
 
 TECH STACK:
+- Next.js ^14.0.0
 - React 18
-- React Router v6
+- TypeScript
 - Tailwind CSS
 - Lucide React (for icons)
 
 FILE STRUCTURE YOU MUST GENERATE:
 
-1. App.jsx - Main app component with routes
-2. pages/Home.jsx - Home page
-3. pages/About.jsx - About page
-4. pages/[OtherPages].jsx - Additional pages based on website type
-5. components/Navbar.jsx - Navigation bar
-6. components/Footer.jsx - Footer component
-7. components/[Others].jsx - Additional reusable components
+1. app/layout.tsx - Root layout with Navbar/Footer
+2. app/page.tsx - Home page (/)
+3. app/about/page.tsx - About page (/about)
+4. app/[pageName]/page.tsx - Additional pages
+5. app/components/Navbar.tsx - Navigation bar
+6. app/components/Footer.tsx - Footer component
+7. app/components/[Others].tsx - Reusable components
 
 REQUIRED PAGES BY TYPE:
 
 E-COMMERCE:
-- Home.jsx (hero, featured products)
-- Products.jsx (product grid with filtering)
-- ProductDetail.jsx (individual product page)
-- Cart.jsx (shopping cart)
-- About.jsx
+- app/page.tsx (hero, featured products)
+- app/products/page.tsx (product grid with filtering)
+- app/products/[id]/page.tsx (individual product page)
+- app/cart/page.tsx (shopping cart)
+- app/about/page.tsx
 
 RESTAURANT:
-- Home.jsx (hero, highlights)
-- Menu.jsx (full menu with categories)
-- Reservations.jsx (booking form)
-- About.jsx
+- app/page.tsx (hero, highlights)
+- app/menu/page.tsx (full menu with categories)
+- app/reservations/page.tsx (booking form)
+- app/about/page.tsx
 
 SAAS:
-- Home.jsx (hero, features)
-- Features.jsx (detailed features)
-- Pricing.jsx (pricing tiers)
-- About.jsx
+- app/page.tsx (hero, features)
+- app/features/page.tsx (detailed features)
+- app/pricing/page.tsx (pricing tiers)
+- app/about/page.tsx
 
 PORTFOLIO:
-- Home.jsx (hero, featured work)
-- Projects.jsx (project gallery)
-- About.jsx
-- Contact.jsx
+- app/page.tsx (hero, featured work)
+- app/projects/page.tsx (project gallery)
+- app/about/page.tsx
+- app/contact/page.tsx
+
+NEXT.JS REQUIREMENTS:
+- Use TypeScript (.tsx) for all components
+- Pages are Server Components by default (no 'use client' unless needed)
+- Use 'use client' directive for interactive components (forms, buttons, state)
+- Export metadata from page.tsx files for SEO
+- Use Next.js Link component for navigation: import Link from 'next/link'
+- Follow Next.js naming: page.tsx (route), layout.tsx (layout), loading.tsx (optional)
+- Use proper TypeScript types for props and params
+- IMPORTANT: Use regular <img> tags for images (NOT next/image) - it requires extra configuration for external URLs
+- Example: <img src="https://images.unsplash.com/..." alt="Description" className="w-full h-auto" />
 
 CODE REQUIREMENTS:
 
@@ -112,7 +125,7 @@ CODE REQUIREMENTS:
 ✅ Use === (never ==)
 ✅ Add semicolons
 ✅ No unused variables
-✅ Proper PropTypes or JSDoc comments
+✅ Proper TypeScript types
 ✅ Clean, readable code with proper indentation
 ✅ Responsive design (mobile-first)
 ✅ Smooth animations and transitions
@@ -123,44 +136,88 @@ CONTENT REQUIREMENTS:
 ✅ EVERY page has complete, realistic content
 ✅ Products/menu items: minimum 8-12 with descriptions and prices
 ✅ About sections: 3-4 full paragraphs
-✅ All images use proper placeholder service (via.placeholder.com or unsplash)
+✅ Use regular <img> tags for all images (NOT next/image)
+✅ Allowed image sources: images.unsplash.com, via.placeholder.com, firebasestorage.googleapis.com, picsum.photos
 
 ROUTING SETUP:
 
-App.jsx must include:
-- BrowserRouter with Routes
-- Route for each page
-- Navbar (appears on all pages)
-- Footer (appears on all pages)
-
-Example App.jsx structure:
-\`\`\`jsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+Example app/layout.tsx structure:
+\`\`\`tsx
+import type { Metadata } from 'next';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-import Home from './pages/Home';
-import About from './pages/About';
-// ... other imports
+import './globals.css';
 
-function App() {
+export const metadata: Metadata = {
+  title: 'App Name',
+  description: 'App description',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <BrowserRouter>
-      <div className="flex flex-col min-h-screen">
-        <Navbar />
-        <main className="flex-1">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/about" element={<About />} />
-            {/* other routes */}
-          </Routes>
-        </main>
-        <Footer />
-      </div>
-    </BrowserRouter>
+    <html lang="en">
+      <body>
+        <div className="flex flex-col min-h-screen">
+          <Navbar />
+          <main className="flex-1">
+            {children}
+          </main>
+          <Footer />
+        </div>
+      </body>
+    </html>
   );
 }
+\`\`\`
 
-export default App;
+Example app/page.tsx structure:
+\`\`\`tsx
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'Home',
+};
+
+export default function HomePage() {
+  return (
+    <div className="container mx-auto px-4 py-8">
+      <h1 className="text-4xl font-bold">Welcome</h1>
+      {/* Page content */}
+    </div>
+  );
+}
+\`\`\`
+
+Example app/components/Navbar.tsx structure:
+\`\`\`tsx
+'use client';
+
+import Link from 'next/link';
+import { useState } from 'react';
+
+export default function Navbar() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <nav className="bg-white shadow-lg">
+      <div className="container mx-auto px-4">
+        <div className="flex justify-between items-center py-4">
+          <Link href="/" className="text-xl font-bold">
+            Logo
+          </Link>
+          <div className="hidden md:flex space-x-8">
+            <Link href="/" className="hover:text-blue-600">Home</Link>
+            <Link href="/about" className="hover:text-blue-600">About</Link>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
 \`\`\`
 
 EDITING EXISTING CODE:
@@ -186,9 +243,9 @@ Structure:
     {"path": "components/Footer.jsx", "content": "import React from 'react'..."}
   ],
   "dependencies": {
+    "next": "^14.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
     "lucide-react": "^0.294.0"
   }
 }
@@ -204,6 +261,7 @@ export interface UploadedImage {
   name: string;
   type: string;
   dataUrl: string;
+  downloadUrl?: string; // Firebase Storage URL for embedding in generated code
 }
 
 interface LintResult {
@@ -263,8 +321,9 @@ async function lintAllFiles(files: GeneratedFile[]): Promise<LintResult> {
   let totalWarnings = 0;
 
   for (const file of files) {
-    // Only lint JS/JSX files
-    if (!file.path.endsWith(".jsx") && !file.path.endsWith(".js")) {
+    // Only lint JS/JSX/TS/TSX files
+    if (!file.path.endsWith(".tsx") && !file.path.endsWith(".ts") &&
+        !file.path.endsWith(".jsx") && !file.path.endsWith(".js")) {
       continue;
     }
 
@@ -325,7 +384,35 @@ function buildUserContent(
   // Add the text prompt
   let textPrompt = prompt;
   if (images && images.length > 0) {
-    textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration. The data URLs for embedding these images are included in the prompt below.\n\n${prompt}`;
+    // Check if any images have downloadUrl (Firebase Storage URLs)
+    const imagesWithUrls = images.filter((img) => img.downloadUrl);
+
+    if (imagesWithUrls.length > 0) {
+      // If Firebase URLs are available, include them prominently in the prompt
+      const imageUrlList = imagesWithUrls
+        .map((img, i) => `${i + 1}. ${img.name}: ${img.downloadUrl}`)
+        .join("\n");
+
+      textPrompt = `I've uploaded ${images.length} image(s) above for design inspiration.
+
+🚨 CRITICAL: USER-UPLOADED IMAGES 🚨
+The user has provided ${imagesWithUrls.length} image(s) hosted on Firebase Storage. You MUST use these EXACT URLs in your generated code:
+
+${imageUrlList}
+
+REQUIREMENTS FOR THESE IMAGES:
+1. Use EXACTLY these URLs in your img src attributes
+2. Example: <img src="${imagesWithUrls[0].downloadUrl}" alt="${imagesWithUrls[0].name}" className="w-full h-auto" />
+3. DO NOT use placeholder URLs (via.placeholder.com, unsplash, etc.)
+4. Place these images prominently (hero sections, galleries, product images, etc.)
+5. The user expects to see their ACTUAL uploaded images in the final website
+6. These are real, hosted images - not placeholders
+
+${prompt}`;
+    } else {
+      // Fallback for when only dataUrl is available
+      textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration.\n\n${prompt}`;
+    }
   }
 
   content.push({
@@ -341,11 +428,21 @@ async function generateWithGemini(
   prompt: string,
   images?: UploadedImage[],
   onProgress?: (msg: string) => void,
+  useProForPlanning: boolean = false,
 ): Promise<string> {
   const genAI = getGeminiClient();
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  // Use Gemini 3 Pro for architecture/planning, Flash for code generation
+  const modelName = useProForPlanning ? GEMINI_PRO_MODEL : GEMINI_FLASH_MODEL;
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: {
+      maxOutputTokens: 65536, // Max output tokens for Gemini
+      temperature: 0.7,
+      topP: 0.95,
+    },
+  });
 
-  onProgress?.("Using Gemini AI as fallback");
+  onProgress?.(useProForPlanning ? "Planning with Gemini 3 Pro" : "Generating with Gemini 3 Flash");
 
   const parts: any[] = [];
 
@@ -369,13 +466,61 @@ async function generateWithGemini(
   // Add text prompt
   let textPrompt = prompt;
   if (images && images.length > 0) {
-    textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration. The data URLs for embedding these images are included in the prompt below.\n\n${prompt}`;
-  }
-  parts.push({ text: SYSTEM_PROMPT + "\n\nUser Request: " + textPrompt });
+    // Check if any images have downloadUrl (Firebase Storage URLs)
+    const imagesWithUrls = images.filter((img) => img.downloadUrl);
 
-  const result = await model.generateContent(parts);
-  const response = result.response;
-  return response.text();
+    if (imagesWithUrls.length > 0) {
+      // If Firebase URLs are available, include them prominently in the prompt
+      const imageUrlList = imagesWithUrls
+        .map((img, i) => `${i + 1}. ${img.name}: ${img.downloadUrl}`)
+        .join("\n");
+
+      textPrompt = `I've uploaded ${images.length} image(s) above for design inspiration.
+
+🚨 CRITICAL: USER-UPLOADED IMAGES 🚨
+The user has provided ${imagesWithUrls.length} image(s) hosted on Firebase Storage. You MUST use these EXACT URLs in your generated code:
+
+${imageUrlList}
+
+REQUIREMENTS FOR THESE IMAGES:
+1. Use EXACTLY these URLs in your img src attributes
+2. Example: <img src="${imagesWithUrls[0].downloadUrl}" alt="${imagesWithUrls[0].name}" className="w-full h-auto" />
+3. DO NOT use placeholder URLs (via.placeholder.com, unsplash, etc.)
+4. Place these images prominently (hero sections, galleries, product images, etc.)
+5. The user expects to see their ACTUAL uploaded images in the final website
+6. These are real, hosted images - not placeholders
+
+${prompt}`;
+    } else {
+      // Fallback for when only dataUrl is available
+      textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration.\n\n${prompt}`;
+    }
+  }
+  // Add additional instructions for Gemini to keep responses concise
+  const geminiInstructions = `
+
+⚠️ IMPORTANT: Keep your response CONCISE and COMPLETE:
+- Generate ONLY the essential files needed
+- Keep component code clean and minimal
+- Ensure the JSON is COMPLETE and ends with }
+- DO NOT truncate the response - finish the JSON properly
+`;
+
+  parts.push({ text: SYSTEM_PROMPT + geminiInstructions + "\n\nUser Request: " + textPrompt });
+
+  try {
+    const result = await model.generateContent(parts);
+    const response = result.response;
+    const text = response.text();
+
+    // Log response length for debugging
+    console.log(`Gemini response length: ${text.length} characters`);
+
+    return text;
+  } catch (error: any) {
+    console.error("Gemini generation error:", error);
+    throw new Error(`Gemini API error: ${error.message || "Unknown error"}`);
+  }
 }
 
 /** Generate React project with retry on lint errors */
@@ -401,8 +546,8 @@ async function generateWithLinting(
       let text: string;
 
       if (useGemini) {
-        // Use Gemini
-        text = await generateWithGemini(prompt, images, onProgress);
+        // Use Gemini Flash for code generation
+        text = await generateWithGemini(prompt, images, onProgress, false);
       } else {
         // Generate code with Anthropic streaming
         const stream = client.messages.stream({
@@ -424,7 +569,15 @@ async function generateWithLinting(
       if (!jsonText.trim().endsWith("}")) {
         console.error("JSON response appears truncated - does not end with }");
         console.error("Response length:", jsonText.length);
+        console.error("Last 200 chars:", jsonText.substring(Math.max(0, jsonText.length - 200)));
+
         if (attempts === maxAttempts) {
+          if (useGemini) {
+            throw new Error(
+              `Gemini response was truncated (${jsonText.length} chars). ` +
+              `The model may have hit its output limit. Try a simpler prompt with fewer pages.`,
+            );
+          }
           throw new Error(
             `Generated JSON appears incomplete (response was ${jsonText.length} chars). ` +
               `Try a simpler prompt or reduce the number of pages/components requested.`,
@@ -524,9 +677,9 @@ async function generateWithLinting(
         let fixText: string;
         try {
           if (useGemini) {
-            // Use Gemini for fix
+            // Use Gemini Flash for fixing code
             const fixPrompt = `${prompt}\n\nThe generated code has ESLint errors. Fix them and return the complete JSON again:\n\n${errorSummary}\n\nReturn ONLY valid JSON with all files.`;
-            fixText = await generateWithGemini(fixPrompt, images, onProgress);
+            fixText = await generateWithGemini(fixPrompt, images, onProgress, false);
           } else {
             // Use Anthropic for fix
             const fixStream = client.messages.stream({
@@ -640,7 +793,8 @@ async function generateWithLinting(
     let text: string;
 
     if (useGemini) {
-      text = await generateWithGemini(prompt, images, onProgress);
+      // Use Gemini Flash for fallback code generation
+      text = await generateWithGemini(prompt, images, onProgress, false);
     } else {
       const stream = client.messages.stream({
         model: CLAUDE_MODEL,
@@ -695,34 +849,31 @@ export async function generateReactProject(
   const client = getAnthropicClient();
 
   try {
-    // Try Anthropic first
+    // Try Claude first
+    onProgress?.("Using Claude AI");
     return await generateWithLinting(client, prompt, images, onProgress, false);
   } catch (error: any) {
-    // If Anthropic fails due to insufficient credits, try Gemini
-    if (isInsufficientCreditsError(error)) {
-      console.log(
-        "Anthropic API has insufficient credits, falling back to Gemini",
+    // If Claude fails with any API error, fallback to Gemini
+    console.log(
+      "Claude API failed, falling back to Gemini:",
+      error?.message || error,
+    );
+    onProgress?.("⚠️ Switching to Gemini AI (Claude API error)");
+
+    try {
+      return await generateWithLinting(
+        client,
+        prompt,
+        images,
+        onProgress,
+        true,
       );
-      onProgress?.("⚠️ Switching to Gemini AI (Anthropic credits exhausted)");
-
-      try {
-        return await generateWithLinting(
-          client,
-          prompt,
-          images,
-          onProgress,
-          true,
-        );
-      } catch (geminiError: any) {
-        // If Gemini also fails, throw a combined error
-        throw new Error(
-          `Both AI services failed. Anthropic: ${error?.error?.message || error?.message || "Insufficient credits"}. ` +
-            `Gemini: ${geminiError?.message || "Unknown error"}. Please check your API keys and try again.`,
-        );
-      }
+    } catch (geminiError: any) {
+      // If Gemini also fails, throw a combined error
+      throw new Error(
+        `Both AI services failed. Claude: ${error?.error?.message || error?.message || "Unknown error"}. ` +
+          `Gemini: ${geminiError?.message || "Unknown error"}. Please check your API keys and try again.`,
+      );
     }
-
-    // If not a credits issue, rethrow the original error
-    throw error;
   }
 }

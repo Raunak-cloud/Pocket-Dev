@@ -231,7 +231,7 @@ export default function GenerationProgress({
 
   // Sketchy hand-drawn workflow design with row wrapping
   const stepsPerRow = 4;
-  const rows: typeof steps[][] = [];
+  const rows: Array<typeof steps> = [];
   for (let i = 0; i < steps.length; i += stepsPerRow) {
     rows.push(steps.slice(i, i + stepsPerRow));
   }

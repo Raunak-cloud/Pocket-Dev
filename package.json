@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.1",
-    "@codesandbox/sandpack-react": "^2.20.0",
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.25.3",
+    "@monaco-editor/react": "^4.7.0",
     "@stackblitz/sdk": "^1.11.0",
     "firebase": "^12.8.0",
     "firebase-admin": "^13.6.1",

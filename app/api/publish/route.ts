@@ -2,13 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
-    const { files } = await request.json();
+    const { files, sandboxId } = await request.json();
 
     if (!files || typeof files !== "object") {
-      return NextResponse.json(
-        { error: "No files provided" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No files provided" }, { status: 400 });
     }
 
     // Format files for CodeSandbox API
@@ -18,17 +15,21 @@ export async function POST(request: NextRequest) {
       sandboxFiles[path] = { content: content as string };
     }
 
-    // Use CodeSandbox's define API with POST method
-    const response = await fetch("https://codesandbox.io/api/v1/sandboxes/define?json=1", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+    // Always create/update sandbox using CodeSandbox's define API
+    // Note: If sandboxId exists, we're republishing with changes
+    const response = await fetch(
+      "https://codesandbox.io/api/v1/sandboxes/define?json=1",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          files: sandboxFiles,
+        }),
       },
-      body: JSON.stringify({
-        files: sandboxFiles,
-      }),
-    });
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -43,21 +44,22 @@ export async function POST(request: NextRequest) {
       throw new Error("No sandbox_id returned");
     }
 
-    const sandboxUrl = `https://codesandbox.io/s/${data.sandbox_id}`;
-    const previewUrl = `https://${data.sandbox_id}.csb.app/`;
+    const newSandboxId = data.sandbox_id;
+    const sandboxUrl = `https://codesandbox.io/s/${newSandboxId}`;
+    const previewUrl = `https://${newSandboxId}.csb.app/`;
 
     return NextResponse.json({
       success: true,
       url: previewUrl,
       editorUrl: sandboxUrl,
-      sandboxId: data.sandbox_id,
+      sandboxId: newSandboxId,
+      isUpdate: !!sandboxId, // Let the client know if this was an update
     });
-
   } catch (error) {
     console.error("Publish error:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to publish" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
