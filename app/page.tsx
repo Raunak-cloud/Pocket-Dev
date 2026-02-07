@@ -1176,8 +1176,7 @@ The user expects to see their ACTUAL uploaded images in the updated website.`;
       if (pdfFiles.length > 0) {
         const pdfUrlList = pdfFiles
           .map(
-            (f, i) =>
-              `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+            (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
         editFullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
@@ -1278,8 +1277,8 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       const imageFiles = uploadedFiles.filter((f) =>
         f.type.startsWith("image/"),
       );
-      const pdfFiles = uploadedFiles.filter((f) =>
-        f.type === "application/pdf",
+      const pdfFiles = uploadedFiles.filter(
+        (f) => f.type === "application/pdf",
       );
 
       if (imageFiles.length > 0) {
@@ -1306,8 +1305,7 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
       if (pdfFiles.length > 0) {
         const pdfUrlList = pdfFiles
           .map(
-            (f, i) =>
-              `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+            (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
         fullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
@@ -1349,6 +1347,103 @@ ${pdfUrlList}
       const result = await generateReact(fullPrompt, mediaFiles);
       clearInterval(progressInterval);
       setProgressMessages([...progressSteps, "Saving project..."]);
+
+      // Check if authentication was generated
+      const hasAuth = result.files.some(
+        (f) =>
+          f.content.includes("firebase/auth") ||
+          f.content.includes("firebase/firestore") ||
+          f.content.includes("PLACEHOLDER_API_KEY"),
+      );
+
+      // Auto-create Firebase Web App if auth is detected
+      if (hasAuth && user) {
+        setProgressMessages((prev) => [
+          ...prev,
+          "🔐 Setting up Firebase authentication...",
+        ]);
+
+        try {
+          const response = await fetch("/api/create-firebase-app", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: user.uid,
+              appName: generationPrompt.substring(0, 100),
+              prompt: generationPrompt,
+            }),
+          });
+
+          if (response.ok) {
+            const { firebaseConfig, appId, tenantId, multiTenancyEnabled } =
+              await response.json();
+
+            // Inject Firebase config into the generated files
+            result.files = result.files.map((file) => {
+              if (
+                file.path === "lib/firebase-config.ts" &&
+                file.content.includes("PLACEHOLDER_API_KEY")
+              ) {
+                return {
+                  ...file,
+                  content: file.content
+                    .replace("PLACEHOLDER_API_KEY", firebaseConfig.apiKey || "")
+                    .replace(
+                      "PLACEHOLDER_AUTH_DOMAIN",
+                      firebaseConfig.authDomain || "",
+                    )
+                    .replace(
+                      "PLACEHOLDER_PROJECT_ID",
+                      firebaseConfig.projectId || "",
+                    )
+                    .replace(
+                      "PLACEHOLDER_STORAGE_BUCKET",
+                      firebaseConfig.storageBucket || "",
+                    )
+                    .replace(
+                      "PLACEHOLDER_MESSAGING_SENDER_ID",
+                      firebaseConfig.messagingSenderId || "",
+                    )
+                    .replace(
+                      "PLACEHOLDER_APP_ID",
+                      appId || firebaseConfig.appId || "",
+                    )
+                    .replace("PLACEHOLDER_TENANT_ID", tenantId || "null"),
+                };
+              }
+              return file;
+            });
+
+            if (multiTenancyEnabled) {
+              setProgressMessages((prev) => [
+                ...prev,
+                "✅ Firebase authentication ready (isolated tenant)!",
+              ]);
+            } else {
+              setProgressMessages((prev) => [
+                ...prev,
+                "✅ Firebase authentication ready!",
+              ]);
+              setProgressMessages((prev) => [
+                ...prev,
+                "ℹ️ Note: Using shared auth pool (upgrade to Identity Platform for isolation)",
+              ]);
+            }
+          } else {
+            console.error("Failed to create Firebase app");
+            setProgressMessages((prev) => [
+              ...prev,
+              "⚠️ Auth setup failed - using defaults",
+            ]);
+          }
+        } catch (error) {
+          console.error("Error creating Firebase app:", error);
+          setProgressMessages((prev) => [
+            ...prev,
+            "⚠️ Auth setup failed - using defaults",
+          ]);
+        }
+      }
 
       // Images are now hosted on Firebase Storage with URLs embedded in code
       // No need for data URL injection - AI uses the Firebase URLs directly
@@ -2050,6 +2145,22 @@ next-env.d.ts
               </div>
 
               <div className="flex items-center gap-2">
+                {/* Open in StackBlitz Button */}
+                <button
+                  onClick={openInStackBlitz}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-sm hover:shadow-md"
+                  title="Open in StackBlitz"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M10.797 14.182H3.635L16.728 0l-3.525 9.818h7.162L7.272 24l3.525-9.818z" />
+                  </svg>
+                  StackBlitz
+                </button>
+
                 {/* Export Dropdown */}
                 <div className="relative export-dropdown">
                   <button
@@ -2254,7 +2365,7 @@ next-env.d.ts
             <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-900/30">
               {/* Editing overlay */}
               {isEditing && !isEditMinimized && (
-                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50 flex items-center justify-center overflow-auto p-4 pt-0">
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50">
                   <GenerationProgress
                     prompt={`Editing: ${editPrompt}`}
                     progressMessages={editProgressMessages}
@@ -4160,10 +4271,10 @@ Examples:
 
       {/* App Payment Modal */}
       {showAppPaymentModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
             {/* Modal Header */}
-            <div className="relative px-6 pt-8 pb-4 text-center">
+            <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
               <button
                 onClick={() => {
                   setShowAppPaymentModal(false);
@@ -4209,7 +4320,7 @@ Examples:
             </div>
 
             {/* Pricing Options */}
-            <div className="px-6 py-4 space-y-3">
+            <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
               {/* Basic Plan */}
               <div className="p-4 bg-gradient-to-br from-blue-500/10 to-violet-500/10 border-2 border-blue-500/30 rounded-xl">
                 <div className="flex items-center justify-between mb-3">
@@ -4237,7 +4348,7 @@ Examples:
                         d="M5 13l4 4L19 7"
                       />
                     </svg>
-                    AI-generated application
+                    Pocket AI generated application
                   </li>
                   <li className="flex items-center gap-2 text-sm text-slate-300">
                     <svg
@@ -4253,7 +4364,7 @@ Examples:
                         d="M5 13l4 4L19 7"
                       />
                     </svg>
-                    Download & deploy anywhere
+                    Export to GitHub, or your favourite IDE & deploy anywhere
                   </li>
                   <li className="flex items-center gap-2 text-sm text-slate-300">
                     <svg
@@ -4380,7 +4491,7 @@ Examples:
             </div>
 
             {/* Payment Options */}
-            <div className="px-6 pb-6 space-y-3">
+            <div className="px-6 pb-6 space-y-3 flex-shrink-0">
               {/* Basic Option */}
               <button
                 onClick={payForNewApp}

@@ -172,9 +172,9 @@ export default function GenerationProgress({
       </div>
 
       {/* Glass card */}
-      <div className="relative w-full h-full flex flex-col bg-slate-900/70 backdrop-blur-2xl border border-slate-700/40 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden">
+      <div className="relative w-full h-full flex flex-col bg-slate-900/70 backdrop-blur-2xl border border-slate-700/40 shadow-2xl shadow-black/20 overflow-hidden">
         {/* Shimmer border effect */}
-        <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none">
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div
             className="absolute -top-[1px] -left-[1px] -right-[1px] h-[1px]"
             style={{

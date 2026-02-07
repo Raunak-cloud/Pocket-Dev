@@ -37,7 +37,19 @@ function isInsufficientCreditsError(error: any): boolean {
   );
 }
 
-const SYSTEM_PROMPT = `You are an expert Next.js developer who creates professional, production-ready Next.js applications.
+// Auth detection keywords
+const AUTH_KEYWORDS = [
+  'authentication', 'auth', 'login', 'signup', 'sign in', 'sign up',
+  'oauth', 'user profile', 'protected routes', 'user login',
+  'google login', 'user dashboard', 'account', 'session', 'logout'
+];
+
+function detectAuthRequest(prompt: string): boolean {
+  const lowerPrompt = prompt.toLowerCase();
+  return AUTH_KEYWORDS.some(keyword => lowerPrompt.includes(keyword));
+}
+
+const BASE_SYSTEM_PROMPT = `You are an expert Next.js developer who creates professional, production-ready Next.js applications.
 
 🚨 MANDATORY REQUIREMENTS 🚨
 
@@ -106,6 +118,681 @@ PORTFOLIO:
 - app/projects/page.tsx (project gallery)
 - app/about/page.tsx
 - app/contact/page.tsx
+
+🔐 FIREBASE AUTHENTICATION (Generate when user requests auth):
+
+IF user prompt contains: "authentication", "auth", "login", "signup", "sign in", "sign up", "oauth", "user profile", "protected routes", "user login", "user authentication", "google login", "user dashboard", "account", "session", "user management", "sign out", "logout"
+THEN generate complete Firebase authentication system with Firestore database.
+
+REQUIRED FILES FOR AUTH:
+1. lib/firebase-config.ts - Firebase configuration (auto-injected)
+2. lib/auth.ts - Firebase Auth helpers
+3. app/sign-in/page.tsx - Firebase sign-in page
+4. app/sign-up/page.tsx - Firebase sign-up page
+5. app/profile/page.tsx - Protected user profile page
+6. app/components/AuthProvider.tsx - Firebase auth context
+7. app/components/Navbar.tsx - With auth state
+8. app/components/ProtectedRoute.tsx - Route protection component
+
+LIB/FIREBASE-CONFIG.TS TEMPLATE:
+\`\`\`typescript
+// FIREBASE_CONFIG_PLACEHOLDER - This will be replaced with actual config
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+
+const firebaseConfig = {
+  apiKey: "PLACEHOLDER_API_KEY",
+  authDomain: "PLACEHOLDER_AUTH_DOMAIN",
+  projectId: "PLACEHOLDER_PROJECT_ID",
+  storageBucket: "PLACEHOLDER_STORAGE_BUCKET",
+  messagingSenderId: "PLACEHOLDER_MESSAGING_SENDER_ID",
+  appId: "PLACEHOLDER_APP_ID"
+};
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+
+export const auth = getAuth(app);
+
+// Multi-tenancy: Isolate authentication per app
+// PLACEHOLDER_TENANT_ID will be replaced with actual tenant ID
+const tenantId = "PLACEHOLDER_TENANT_ID";
+if (tenantId && tenantId !== "null") {
+  auth.tenantId = tenantId;
+}
+
+export const db = getFirestore(app);
+export const storage = getStorage(app);
+
+export default app;
+\`\`\`
+
+LIB/AUTH.TS TEMPLATE:
+\`\`\`typescript
+import { auth } from './firebase-config';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  GoogleAuthProvider,
+  signInWithPopup,
+  updateProfile
+} from 'firebase/auth';
+
+export const googleProvider = new GoogleAuthProvider();
+
+export async function signUpWithEmail(email: string, password: string, displayName?: string) {
+  const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+  if (displayName && userCredential.user) {
+    await updateProfile(userCredential.user, { displayName });
+  }
+  return userCredential.user;
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  const userCredential = await signInWithEmailAndPassword(auth, email, password);
+  return userCredential.user;
+}
+
+export async function signInWithGoogle() {
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
+}
+
+export async function logout() {
+  await signOut(auth);
+}
+\`\`\`
+
+APP/COMPONENTS/AUTHPROVIDER.TSX TEMPLATE:
+\`\`\`typescript
+'use client';
+
+import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { User, onAuthStateChanged } from 'firebase/auth';
+import { auth } from '@/lib/firebase-config';
+
+interface AuthContextType {
+  user: User | null;
+  loading: boolean;
+}
+
+const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => useContext(AuthContext);
+\`\`\`
+
+APP/LAYOUT.TSX WITH FIREBASE:
+\`\`\`typescript
+import type { Metadata } from 'next';
+import { AuthProvider } from './components/AuthProvider';
+import Navbar from './components/Navbar';
+import Footer from './components/Footer';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'Your App Title',
+  description: 'Your app description',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="antialiased">
+        <AuthProvider>
+          <div className="flex flex-col min-h-screen">
+            <Navbar />
+            <main className="flex-1">{children}</main>
+            <Footer />
+          </div>
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+\`\`\`
+
+NAVBAR WITH AUTH (app/components/Navbar.tsx):
+\`\`\`typescript
+'use client';
+
+import Link from 'next/link';
+import { useAuth } from './AuthProvider';
+import { logout } from '@/lib/auth';
+
+export default function Navbar() {
+  const { user, loading } = useAuth();
+
+  const handleSignOut = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
+  return (
+    <nav className="bg-white border-b shadow-sm">
+      <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+        <Link href="/" className="text-2xl font-bold text-blue-600">
+          YourApp
+        </Link>
+        <div className="flex items-center gap-6">
+          <Link href="/" className="hover:text-blue-600">Home</Link>
+          <Link href="/about" className="hover:text-blue-600">About</Link>
+          {!loading && (
+            <>
+              {!user ? (
+                <Link
+                  href="/sign-in"
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+                >
+                  Sign In
+                </Link>
+              ) : (
+                <>
+                  <Link href="/profile" className="hover:text-blue-600">Profile</Link>
+                  <button
+                    onClick={handleSignOut}
+                    className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition"
+                  >
+                    Sign Out
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </nav>
+  );
+}
+\`\`\`
+
+SIGN-IN PAGE (app/sign-in/page.tsx):
+\`\`\`typescript
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { signInWithEmail, signInWithGoogle } from '@/lib/auth';
+
+export default function SignInPage() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      await signInWithEmail(email, password);
+      router.push('/');
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign in');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setLoading(true);
+
+    try {
+      await signInWithGoogle();
+      router.push('/');
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign in with Google');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            Sign in to your account
+          </h2>
+        </div>
+        <form className="mt-8 space-y-6" onSubmit={handleEmailSignIn}>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
+              {error}
+            </div>
+          )}
+          <div className="rounded-md shadow-sm -space-y-px">
+            <div>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                placeholder="Email address"
+              />
+            </div>
+            <div>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                placeholder="Password"
+              />
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+            >
+              {loading ? 'Signing in...' : 'Sign in'}
+            </button>
+          </div>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300" />
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-gray-50 text-gray-500">Or continue with</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-3 py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path
+                fill="#4285F4"
+                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              />
+            </svg>
+            Sign in with Google
+          </button>
+
+          <div className="text-center text-sm">
+            <span className="text-gray-600">Don't have an account? </span>
+            <Link href="/sign-up" className="font-medium text-blue-600 hover:text-blue-500">
+              Sign up
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+\`\`\`
+
+SIGN-UP PAGE (app/sign-up/page.tsx):
+\`\`\`typescript
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { signUpWithEmail, signInWithGoogle } from '@/lib/auth';
+
+export default function SignUpPage() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleEmailSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      await signUpWithEmail(email, password, name);
+      router.push('/');
+    } catch (err: any) {
+      setError(err.message || 'Failed to create account');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignUp = async () => {
+    setError('');
+    setLoading(true);
+
+    try {
+      await signInWithGoogle();
+      router.push('/');
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign up with Google');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            Create your account
+          </h2>
+        </div>
+        <form className="mt-8 space-y-6" onSubmit={handleEmailSignUp}>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
+              {error}
+            </div>
+          )}
+          <div className="rounded-md shadow-sm -space-y-px">
+            <div>
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                placeholder="Full name"
+              />
+            </div>
+            <div>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                placeholder="Email address"
+              />
+            </div>
+            <div>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                placeholder="Password (min. 6 characters)"
+                minLength={6}
+              />
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+            >
+              {loading ? 'Creating account...' : 'Sign up'}
+            </button>
+          </div>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300" />
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-gray-50 text-gray-500">Or continue with</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogleSignUp}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-3 py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path
+                fill="#4285F4"
+                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              />
+            </svg>
+            Sign up with Google
+          </button>
+
+          <div className="text-center text-sm">
+            <span className="text-gray-600">Already have an account? </span>
+            <Link href="/sign-in" className="font-medium text-blue-600 hover:text-blue-500">
+              Sign in
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+\`\`\`
+
+PROFILE PAGE (app/profile/page.tsx):
+\`\`\`typescript
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '../components/AuthProvider';
+
+export default function ProfilePage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/sign-in');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-8">
+      <h1 className="text-3xl font-bold mb-6">Your Profile</h1>
+      <div className="bg-white shadow-lg rounded-lg p-6 max-w-2xl">
+        <div className="flex items-center gap-4 mb-6">
+          {user.photoURL ? (
+            <img
+              src={user.photoURL}
+              alt={user.displayName || 'User'}
+              className="w-20 h-20 rounded-full"
+            />
+          ) : (
+            <div className="w-20 h-20 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-2xl font-bold">
+              {(user.displayName || user.email || 'U')[0].toUpperCase()}
+            </div>
+          )}
+          <div>
+            <h2 className="text-2xl font-semibold">
+              {user.displayName || 'User'}
+            </h2>
+            <p className="text-gray-600">{user.email}</p>
+          </div>
+        </div>
+        <div className="border-t pt-4 space-y-2">
+          <p><strong>User ID:</strong> <span className="text-sm text-gray-600">{user.uid}</span></p>
+          <p><strong>Email Verified:</strong> {user.emailVerified ? '✅ Yes' : '❌ No'}</p>
+          {user.metadata.creationTime && (
+            <p><strong>Member Since:</strong> {new Date(user.metadata.creationTime).toLocaleDateString()}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+\`\`\`
+
+APP/COMPONENTS/PROTECTEDROUTE.TSX TEMPLATE:
+\`\`\`typescript
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from './AuthProvider';
+
+export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/sign-in');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return <>{children}</>;
+}
+\`\`\`
+
+DEPENDENCIES TO ADD:
+When auth is detected, add to dependencies object:
+\`\`\`json
+{
+  "firebase": "^10.13.0"
+}
+\`\`\`
+
+DO NOT generate authentication unless explicitly requested by user.
+
+NOTE: Firebase configuration is AUTO-INJECTED during generation. No manual setup required!
+
+---
+
+FIRESTORE DATA PATTERNS (for user-specific data):
+
+When generating apps with authentication, use Firestore for real-time database sync:
+
+EXAMPLE - Shopping Cart with Firestore:
+\`\`\`typescript
+'use client';
+
+import { useAuth } from '../components/AuthProvider';
+import { useEffect, useState } from 'react';
+import { db } from '@/lib/firebase-config';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+export default function useUserCart() {
+  const { user } = useAuth();
+  const [cart, setCart] = useState([]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const cartRef = doc(db, 'users', user.uid, 'cart', 'items');
+    const unsubscribe = onSnapshot(cartRef, (doc) => {
+      setCart(doc.exists() ? doc.data().items || [] : []);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const addToCart = async (item) => {
+    if (!user) return;
+    const newCart = [...cart, item];
+    setCart(newCart);
+    await setDoc(doc(db, 'users', user.uid, 'cart', 'items'), { items: newCart });
+  };
+
+  return { cart, addToCart };
+}
+\`\`\`
+
+EXAMPLE - User Preferences with Firestore:
+\`\`\`typescript
+import { db } from '@/lib/firebase-config';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+
+export async function saveUserPreference(userId: string, key: string, value: any) {
+  await setDoc(doc(db, 'users', userId, 'prefs', key), { value });
+}
+
+export async function getUserPreference(userId: string, key: string) {
+  const snap = await getDoc(doc(db, 'users', userId, 'prefs', key));
+  return snap.exists() ? snap.data().value : null;
+}
+\`\`\`
+
+FIRESTORE STRUCTURE: All data scoped under users/{userId}/ for isolation.
 
 NEXT.JS REQUIREMENTS:
 - Use TypeScript (.tsx) for all components
@@ -314,6 +1001,55 @@ function extractJSON(text: string): string {
   return text;
 }
 
+/** Smart JSON recovery - attempts to complete truncated JSON */
+function recoverJSON(text: string): string {
+  try {
+    // Try parsing as-is first
+    JSON.parse(text);
+    return text;
+  } catch (e) {
+    // Count braces and brackets
+    let braceCount = 0;
+    let bracketCount = 0;
+    let inString = false;
+    let escape = false;
+
+    for (const char of text) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === '\\') {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (char === '{') braceCount++;
+      if (char === '}') braceCount--;
+      if (char === '[') bracketCount++;
+      if (char === ']') bracketCount--;
+    }
+
+    // Close any open strings
+    if (inString) {
+      text += '"';
+    }
+
+    // Close any unclosed arrays
+    text += ']'.repeat(Math.max(0, bracketCount));
+
+    // Close any unclosed objects
+    text += '}'.repeat(Math.max(0, braceCount));
+
+    return text;
+  }
+}
+
 /** Lint all generated files */
 async function lintAllFiles(files: GeneratedFile[]): Promise<LintResult> {
   const fileResults = [];
@@ -452,9 +1188,10 @@ async function generateWithGemini(
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
-      maxOutputTokens: 65536, // Max output tokens for Gemini
+      maxOutputTokens: 65536, // Max output tokens for Gemini (2M model can handle this)
       temperature: 0.7,
       topP: 0.95,
+      responseMimeType: "application/json", // Force JSON output
     },
   });
 
@@ -519,14 +1256,24 @@ ${prompt}`;
   // Add additional instructions for Gemini to keep responses concise
   const geminiInstructions = `
 
-⚠️ IMPORTANT: Keep your response CONCISE and COMPLETE:
-- Generate ONLY the essential files needed
-- Keep component code clean and minimal
-- Ensure the JSON is COMPLETE and ends with }
-- DO NOT truncate the response - finish the JSON properly
+⚠️ CRITICAL GEMINI REQUIREMENTS:
+1. Output MUST be valid, complete JSON
+2. Response MUST end with the closing }
+3. If approaching token limit, prioritize completing the JSON structure
+4. Generate 4-6 core files maximum (can be extended later)
+5. Keep code concise but functional
+6. NEVER truncate - always close all braces and brackets
 `;
 
-  parts.push({ text: SYSTEM_PROMPT + geminiInstructions + "\n\nUser Request: " + textPrompt });
+  // Detect if auth is needed to conditionally include templates
+  const needsAuth = detectAuthRequest(textPrompt);
+
+  // Build optimized prompt
+  const optimizedPrompt = needsAuth
+    ? BASE_SYSTEM_PROMPT + geminiInstructions + "\n\nUser Request: " + textPrompt
+    : BASE_SYSTEM_PROMPT.replace(/🔐 FIREBASE AUTHENTICATION[\s\S]*?(?=NEXT\.JS REQUIREMENTS:)/g, '') + geminiInstructions + "\n\nUser Request: " + textPrompt;
+
+  parts.push({ text: optimizedPrompt });
 
   try {
     const result = await model.generateContent(parts);
@@ -569,12 +1316,18 @@ async function generateWithLinting(
         // Use Gemini Flash for code generation
         text = await generateWithGemini(prompt, images, onProgress, false);
       } else {
+        // Detect auth for optimized system prompt
+        const needsAuth = detectAuthRequest(prompt);
+        const systemPrompt = needsAuth
+          ? BASE_SYSTEM_PROMPT
+          : BASE_SYSTEM_PROMPT.replace(/🔐 FIREBASE AUTHENTICATION[\s\S]*?(?=NEXT\.JS REQUIREMENTS:)/g, '');
+
         // Generate code with Anthropic streaming
         const stream = client.messages.stream({
           model: CLAUDE_MODEL,
           max_tokens: MAX_TOKENS,
           temperature: 0.7,
-          system: SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: "user", content: userContent }],
         });
 
@@ -583,51 +1336,48 @@ async function generateWithLinting(
           response.content[0].type === "text" ? response.content[0].text : "";
       }
 
-      const jsonText = extractJSON(text);
+      let jsonText = extractJSON(text);
 
       // Check if JSON appears complete
       if (!jsonText.trim().endsWith("}")) {
-        console.error("JSON response appears truncated - does not end with }");
-        console.error("Response length:", jsonText.length);
-        console.error("Last 200 chars:", jsonText.substring(Math.max(0, jsonText.length - 200)));
+        console.warn("JSON response appears truncated - attempting recovery");
+        console.warn("Response length:", jsonText.length);
+        console.warn("Last 200 chars:", jsonText.substring(Math.max(0, jsonText.length - 200)));
 
-        if (attempts === maxAttempts) {
-          if (useGemini) {
-            throw new Error(
-              `Gemini response was truncated (${jsonText.length} chars). ` +
-              `The model may have hit its output limit. Try a simpler prompt with fewer pages.`,
-            );
-          }
-          throw new Error(
-            `Generated JSON appears incomplete (response was ${jsonText.length} chars). ` +
-              `Try a simpler prompt or reduce the number of pages/components requested.`,
-          );
-        }
-        attempts++;
-        continue;
+        // Attempt JSON recovery
+        jsonText = recoverJSON(jsonText);
+        console.log("Recovery attempted, new length:", jsonText.length);
       }
 
       let parsed;
       try {
         parsed = JSON.parse(jsonText);
       } catch (e) {
-        console.error("JSON parse error:", e);
-        console.error("Response length:", jsonText.length);
-        console.error("First 1000 chars:", jsonText.substring(0, 1000));
-        console.error(
-          "Last 500 chars:",
-          jsonText.substring(Math.max(0, jsonText.length - 500)),
-        );
-
-        if (attempts === maxAttempts) {
-          throw new Error(
-            `Failed to parse generated JSON after ${maxAttempts} attempts. ` +
-              `Response length: ${jsonText.length} chars. ` +
-              `The AI response may be incomplete or malformed. Please try a simpler prompt or try again.`,
+        // Try recovery one more time
+        console.warn("JSON parse failed, attempting recovery");
+        try {
+          jsonText = recoverJSON(jsonText);
+          parsed = JSON.parse(jsonText);
+          console.log("✅ JSON recovery successful!");
+        } catch (recoveryError) {
+          console.error("JSON parse error:", recoveryError);
+          console.error("Response length:", jsonText.length);
+          console.error("First 1000 chars:", jsonText.substring(0, 1000));
+          console.error(
+            "Last 500 chars:",
+            jsonText.substring(Math.max(0, jsonText.length - 500)),
           );
+
+          if (attempts === maxAttempts) {
+            throw new Error(
+              `Failed to parse generated JSON after ${maxAttempts} attempts. ` +
+                `Response length: ${jsonText.length} chars. ` +
+                `Try a simpler prompt (fewer pages/features) or try again.`,
+            );
+          }
+          attempts++;
+          continue;
         }
-        attempts++;
-        continue;
       }
 
       // Validate structure
@@ -647,6 +1397,17 @@ async function generateWithLinting(
       }
 
       const { files, dependencies } = parsed;
+
+      // Detect if Firebase auth was generated and auto-add dependency if missing
+      const hasFirebaseAuth = files.some((f: any) =>
+        f.content.includes('firebase/auth') ||
+        f.content.includes('firebase/firestore') ||
+        f.content.includes('FIREBASE_CONFIG_PLACEHOLDER')
+      );
+
+      if (hasFirebaseAuth && !dependencies['firebase']) {
+        dependencies['firebase'] = '^10.13.0';
+      }
 
       // Validate files have required properties
       const invalidFile = files.find((f: any) => !f.path || !f.content);
@@ -706,7 +1467,7 @@ async function generateWithLinting(
               model: CLAUDE_MODEL,
               max_tokens: MAX_TOKENS,
               temperature: 0.2,
-              system: SYSTEM_PROMPT,
+              system: BASE_SYSTEM_PROMPT,
               messages: [
                 { role: "user", content: prompt },
                 { role: "assistant", content: jsonText },
@@ -820,7 +1581,7 @@ async function generateWithLinting(
         model: CLAUDE_MODEL,
         max_tokens: MAX_TOKENS,
         temperature: 0.7,
-        system: SYSTEM_PROMPT,
+        system: BASE_SYSTEM_PROMPT,
         messages: [{ role: "user", content: userContent }],
       });
 
