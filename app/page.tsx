@@ -77,42 +77,42 @@ const EXAMPLES = [
     name: "E-Commerce",
     desc: "Product listings, cart & checkout",
     query:
-      "Create a modern e-commerce React app with product listings, shopping cart, and checkout pages",
+      "Create a modern e-commerce Next.js app with product listings, shopping cart, and checkout pages using App Router and server components",
   },
   {
     icon: "🍕",
     name: "Restaurant",
     desc: "Menu, reservations & about",
     query:
-      "Create a restaurant React app with menu, reservations, and about pages",
+      "Create a restaurant Next.js app with menu, reservations, and about pages using dynamic routes and App Router",
   },
   {
     icon: "🚀",
     name: "SaaS Landing",
     desc: "Features, pricing & signup",
     query:
-      "Create a SaaS landing React app with features, pricing, and about pages",
+      "Create a SaaS landing page Next.js app with features, pricing, and signup sections using App Router and optimized metadata",
   },
   {
     icon: "📸",
     name: "Portfolio",
     desc: "Projects gallery & contact",
     query:
-      "Create a creative portfolio React app with projects gallery, about, and contact pages",
+      "Create a creative portfolio Next.js app with projects gallery, about, and contact pages using App Router and Next.js Image optimization",
   },
   {
     icon: "📝",
     name: "Blog",
     desc: "Posts, categories & search",
     query:
-      "Create a modern blog React app with post listings, categories, and search functionality",
+      "Create a modern blog Next.js app with post listings, categories, and search using App Router and dynamic routes",
   },
   {
     icon: "🏋️",
     name: "Fitness",
     desc: "Workouts, plans & progress",
     query:
-      "Create a fitness tracker React app with workout plans, exercise library, and progress tracking",
+      "Create a fitness tracker Next.js app with workout plans, exercise library, and progress tracking using App Router and client components",
   },
 ];
 
