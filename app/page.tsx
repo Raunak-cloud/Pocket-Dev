@@ -120,11 +120,9 @@ const EXAMPLES = [
 function StackBlitzPreview({
   project,
   previewKey,
-  view = "preview",
 }: {
   project: ReactProject | null;
   previewKey: number;
-  view?: "default" | "editor" | "preview";
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [loadingState, setLoadingState] = useState<
@@ -174,12 +172,12 @@ function StackBlitzPreview({
           },
           {
             height: "100%",
-            view: view,
+            view: "preview",
             theme: "dark",
-            hideExplorer: view === "preview",
+            hideExplorer: true,
             hideDevTools: true,
-            hideNavigation: false,
-            showSidebar: view !== "preview",
+            hideNavigation: true,
+            forceEmbedLayout: true,
           },
         );
 
@@ -226,7 +224,7 @@ function StackBlitzPreview({
         }
       }
     };
-  }, [project, previewKey, retryCount, view]);
+  }, [project, previewKey, retryCount]);
 
   return (
     <div className="relative h-full">
@@ -299,7 +297,14 @@ function StackBlitzPreview({
       )}
 
       {/* Stable wrapper — StackBlitz containers are managed imperatively inside */}
-      <div ref={wrapperRef} className="w-full h-full" />
+      {/* Wrapper with overflow hidden to crop the bottom footer */}
+      <div className="w-full h-full overflow-hidden">
+        <div
+          ref={wrapperRef}
+          className="w-full"
+          style={{ height: "calc(100% + 50px)" }}
+        />
+      </div>
     </div>
   );
 }
@@ -355,6 +360,7 @@ function ReactGeneratorContent() {
   const [showCancelConfirm, setShowCancelConfirm] = useState<
     "generation" | "edit" | null
   >(null);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showGitHubModal, setShowGitHubModal] = useState(false);
   const [githubToken, setGithubToken] = useState("");
@@ -422,6 +428,19 @@ function ReactGeneratorContent() {
       setIsSidebarCollapsed(false);
     }
   }, [project, activeSection]);
+
+  // Close export dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showExportDropdown && !target.closest(".export-dropdown")) {
+        setShowExportDropdown(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showExportDropdown]);
 
   // Handle payment success redirect
   useEffect(() => {
@@ -1131,6 +1150,8 @@ ${editPrompt}
     // Add reference to uploaded files if any
     if (editFiles.length > 0) {
       const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
+      const pdfFiles = editFiles.filter((f) => f.type === "application/pdf");
+
       if (imageFiles.length > 0) {
         const imageUrlList = imageFiles
           .map(
@@ -1151,6 +1172,24 @@ ${imageUrlList}
 
 The user expects to see their ACTUAL uploaded images in the updated website.`;
       }
+
+      if (pdfFiles.length > 0) {
+        const pdfUrlList = pdfFiles
+          .map(
+            (f, i) =>
+              `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+          )
+          .join("\n");
+        editFullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+
+${pdfUrlList}
+
+🚨 YOU MUST:
+1. The PDFs are uploaded for reference/context - analyze their content if shown visually
+2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
+3. If the PDF contains design references, use them to inform the visual design changes
+4. The user has uploaded these PDFs to provide context for the edit request`;
+      }
     }
 
     editFullPrompt += `\n\n🚨 CRITICAL REQUIREMENT:
@@ -1160,10 +1199,12 @@ Even if you only modify 1-2 files, you must include ALL files in the output JSON
 Do not skip any files. Keep unmodified files exactly as they are.`;
 
     try {
-      // Filter for image files only (Anthropic API supports images)
-      const imageFiles = editFiles.filter((f) => f.type.startsWith("image/"));
+      // Filter for images and PDFs (Anthropic API supports both)
+      const mediaFiles = editFiles.filter(
+        (f) => f.type.startsWith("image/") || f.type === "application/pdf",
+      );
 
-      const result = await generateReact(editFullPrompt, imageFiles);
+      const result = await generateReact(editFullPrompt, mediaFiles);
 
       clearInterval(editProgressInterval);
       setEditProgressMessages([...editProgressSteps, "Merging changes..."]);
@@ -1237,6 +1278,10 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       const imageFiles = uploadedFiles.filter((f) =>
         f.type.startsWith("image/"),
       );
+      const pdfFiles = uploadedFiles.filter((f) =>
+        f.type === "application/pdf",
+      );
+
       if (imageFiles.length > 0) {
         const imageUrlList = imageFiles
           .map(
@@ -1256,6 +1301,24 @@ ${imageUrlList}
 5. The user uploaded these images specifically to see them in the generated website
 
 The user expects to see their ACTUAL uploaded images in the final website.`;
+      }
+
+      if (pdfFiles.length > 0) {
+        const pdfUrlList = pdfFiles
+          .map(
+            (f, i) =>
+              `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
+          )
+          .join("\n");
+        fullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+
+${pdfUrlList}
+
+🚨 YOU MUST:
+1. The PDFs are uploaded for reference/context - analyze their content if shown visually
+2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
+3. If the PDF contains design references, use them to inform the visual design of the website
+4. The user has uploaded these PDFs to provide context or downloadable resources for the website`;
       }
     }
 
@@ -1278,12 +1341,12 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
     }, 2200);
 
     try {
-      // Filter for image files only (Anthropic API supports images)
-      const imageFiles = uploadedFiles.filter((f) =>
-        f.type.startsWith("image/"),
+      // Filter for images and PDFs (Anthropic API supports both)
+      const mediaFiles = uploadedFiles.filter(
+        (f) => f.type.startsWith("image/") || f.type === "application/pdf",
       );
 
-      const result = await generateReact(fullPrompt, imageFiles);
+      const result = await generateReact(fullPrompt, mediaFiles);
       clearInterval(progressInterval);
       setProgressMessages([...progressSteps, "Saving project..."]);
 
@@ -1693,6 +1756,160 @@ The easiest way to deploy is with [Vercel](https://vercel.com/new).
     }
   };
 
+  const exportToVSCode = async () => {
+    if (!project) return;
+
+    setIsExporting(true);
+    setShowExportDropdown(false);
+
+    try {
+      const zip = new JSZip();
+      const files = prepareStackBlitzFiles(project);
+
+      Object.entries(files).forEach(([path, content]) => {
+        zip.file(path, content);
+      });
+
+      zip.file(
+        ".gitignore",
+        `# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+`,
+      );
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "nextjs-app.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Try to open in VS Code via vscode:// protocol
+      setTimeout(() => {
+        window.open(
+          "vscode://file/" + encodeURIComponent(a.download),
+          "_blank",
+        );
+      }, 500);
+    } catch (error) {
+      console.error("VS Code export error:", error);
+      setError("Failed to export to VS Code");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const exportToCursor = async () => {
+    if (!project) return;
+
+    setIsExporting(true);
+    setShowExportDropdown(false);
+
+    try {
+      const zip = new JSZip();
+      const files = prepareStackBlitzFiles(project);
+
+      Object.entries(files).forEach(([path, content]) => {
+        zip.file(path, content);
+      });
+
+      zip.file(
+        ".gitignore",
+        `# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+`,
+      );
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "nextjs-app.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Try to open in Cursor via cursor:// protocol
+      setTimeout(() => {
+        window.open(
+          "cursor://file/" + encodeURIComponent(a.download),
+          "_blank",
+        );
+      }, 500);
+    } catch (error) {
+      console.error("Cursor export error:", error);
+      setError("Failed to export to Cursor");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // SUCCESS STATE
   if (status === "success" && project) {
     return (
@@ -1833,42 +2050,91 @@ The easiest way to deploy is with [Vercel](https://vercel.com/new).
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={exportToGitHub}
-                  disabled={isExporting}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Open in StackBlitz to push to GitHub"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="currentColor"
-                    viewBox="0 0 24 24"
+                {/* Export Dropdown */}
+                <div className="relative export-dropdown">
+                  <button
+                    onClick={() => setShowExportDropdown(!showExportDropdown)}
+                    disabled={isExporting}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Export project"
                   >
-                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-                  </svg>
-                  Export to GitHub
-                </button>
-                <button
-                  onClick={downloadProject}
-                  disabled={isExporting}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Download as ZIP"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                    />
-                  </svg>
-                  Download ZIP
-                </button>
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                      />
+                    </svg>
+                    Export
+                    <svg
+                      className={`w-3 h-3 transition-transform ${showExportDropdown ? "rotate-180" : ""}`}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 9l-7 7-7-7"
+                      />
+                    </svg>
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showExportDropdown && (
+                    <div className="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
+                      <button
+                        onClick={exportToGitHub}
+                        disabled={isExporting}
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed rounded-t-lg"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+                        </svg>
+                        Export to GitHub
+                      </button>
+                      <button
+                        onClick={exportToVSCode}
+                        disabled={isExporting}
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z" />
+                        </svg>
+                        Export to VS Code
+                      </button>
+                      <button
+                        onClick={exportToCursor}
+                        disabled={isExporting}
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed rounded-b-lg"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm-1 4v12l8-6-8-6z" />
+                        </svg>
+                        Export to Cursor
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {publishedUrl ? (
                   hasUnpublishedChanges ? (
                     <button
@@ -1988,7 +2254,7 @@ The easiest way to deploy is with [Vercel](https://vercel.com/new).
             <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-900/30">
               {/* Editing overlay */}
               {isEditing && !isEditMinimized && (
-                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50 flex items-center justify-center overflow-auto p-4 pt-10">
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50 flex items-center justify-center overflow-auto p-4 pt-0">
                   <GenerationProgress
                     prompt={`Editing: ${editPrompt}`}
                     progressMessages={editProgressMessages}

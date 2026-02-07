@@ -356,27 +356,43 @@ function buildUserContent(
 ): Anthropic.MessageCreateParams["messages"][0]["content"] {
   const content: Anthropic.MessageCreateParams["messages"][0]["content"] = [];
 
-  // Add images first if provided
+  // Add images and PDFs first if provided
   if (images && images.length > 0) {
-    for (const image of images) {
-      // Extract base64 data from dataUrl (remove "data:image/png;base64," prefix)
-      const base64Match = image.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    for (const file of images) {
+      // Extract base64 data from dataUrl
+      const base64Match = file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (base64Match) {
-        const mediaType = base64Match[1] as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp";
+        const mimeType = base64Match[1];
         const base64Data = base64Match[2];
 
-        content.push({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: mediaType,
-            data: base64Data,
-          },
-        });
+        // Handle PDFs
+        if (mimeType === "application/pdf") {
+          content.push({
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: base64Data,
+            },
+          } as any);
+        }
+        // Handle images
+        else if (mimeType.startsWith("image/")) {
+          const mediaType = mimeType as
+            | "image/jpeg"
+            | "image/png"
+            | "image/gif"
+            | "image/webp";
+
+          content.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: base64Data,
+            },
+          });
+        }
       }
     }
   }
@@ -446,19 +462,23 @@ async function generateWithGemini(
 
   const parts: any[] = [];
 
-  // Add images first if provided
+  // Add images and PDFs first if provided
   if (images && images.length > 0) {
-    for (const image of images) {
-      const base64Match = image.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    for (const file of images) {
+      const base64Match = file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (base64Match) {
         const mimeType = base64Match[1];
         const base64Data = base64Match[2];
-        parts.push({
-          inlineData: {
-            mimeType,
-            data: base64Data,
-          },
-        });
+
+        // Gemini supports both images and PDFs
+        if (mimeType.startsWith("image/") || mimeType === "application/pdf") {
+          parts.push({
+            inlineData: {
+              mimeType,
+              data: base64Data,
+            },
+          });
+        }
       }
     }
   }

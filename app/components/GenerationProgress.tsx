@@ -164,7 +164,7 @@ export default function GenerationProgress({
   }
 
   return (
-    <div className="w-full mx-auto flex flex-col items-center">
+    <div className="w-full h-full flex flex-col">
       {/* Ambient glow background */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-blue-500/[0.03] rounded-full blur-3xl" />
@@ -172,7 +172,7 @@ export default function GenerationProgress({
       </div>
 
       {/* Glass card */}
-      <div className="relative w-full bg-slate-900/70 backdrop-blur-2xl border border-slate-700/40 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden">
+      <div className="relative w-full h-full flex flex-col bg-slate-900/70 backdrop-blur-2xl border border-slate-700/40 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden">
         {/* Shimmer border effect */}
         <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none">
           <div
@@ -210,7 +210,7 @@ export default function GenerationProgress({
             </span>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-slate-500">
-                {isEditMode ? "~3-5 min" : "~5-7 min"}
+                {isEditMode ? "5-7 min" : "~5-7 min"}
               </span>
               <span className="text-xs font-semibold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
                 {Math.round(progress)}%
@@ -241,7 +241,7 @@ export default function GenerationProgress({
         <div className="mx-6 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
 
         {/* Steps list */}
-        <div className="px-3 py-3">
+        <div className="flex-1 px-3 py-3 overflow-y-auto">
           {steps.map((step, i) => {
             const isCompleted = i < currentStep - 1;
             const isCurrent = i === currentStep - 1;
