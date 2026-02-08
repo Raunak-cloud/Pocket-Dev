@@ -65,7 +65,7 @@ interface SavedProject {
   updatedAt: Date;
   isPublished?: boolean;
   publishedUrl?: string;
-  sandboxId?: string;
+  deploymentId?: string;
   publishedAt?: Date;
   customDomain?: string;
   tier?: "free" | "premium";
@@ -400,7 +400,7 @@ function ReactGeneratorContent() {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
-  const [sandboxId, setSandboxId] = useState<string | null>(null);
+  const [deploymentId, setDeploymentId] = useState<string | null>(null);
   const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
@@ -771,7 +771,7 @@ function ReactGeneratorContent() {
     setCurrentProjectId(savedProject.id);
     setGenerationPrompt(savedProject.prompt);
     setPublishedUrl(savedProject.publishedUrl || null);
-    setSandboxId(savedProject.sandboxId || null);
+    setDeploymentId(savedProject.deploymentId || null);
     setCustomDomain(savedProject.customDomain || "");
     setHasUnpublishedChanges(false);
     setStatus("success");
@@ -801,7 +801,7 @@ function ReactGeneratorContent() {
         setStatus("idle");
         setGenerationPrompt("");
         setPublishedUrl(null);
-        setSandboxId(null);
+        setDeploymentId(null);
         setHasUnpublishedChanges(false);
         setEditHistory([]);
       }
@@ -872,103 +872,24 @@ function ReactGeneratorContent() {
     }
   };
 
-  // Publish the project to CodeSandbox
+  // Publish the project to Vercel
   const publishProject = async () => {
     if (!project || !currentProjectId || !user) return;
 
     setIsPublishing(true);
     setError("");
     try {
-      // Build files for CodeSandbox
-      const files: Record<string, string> = {};
-
-      // Add all project files
-      project.files.forEach((f) => {
-        files[f.path] = f.content;
-      });
-
-      // Add package.json
-      files["package.json"] = JSON.stringify(
-        {
-          name: "pocket-dev-app",
-          version: "1.0.0",
-          main: "index.js",
-          dependencies: {
-            ...project.dependencies,
-            "react-scripts": "5.0.1",
-          },
-          scripts: {
-            start: "react-scripts start",
-            build: "react-scripts build",
-          },
-          browserslist: [
-            ">0.2%",
-            "not dead",
-            "not ie <= 11",
-            "not op_mini all",
-          ],
-        },
-        null,
-        2,
-      );
-
-      // Add index.html for CRA
-      files["public/index.html"] = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>React App</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            animation: {
-              'fade-in': 'fadeIn 0.5s ease-out',
-              'slide-up': 'slideUp 0.5s ease-out',
-            },
-            keyframes: {
-              fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-              slideUp: { '0%': { opacity: '0', transform: 'translateY(20px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
-            },
-          },
-        },
-      }
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`;
-
-      // Add src/index.js as entry point
-      files["src/index.js"] = `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from '../App';
-import './styles.css';
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);`;
-
-      // Add basic styles
-      files["src/styles.css"] =
-        `*, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; }`;
-
-      // Call our publish API
+      // Call our publish API with the original Next.js project files
       const response = await fetch("/api/publish", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          files,
-          sandboxId: sandboxId || undefined, // Pass existing sandboxId to update instead of create new
+          files: project.files,
+          dependencies: project.dependencies,
+          projectId: currentProjectId,
+          title: generationPrompt || "Pocket Dev App",
         }),
       });
 
@@ -979,19 +900,19 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
       }
 
       const publishUrl = data.url;
-      const newSandboxId = data.sandboxId;
+      const newDeploymentId = data.deploymentId;
 
       // Update project in Firestore with publish info
       const projectRef = doc(db, "projects", currentProjectId);
       await updateDoc(projectRef, {
         isPublished: true,
         publishedUrl: publishUrl,
-        sandboxId: newSandboxId,
+        deploymentId: newDeploymentId,
         publishedAt: serverTimestamp(),
       });
 
       setPublishedUrl(publishUrl);
-      setSandboxId(newSandboxId);
+      setDeploymentId(newDeploymentId);
       setHasUnpublishedChanges(false);
       loadSavedProjects();
     } catch (error) {
@@ -1029,16 +950,30 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
     if (!currentProjectId || !user) return;
 
     try {
+      // Delete the Vercel deployment if we have a deployment ID
+      if (deploymentId) {
+        try {
+          await fetch("/api/publish", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deploymentId }),
+          });
+        } catch (deleteError) {
+          console.error("Error deleting Vercel deployment:", deleteError);
+          // Continue with unpublishing even if Vercel delete fails
+        }
+      }
+
       const projectRef = doc(db, "projects", currentProjectId);
       await updateDoc(projectRef, {
         isPublished: false,
         publishedUrl: null,
-        sandboxId: null,
+        deploymentId: null,
         publishedAt: null,
         customDomain: null,
       });
       setPublishedUrl(null);
-      setSandboxId(null);
+      setDeploymentId(null);
       setCustomDomain("");
       setShowDomainModal(false);
       setHasUnpublishedChanges(false);
@@ -2678,7 +2613,7 @@ next-env.d.ts
                     setStatus("idle");
                     setEditPrompt("");
                     setPublishedUrl(null);
-                    setSandboxId(null);
+                    setDeploymentId(null);
                     setCurrentProjectId(null);
                     setHasUnpublishedChanges(false);
                     setEditHistory([]);

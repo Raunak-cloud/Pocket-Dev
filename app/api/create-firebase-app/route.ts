@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
 
-// Initialize Firebase Admin if not already initialized
-if (!admin.apps.length) {
-  const serviceAccount = JSON.parse(
-    process.env.FIREBASE_SERVICE_ACCOUNT || "{}"
-  );
+// Lazy initialization to avoid build-time errors when env vars aren't available
+function getAdmin() {
+  if (!admin.apps.length) {
+    const serviceAccount = JSON.parse(
+      process.env.FIREBASE_SERVICE_ACCOUNT || "{}"
+    );
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: process.env.FIREBASE_PROJECT_ID,
-  });
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: process.env.FIREBASE_PROJECT_ID,
+    });
+  }
+  return admin;
 }
 
 export async function POST(req: NextRequest) {
+  const adminApp = getAdmin();
   try {
     const { userId, appName, prompt } = await req.json();
 
@@ -70,7 +74,7 @@ export async function POST(req: NextRequest) {
     // Create Firebase Auth Tenant for complete user isolation
     let tenantId = '';
     try {
-      const tenant = await admin.auth().tenantManager().createTenant({
+      const tenant = await adminApp.auth().tenantManager().createTenant({
         displayName: tenantDisplayName,
         emailSignInConfig: {
           enabled: true,
@@ -108,7 +112,7 @@ export async function POST(req: NextRequest) {
     };
 
     // Save app metadata to Firestore for tracking
-    await admin.firestore().collection("generatedApps").doc(appId).set({
+    await adminApp.firestore().collection("generatedApps").doc(appId).set({
       appId,
       userId,
       appName,
@@ -117,7 +121,7 @@ export async function POST(req: NextRequest) {
       tenantDisplayName: tenantDisplayName,
       firebaseConfig,
       tenantId: tenantId || null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: adminApp.firestore.FieldValue.serverTimestamp(),
       status: "active",
     });
 
