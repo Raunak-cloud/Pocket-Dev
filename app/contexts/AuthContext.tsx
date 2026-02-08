@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
 import {
   User,
   onAuthStateChanged,
@@ -18,19 +18,24 @@ export interface UserData {
   createdAt: Date | null;
   lastLoginAt: Date | null;
   projectCount: number;
+  appTokens: number;
+  integrationTokens: number;
 }
 
 interface AuthContextType {
   user: User | null;
   userData: UserData | null;
   loading: boolean;
+  isNewUser: boolean;
+  clearNewUser: () => void;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  refreshUserData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-async function createOrUpdateUser(user: User): Promise<UserData> {
+async function createOrUpdateUser(user: User): Promise<{ data: UserData; isNew: boolean }> {
   const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
 
@@ -44,25 +49,35 @@ async function createOrUpdateUser(user: User): Promise<UserData> {
       createdAt: serverTimestamp(),
       lastLoginAt: serverTimestamp(),
       projectCount: 0,
+      appTokens: 4,
+      integrationTokens: 10,
     };
     await setDoc(userRef, newUserData);
     return {
-      ...newUserData,
-      createdAt: new Date(),
-      lastLoginAt: new Date(),
+      data: {
+        ...newUserData,
+        createdAt: new Date(),
+        lastLoginAt: new Date(),
+      },
+      isNew: true,
     };
   } else {
     // Update last login
     await setDoc(userRef, { lastLoginAt: serverTimestamp() }, { merge: true });
     const data = userSnap.data();
     return {
-      uid: data.uid,
-      email: data.email,
-      displayName: data.displayName,
-      photoURL: data.photoURL,
-      createdAt: data.createdAt?.toDate() || null,
-      lastLoginAt: new Date(),
-      projectCount: data.projectCount || 0,
+      data: {
+        uid: data.uid,
+        email: data.email,
+        displayName: data.displayName,
+        photoURL: data.photoURL,
+        createdAt: data.createdAt?.toDate() || null,
+        lastLoginAt: new Date(),
+        projectCount: data.projectCount || 0,
+        appTokens: data.appTokens || 0,
+        integrationTokens: data.integrationTokens || 0,
+      },
+      isNew: false,
     };
   }
 }
@@ -71,19 +86,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isNewUser, setIsNewUser] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       if (user) {
         try {
-          const data = await createOrUpdateUser(user);
-          setUserData(data);
+          const result = await createOrUpdateUser(user);
+          setUserData(result.data);
+          if (result.isNew) {
+            setIsNewUser(true);
+          }
         } catch (error) {
           console.error("Error creating/updating user:", error);
         }
       } else {
         setUserData(null);
+        setIsNewUser(false);
       }
       setLoading(false);
     });
@@ -94,18 +114,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = async () => {
     const result = await signInWithPopup(auth, googleProvider);
     if (result.user) {
-      const data = await createOrUpdateUser(result.user);
-      setUserData(data);
+      const userResult = await createOrUpdateUser(result.user);
+      setUserData(userResult.data);
+      if (userResult.isNew) {
+        setIsNewUser(true);
+      }
     }
   };
 
   const signOut = async () => {
     await firebaseSignOut(auth);
     setUserData(null);
+    setIsNewUser(false);
   };
 
+  const clearNewUser = useCallback(() => {
+    setIsNewUser(false);
+  }, []);
+
+  const refreshUserData = useCallback(async () => {
+    if (!user) return;
+    try {
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        setUserData({
+          uid: data.uid,
+          email: data.email,
+          displayName: data.displayName,
+          photoURL: data.photoURL,
+          createdAt: data.createdAt?.toDate() || null,
+          lastLoginAt: data.lastLoginAt?.toDate() || null,
+          projectCount: data.projectCount || 0,
+          appTokens: data.appTokens || 0,
+          integrationTokens: data.integrationTokens || 0,
+        });
+      }
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+    }
+  }, [user]);
+
   return (
-    <AuthContext.Provider value={{ user, userData, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, userData, loading, isNewUser, clearNewUser, signInWithGoogle, signOut, refreshUserData }}>
       {children}
     </AuthContext.Provider>
   );

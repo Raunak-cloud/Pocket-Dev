@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
 function getAdminDb() {
   if (getApps().length === 0) {
@@ -51,11 +51,73 @@ export async function POST(request: NextRequest) {
   // Handle the event
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
-    const { projectId, userId } = session.metadata || {};
+    const metadata = session.metadata || {};
 
-    if (projectId && userId) {
+    // Handle token purchase
+    if (metadata.type === "token_purchase") {
+      const { userId, tokenType, tokensToCredit } = metadata;
+
+      if (!userId || !tokenType || !tokensToCredit) {
+        console.error("[webhook] Missing token purchase metadata:", metadata);
+        return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
+      }
+
       try {
-        // Update project tier to premium
+        const adminDb = getAdminDb();
+
+        // Idempotency check: ensure we haven't already processed this session
+        const existingTx = await adminDb
+          .collection("tokenTransactions")
+          .where("stripeSessionId", "==", session.id)
+          .limit(1)
+          .get();
+
+        if (!existingTx.empty) {
+          console.log(`[webhook] Token purchase already processed for session ${session.id}, skipping`);
+          return NextResponse.json({ received: true });
+        }
+
+        const tokensAmount = parseInt(tokensToCredit, 10);
+        const tokenField = tokenType === "app" ? "appTokens" : "integrationTokens";
+
+        // Use a transaction to atomically credit tokens
+        await adminDb.runTransaction(async (transaction) => {
+          const userRef = adminDb.collection("users").doc(userId);
+          const userDoc = await transaction.get(userRef);
+
+          const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
+          const newBalance = currentBalance + tokensAmount;
+
+          transaction.update(userRef, { [tokenField]: newBalance });
+
+          const txRef = adminDb.collection("tokenTransactions").doc();
+          transaction.set(txRef, {
+            userId,
+            type: "purchase",
+            tokenType,
+            amount: tokensAmount,
+            balanceBefore: currentBalance,
+            balanceAfter: newBalance,
+            reason: `Purchased ${tokensAmount} ${tokenType} tokens`,
+            stripeSessionId: session.id,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+        });
+
+        console.log(`[webhook] Credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
+      } catch (error) {
+        console.error("[webhook] Error crediting tokens:", error);
+        return NextResponse.json(
+          { error: "Failed to credit tokens" },
+          { status: 500 }
+        );
+      }
+    }
+
+    // Legacy: Handle project upgrade (kept for existing sessions)
+    const { projectId, userId } = metadata;
+    if (projectId && userId && metadata.type !== "token_purchase") {
+      try {
         const adminDb = getAdminDb();
         await adminDb.collection("projects").doc(projectId).update({
           tier: "premium",

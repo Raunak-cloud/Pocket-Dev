@@ -310,7 +310,7 @@ function StackBlitzPreview({
 }
 
 function ReactGeneratorContent() {
-  const { user, userData, loading: authLoading } = useAuth();
+  const { user, userData, loading: authLoading, refreshUserData, isNewUser, clearNewUser } = useAuth();
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState<
@@ -346,15 +346,13 @@ function ReactGeneratorContent() {
   const [showDomainModal, setShowDomainModal] = useState(false);
   const [customDomain, setCustomDomain] = useState("");
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [currentProjectTier, setCurrentProjectTier] = useState<
-    "free" | "premium"
-  >("free");
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const [isProcessingBasicPayment, setIsProcessingBasicPayment] =
-    useState(false);
-  const [isProcessingPremiumPayment, setIsProcessingPremiumPayment] =
-    useState(false);
+  const [showTokenPurchaseModal, setShowTokenPurchaseModal] = useState(false);
+  const [purchaseTokenType, setPurchaseTokenType] = useState<"app" | "integration">("app");
+  const [tokenPurchaseAmount, setTokenPurchaseAmount] = useState(2);
+  const [isProcessingTokenPurchase, setIsProcessingTokenPurchase] = useState(false);
+  const [showTokenConfirmModal, setShowTokenConfirmModal] = useState<"app" | "integration" | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDbModal, setShowDbModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState<
@@ -362,8 +360,9 @@ function ReactGeneratorContent() {
   >(null);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [currentAppAuth, setCurrentAppAuth] = useState<string | null>(null);
-  const [editAppAuth, setEditAppAuth] = useState<string | null>(null);
+  const [currentAppAuth, setCurrentAppAuth] = useState<string[]>([]);
+  const [insufficientTokenMessage, setInsufficientTokenMessage] = useState<string | null>(null);
+  const [editAppAuth, setEditAppAuth] = useState<string[]>([]);
   const [showGitHubModal, setShowGitHubModal] = useState(false);
   const [githubToken, setGithubToken] = useState("");
   const [githubRepoName, setGithubRepoName] = useState("");
@@ -373,11 +372,6 @@ function ReactGeneratorContent() {
   >("idle");
   const [githubExportMessage, setGithubExportMessage] = useState("");
   const [githubRepoUrl, setGithubRepoUrl] = useState("");
-  const [showAppPaymentModal, setShowAppPaymentModal] = useState(false);
-  const [pendingPromptForPayment, setPendingPromptForPayment] = useState("");
-  const [pendingProjectTier, setPendingProjectTier] = useState<
-    "free" | "premium"
-  >("free");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -400,19 +394,50 @@ function ReactGeneratorContent() {
     }
   }, [prompt]);
 
-  // Restore pending project tier from localStorage on mount
+  // Typing placeholder animation
+  const placeholderExamples = [
+    "A restaurant website with menu, reservations & contact page",
+    "An e-commerce store with product listings and cart",
+    "A fitness tracker app with workout logs and progress charts",
+    "A recipe sharing platform with search and categories",
+    "A portfolio site with project gallery and blog",
+  ];
+  const [typingPlaceholder, setTypingPlaceholder] = useState("");
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const [isTyping, setIsTyping] = useState(true);
+  const [charIndex, setCharIndex] = useState(0);
+
   useEffect(() => {
-    const persistedTier = localStorage.getItem("pendingProjectTier") as
-      | "free"
-      | "premium"
-      | null;
-    if (persistedTier) {
-      setPendingProjectTier(persistedTier);
-      if (persistedTier === "premium") {
-        setCurrentProjectTier("premium");
+    if (prompt) return; // Don't animate when user is typing
+    const current = placeholderExamples[placeholderIndex];
+
+    if (isTyping) {
+      if (charIndex < current.length) {
+        const timeout = setTimeout(() => {
+          setTypingPlaceholder(current.slice(0, charIndex + 1));
+          setCharIndex(charIndex + 1);
+        }, 35 + Math.random() * 25);
+        return () => clearTimeout(timeout);
+      } else {
+        // Pause at end before deleting
+        const timeout = setTimeout(() => setIsTyping(false), 3500);
+        return () => clearTimeout(timeout);
+      }
+    } else {
+      if (charIndex > 0) {
+        const timeout = setTimeout(() => {
+          setTypingPlaceholder(current.slice(0, charIndex - 1));
+          setCharIndex(charIndex - 1);
+        }, 12);
+        return () => clearTimeout(timeout);
+      } else {
+        // Move to next example
+        setPlaceholderIndex((placeholderIndex + 1) % placeholderExamples.length);
+        setIsTyping(true);
       }
     }
-  }, []);
+  }, [charIndex, isTyping, placeholderIndex, prompt]);
+
 
   // Load saved projects when user logs in
   useEffect(() => {
@@ -446,92 +471,21 @@ function ReactGeneratorContent() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showExportDropdown]);
 
-  // Handle payment success redirect
+  // Handle token payment success redirect
   useEffect(() => {
-    const payment = searchParams.get("payment");
-    const projectId = searchParams.get("projectId");
+    const tokenPayment = searchParams.get("token_payment");
 
-    if (payment === "success" && projectId && user) {
-      // Update the project tier locally and reload projects
-      const updateProjectTier = async () => {
-        try {
-          const projectRef = doc(db, "projects", projectId);
-          await updateDoc(projectRef, {
-            tier: "premium",
-            paidAt: serverTimestamp(),
-          });
-
-          // Reload projects to get the updated tier
-          await loadSavedProjects();
-
-          // Set the current project tier to premium
-          setCurrentProjectTier("premium");
-
-          // Find and open the upgraded project
-          const updatedProjects = await getDocs(
-            query(collection(db, "projects"), where("userId", "==", user.uid)),
-          );
-          const upgradedProject = updatedProjects.docs.find(
-            (d) => d.id === projectId,
-          );
-          if (upgradedProject) {
-            const projectData = upgradedProject.data();
-            setProject({
-              files: projectData.files,
-              dependencies: projectData.dependencies,
-              lintReport: projectData.lintReport,
-            });
-            setCurrentProjectId(projectId);
-            setGenerationPrompt(projectData.prompt);
-            setStatus("success");
-            setActiveSection("create");
-          }
-
-          // Clear URL params and show success
-          window.history.replaceState({}, "", "/");
-          alert(
-            "Payment successful! Your project is now Premium with unlimited edits.",
-          );
-        } catch (error) {
-          console.error("Error updating project tier:", error);
-          setError(
-            "Payment received but failed to update project. Please refresh the page.",
-          );
-        }
+    if (tokenPayment === "success" && user) {
+      // Refresh user data to get updated token balances
+      const handleTokenSuccess = async () => {
+        await refreshUserData();
+        window.history.replaceState({}, "", "/");
+        const tokenType = searchParams.get("tokenType") || "tokens";
+        const amount = searchParams.get("amount") || "";
+        alert(`Payment successful! ${amount} ${tokenType} tokens have been added to your account.`);
       };
-
-      updateProjectTier();
-    } else if (payment === "cancelled") {
-      window.history.replaceState({}, "", "/");
-    }
-
-    // Handle app creation payment success
-    const appPayment = searchParams.get("app_payment");
-    const paidPrompt = searchParams.get("prompt");
-    const tier = searchParams.get("tier") as "free" | "premium" | null;
-
-    if (appPayment === "success" && paidPrompt && user) {
-      // Automatically start generation after successful payment
-      const decodedPrompt = decodeURIComponent(paidPrompt);
-      const projectTier = tier === "premium" ? "premium" : "free";
-
-      // Persist tier to localStorage so it survives page refresh
-      localStorage.setItem("pendingProjectTier", projectTier);
-
-      window.history.replaceState({}, "", "/");
-      setPrompt(decodedPrompt);
-      setActiveSection("create");
-      setPendingProjectTier(projectTier);
-
-      if (projectTier === "premium") {
-        setCurrentProjectTier("premium");
-      }
-
-      // Trigger generation with the decoded prompt
-      setTimeout(() => {
-        startGeneration(decodedPrompt);
-      }, 300);
-    } else if (appPayment === "cancelled") {
+      handleTokenSuccess();
+    } else if (tokenPayment === "cancelled") {
       window.history.replaceState({}, "", "/");
       setError("Payment cancelled. You can try again when ready.");
     }
@@ -541,7 +495,7 @@ function ReactGeneratorContent() {
   const saveProjectToFirestore = async (
     projectData: ReactProject,
     projectPrompt: string,
-    tier: "free" | "premium" = "free",
+    authIntegrationCost: number = 0,
   ): Promise<string> => {
     if (!user) throw new Error("User not logged in");
 
@@ -553,21 +507,23 @@ function ReactGeneratorContent() {
       lintReport: projectData.lintReport,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-      tier: tier,
     };
-
-    // If premium tier, add premium-specific fields
-    if (tier === "premium") {
-      projectDoc.paidAt = serverTimestamp();
-    }
 
     const docRef = await addDoc(collection(db, "projects"), projectDoc);
 
-    // Update user's project count
+    // Update user's project count, deduct 2 app tokens, and deduct integration tokens for auth if applicable
     const userRef = doc(db, "users", user.uid);
-    await updateDoc(userRef, {
+    const updateData: Record<string, any> = {
       projectCount: increment(1),
-    });
+      appTokens: increment(-2),
+    };
+    if (authIntegrationCost > 0) {
+      updateData.integrationTokens = increment(-authIntegrationCost);
+    }
+    await updateDoc(userRef, updateData);
+
+    // Refresh user data to get updated balances
+    await refreshUserData();
 
     return docRef.id;
   };
@@ -628,7 +584,6 @@ function ReactGeneratorContent() {
     setPublishedUrl(savedProject.publishedUrl || null);
     setSandboxId(savedProject.sandboxId || null);
     setCustomDomain(savedProject.customDomain || "");
-    setCurrentProjectTier(savedProject.tier || "free");
     setHasUnpublishedChanges(false);
     setStatus("success");
     setActiveSection("create");
@@ -669,70 +624,21 @@ function ReactGeneratorContent() {
     }
   };
 
-  // Upgrade project to premium
-  const upgradeProject = async () => {
-    if (!currentProjectId || !user) return;
-
-    setIsProcessingPayment(true);
-    setError("");
-    try {
-      // Create Stripe checkout session
-      const response = await fetch("/api/create-checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: currentProjectId,
-          userId: user.uid,
-          userEmail: user.email,
-        }),
-      });
-
-      // Check content type before parsing
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await response.text();
-        console.error("Non-JSON response:", text.substring(0, 200));
-        throw new Error("Server error. Please try again.");
-      }
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to create checkout session");
-      }
-
-      if (!data.url) {
-        throw new Error("No checkout URL received");
-      }
-
-      // Redirect to Stripe Checkout
-      window.location.href = data.url;
-    } catch (error) {
-      console.error("Error creating checkout:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Payment failed. Please try again.",
-      );
-      setIsProcessingPayment(false);
-    }
-  };
-
-  // Pay for new app creation
-  const payForNewApp = async () => {
+  // Purchase tokens via Stripe
+  const purchaseTokens = async () => {
     if (!user) return;
 
-    setIsProcessingBasicPayment(true);
+    setIsProcessingTokenPurchase(true);
     setError("");
     try {
-      // Create Stripe checkout session for app creation
-      const response = await fetch("/api/create-app-checkout", {
+      const response = await fetch("/api/create-token-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: user.uid,
           userEmail: user.email,
-          prompt: pendingPromptForPayment,
+          tokenType: purchaseTokenType,
+          quantity: tokenPurchaseAmount,
         }),
       });
 
@@ -753,64 +659,15 @@ function ReactGeneratorContent() {
         throw new Error("No checkout URL received");
       }
 
-      // Redirect to Stripe Checkout
       window.location.href = data.url;
     } catch (error) {
-      console.error("Error creating app checkout:", error);
+      console.error("Error creating token checkout:", error);
       setError(
         error instanceof Error
           ? error.message
           : "Payment failed. Please try again.",
       );
-      setIsProcessingBasicPayment(false);
-    }
-  };
-
-  // Pay for premium app creation
-  const payForPremiumApp = async () => {
-    if (!user) return;
-
-    setIsProcessingPremiumPayment(true);
-    setError("");
-    try {
-      // Create Stripe checkout session for premium app creation
-      const response = await fetch("/api/create-premium-app-checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: user.uid,
-          userEmail: user.email,
-          prompt: pendingPromptForPayment,
-        }),
-      });
-
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await response.text();
-        console.error("Non-JSON response:", text.substring(0, 200));
-        throw new Error("Server error. Please try again.");
-      }
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to create checkout session");
-      }
-
-      if (!data.url) {
-        throw new Error("No checkout URL received");
-      }
-
-      // Redirect to Stripe Checkout
-      window.location.href = data.url;
-    } catch (error) {
-      console.error("Error creating premium app checkout:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Payment failed. Please try again.",
-      );
-      setIsProcessingPremiumPayment(false);
+      setIsProcessingTokenPurchase(false);
     }
   };
 
@@ -1096,14 +953,36 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editPrompt.trim() || isEditing || !project) return;
+    if ((!editPrompt.trim() && editAppAuth.length === 0) || isEditing || !project) return;
 
-    // Check if project is premium
-    if (currentProjectTier !== "premium") {
-      setShowUpgradeModal(true);
+    // Check integration token balance based on auth selection
+    const editCost = getEditIntegrationCost();
+    const integrationBalance = userData?.integrationTokens || 0;
+    if (integrationBalance < editCost) {
+      const deficit = editCost - integrationBalance;
+      const authNames = [
+        ...(editAppAuth.includes("username-password") ? ["Username/Password"] : []),
+        ...(editAppAuth.includes("google") ? ["Google OAuth"] : []),
+      ];
+      const reason = authNames.length > 0
+        ? `This edit with ${authNames.join(" + ")} authentication requires ${editCost} integration tokens`
+        : `This edit requires ${editCost} integration token`;
+      setInsufficientTokenMessage(`${reason} but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
+      setPurchaseTokenType("integration");
+      setTokenPurchaseAmount(editCost);
+      setShowTokenPurchaseModal(true);
       return;
     }
 
+    // Show confirmation modal before deducting token
+    setShowTokenConfirmModal("integration");
+    return;
+  };
+
+  // Actually start the edit after user confirms token deduction
+  const proceedWithEdit = async () => {
+    if (!project) return;
+    setShowTokenConfirmModal(null);
     setIsEditing(true);
     setError("");
     setEditProgressMessages([]);
@@ -1139,12 +1018,22 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
     // List all existing file paths
     const existingFilePaths = project.files.map((f) => f.path).join(", ");
 
+    // Build the user request text, including auth if selected
+    const authLabels: string[] = [];
+    if (editAppAuth.includes("username-password")) authLabels.push("Username/Password authentication");
+    if (editAppAuth.includes("google")) authLabels.push("Google OAuth authentication");
+    const userRequest = editPrompt.trim()
+      ? editPrompt
+      : authLabels.length > 0
+        ? `Add ${authLabels.join(" and ")} to the app`
+        : editPrompt;
+
     let editFullPrompt = `I have an existing React app with the following files:
 
 ${currentFiles}
 
 USER'S EDIT REQUEST:
-${editPrompt}
+${userRequest}
 
 🎯 CRITICAL INSTRUCTIONS:
 1. Do EXACTLY what the user requested - nothing more, nothing less
@@ -1201,7 +1090,7 @@ ${pdfUrlList}
     }
 
     // Add authentication requirements if selected for this edit
-    if (editAppAuth === "username-password") {
+    if (editAppAuth.includes("username-password")) {
       editFullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
 Implement a complete username/password authentication system into this existing app:
 1. User Registration (Sign Up) - with email/username and password
@@ -1216,7 +1105,8 @@ Implement a complete username/password authentication system into this existing 
 10. Add authentication UI components (login form, signup form, password reset form)
 
 Integrate the authentication seamlessly into the existing app design and layout.`;
-    } else if (editAppAuth === "google") {
+    }
+    if (editAppAuth.includes("google")) {
       editFullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
 Implement Google OAuth authentication into this existing app:
 1. "Sign in with Google" button with proper Google branding
@@ -1292,7 +1182,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setProject(mergedProject);
       setEditPrompt("");
       setEditFiles([]); // Clear edit files after successful edit
-      setEditAppAuth(null); // Reset edit auth after successful edit
+      setEditAppAuth([]); // Reset edit auth after successful edit
 
       // Force preview refresh by updating key
       setPreviewKey((prev) => prev + 1);
@@ -1301,6 +1191,14 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       if (currentProjectId && user) {
         try {
           await updateProjectInFirestore(currentProjectId, mergedProject);
+
+          // Deduct integration tokens for the edit (30 per auth type, or 1 for regular edit)
+          const editCost = getEditIntegrationCost();
+          const userRef = doc(db, "users", user.uid);
+          await updateDoc(userRef, {
+            integrationTokens: increment(-editCost),
+          });
+          await refreshUserData();
 
           // Mark that there are unpublished changes
           if (publishedUrl) {
@@ -1334,7 +1232,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     let fullPrompt = generationPrompt;
 
     // Add authentication requirements based on user selection
-    if (currentAppAuth === "username-password") {
+    if (currentAppAuth.includes("username-password")) {
       fullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT:
 Implement a complete username/password authentication system with the following features:
 1. User Registration (Sign Up) - with email/username and password
@@ -1349,7 +1247,8 @@ Implement a complete username/password authentication system with the following 
 10. Add authentication UI components (login form, signup form, password reset form)
 
 Make sure the authentication is fully functional and integrated throughout the app.`;
-    } else if (currentAppAuth === "google") {
+    }
+    if (currentAppAuth.includes("google")) {
       fullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT:
 Implement Google OAuth authentication with the following features:
 1. "Sign in with Google" button with proper Google branding
@@ -1364,7 +1263,6 @@ Implement Google OAuth authentication with the following features:
 
 Make sure the Google OAuth is fully functional and integrated throughout the app.`;
     }
-    // If selectedAuth is null, no authentication instructions are added
 
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) =>
@@ -1568,24 +1466,13 @@ ${pdfUrlList}
       // Save project to Firestore
       if (user) {
         try {
-          // Check localStorage for persisted tier (in case of page refresh during generation)
-          const persistedTier = localStorage.getItem("pendingProjectTier") as
-            | "free"
-            | "premium"
-            | null;
-          const tierToSave = persistedTier || pendingProjectTier;
-
+          const authCost = getGenerationIntegrationCost();
           const projectId = await saveProjectToFirestore(
             result,
             generationPrompt,
-            tierToSave,
+            authCost,
           );
           setCurrentProjectId(projectId);
-          setCurrentProjectTier(tierToSave);
-
-          // Clear persisted tier and reset pending tier after saving
-          localStorage.removeItem("pendingProjectTier");
-          setPendingProjectTier("free");
 
           // Refresh projects list
           loadSavedProjects();
@@ -1595,7 +1482,7 @@ ${pdfUrlList}
       }
 
       setStatus("success");
-      setCurrentAppAuth(null); // Reset auth selection for next app
+      setCurrentAppAuth([]); // Reset auth selection for next app
     } catch (err) {
       clearInterval(progressInterval);
       progressIntervalRef.current = null;
@@ -1616,6 +1503,22 @@ ${pdfUrlList}
     }
   };
 
+  // Calculate integration token cost for generation based on auth selection
+  const getGenerationIntegrationCost = () => {
+    let cost = 0;
+    if (currentAppAuth.includes("username-password")) cost += 30;
+    if (currentAppAuth.includes("google")) cost += 30;
+    return cost;
+  };
+
+  // Calculate integration token cost for edit based on auth selection
+  const getEditIntegrationCost = () => {
+    let cost = 0;
+    if (editAppAuth.includes("username-password")) cost += 30;
+    if (editAppAuth.includes("google")) cost += 30;
+    return cost > 0 ? cost : 1; // Minimum 1 for regular edits
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1628,16 +1531,37 @@ ${pdfUrlList}
       return;
     }
 
-    // Check if payment is required (after 2 free projects)
-    const projectCount = userData?.projectCount || 0;
-
-    if (projectCount >= 2) {
-      setPendingPromptForPayment(prompt);
-      setShowAppPaymentModal(true);
+    // Check app token balance (every project costs 2 app tokens)
+    const appTokenBalance = userData?.appTokens || 0;
+    if (appTokenBalance < 2) {
+      const deficit = 2 - appTokenBalance;
+      setInsufficientTokenMessage(`You need 2 app tokens to create a project but only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`);
+      setPurchaseTokenType("app");
+      setTokenPurchaseAmount(2);
+      setShowTokenPurchaseModal(true);
       return;
     }
 
-    startGeneration();
+    // Check integration token balance if auth is selected
+    const integrationCost = getGenerationIntegrationCost();
+    if (integrationCost > 0) {
+      const integrationBalance = userData?.integrationTokens || 0;
+      if (integrationBalance < integrationCost) {
+        const authNames = [
+          ...(currentAppAuth.includes("username-password") ? ["Username/Password"] : []),
+          ...(currentAppAuth.includes("google") ? ["Google OAuth"] : []),
+        ].join(" + ");
+        const deficit = integrationCost - integrationBalance;
+        setInsufficientTokenMessage(`Adding ${authNames} authentication requires ${integrationCost} integration tokens but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
+        setPurchaseTokenType("integration");
+        setTokenPurchaseAmount(integrationCost);
+        setShowTokenPurchaseModal(true);
+        return;
+      }
+    }
+
+    // Show confirmation modal before deducting tokens
+    setShowTokenConfirmModal("app");
   };
 
   // Voice recording functions
@@ -2145,6 +2069,11 @@ next-env.d.ts
             }}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={setIsSidebarCollapsed}
+            onBuyTokens={(tokenType) => {
+              setPurchaseTokenType(tokenType);
+              setTokenPurchaseAmount(tokenType === "app" ? 2 : 1);
+              setShowTokenPurchaseModal(true);
+            }}
           />
         )}
 
@@ -2155,22 +2084,15 @@ next-env.d.ts
             <div className="px-4 h-14 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-4 w-px bg-slate-700" />
-                {currentProjectTier === "premium" ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-amber-400 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full">
-                    <svg
-                      className="w-3 h-3"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                    </svg>
-                    Premium
+                <span className="inline-flex items-center gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 py-1 rounded-full group relative cursor-help">
+                  <svg className="w-3 h-3 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  Edit Tokens: {userData?.integrationTokens || 0}
+                  <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-slate-700 text-slate-200 text-xs rounded-lg shadow-xl z-50">
+                    Each AI edit costs 1 integration token. Buy more in the Tokens section.
                   </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/50 px-2.5 py-1 rounded-full">
-                    Free
-                  </span>
-                )}
+                </span>
                 {project.lintReport.passed ? (
                   <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
                     <svg
@@ -2581,29 +2503,29 @@ next-env.d.ts
                 </span>
               </div>
 
-              {/* Upgrade Banner for Free Projects */}
-              {currentProjectTier !== "premium" && (
-                <div className="px-4 py-3 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border-b border-amber-500/20">
+              {/* Integration token balance indicator */}
+              {(userData?.integrationTokens || 0) < 3 && (
+                <div className="px-4 py-3 bg-gradient-to-r from-violet-500/10 to-blue-500/10 border-b border-violet-500/20">
                   <div className="flex items-center gap-2 mb-2">
-                    <svg
-                      className="w-4 h-4 text-amber-400"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
                     </svg>
-                    <span className="text-xs font-medium text-amber-300">
-                      Upgrade to Edit
+                    <span className="text-xs font-medium text-violet-300">
+                      Low Integration Tokens
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mb-2">
-                    Get unlimited edits for $60 AUD
+                    {userData?.integrationTokens || 0} token{(userData?.integrationTokens || 0) !== 1 ? "s" : ""} remaining. Each edit costs 1 token.
                   </p>
                   <button
-                    onClick={() => setShowUpgradeModal(true)}
-                    className="w-full px-3 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white text-xs font-medium rounded-lg transition"
+                    onClick={() => {
+                      setPurchaseTokenType("integration");
+                      setTokenPurchaseAmount(1);
+                      setShowTokenPurchaseModal(true);
+                    }}
+                    className="w-full px-3 py-1.5 bg-gradient-to-r from-violet-500 to-blue-500 hover:from-violet-400 hover:to-blue-400 text-white text-xs font-medium rounded-lg transition"
                   >
-                    Upgrade Now
+                    Buy Integration Tokens
                   </button>
                 </div>
               )}
@@ -2695,35 +2617,80 @@ next-env.d.ts
               <form onSubmit={handleEdit} className="flex-1 flex flex-col p-4">
                 {/* Desktop: Vertical layout with taller textarea */}
                 <div className="hidden lg:flex flex-col gap-3 flex-1">
-                  <textarea
-                    ref={editTextareaRef}
-                    value={editPrompt}
-                    onChange={(e) => setEditPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        if (editPrompt.trim() && !isEditing) handleEdit(e);
-                      }
-                    }}
-                    placeholder="Describe changes you want to make...
-
-Examples:
-• Change the color scheme to blue
-• Add a contact form
-• Make the header sticky
-• Add dark mode toggle"
-                    disabled={isEditing}
-                    className="flex-1 min-h-[120px] px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 resize-none text-sm disabled:opacity-50"
-                  />
+                  {/* Prompt area with auth tags */}
+                  <div className="flex-1 flex flex-col bg-slate-800/50 border border-slate-700 rounded-xl focus-within:border-blue-500/50 overflow-hidden">
+                    {/* Auth prefill tags (non-editable) */}
+                    {editAppAuth.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
+                        {editAppAuth.includes("username-password") && (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-medium">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                            </svg>
+                            Add Password Authentication
+                            <button
+                              type="button"
+                              onClick={() => setEditAppAuth(editAppAuth.filter(a => a !== "username-password"))}
+                              className="ml-0.5 text-blue-400/60 hover:text-blue-300 transition"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        )}
+                        {editAppAuth.includes("google") && (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-medium">
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                            </svg>
+                            Add Google Authentication
+                            <button
+                              type="button"
+                              onClick={() => setEditAppAuth(editAppAuth.filter(a => a !== "google"))}
+                              className="ml-0.5 text-blue-400/60 hover:text-blue-300 transition"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <textarea
+                      ref={editTextareaRef}
+                      value={editPrompt}
+                      onChange={(e) => setEditPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          if ((editPrompt.trim() || editAppAuth.length > 0) && !isEditing) handleEdit(e);
+                        }
+                      }}
+                      placeholder={editAppAuth.length > 0
+                        ? "Add additional instructions (optional)..."
+                        : "Describe changes you want to make...\n\nExamples:\n• Change the color scheme to blue\n• Add a contact form\n• Make the header sticky\n• Add dark mode toggle"}
+                      disabled={isEditing}
+                      className="flex-1 min-h-[120px] px-4 py-3 bg-transparent text-white placeholder-slate-500 focus:outline-none resize-none text-sm disabled:opacity-50"
+                    />
+                  </div>
                   {/* Auth selector for edit */}
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-slate-500">Add Auth:</span>
                     <button
                       type="button"
-                      onClick={() => setEditAppAuth(editAppAuth === "username-password" ? null : "username-password")}
+                      onClick={() => setEditAppAuth(
+                        editAppAuth.includes("username-password")
+                          ? editAppAuth.filter(a => a !== "username-password")
+                          : [...editAppAuth, "username-password"]
+                      )}
                       disabled={isEditing}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                        editAppAuth === "username-password"
+                        editAppAuth.includes("username-password")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                           : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600 hover:text-slate-300"
                       } disabled:opacity-50`}
@@ -2735,10 +2702,14 @@ Examples:
                     </button>
                     <button
                       type="button"
-                      onClick={() => setEditAppAuth(editAppAuth === "google" ? null : "google")}
+                      onClick={() => setEditAppAuth(
+                        editAppAuth.includes("google")
+                          ? editAppAuth.filter(a => a !== "google")
+                          : [...editAppAuth, "google"]
+                      )}
                       disabled={isEditing}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                        editAppAuth === "google"
+                        editAppAuth.includes("google")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                           : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600 hover:text-slate-300"
                       } disabled:opacity-50`}
@@ -2776,7 +2747,7 @@ Examples:
                     </button>
                     <button
                       type="submit"
-                      disabled={!editPrompt.trim() || isEditing}
+                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing}
                       className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {isEditing ? (
@@ -2816,10 +2787,14 @@ Examples:
                     <span className="text-xs text-slate-500">Add Auth:</span>
                     <button
                       type="button"
-                      onClick={() => setEditAppAuth(editAppAuth === "username-password" ? null : "username-password")}
+                      onClick={() => setEditAppAuth(
+                        editAppAuth.includes("username-password")
+                          ? editAppAuth.filter(a => a !== "username-password")
+                          : [...editAppAuth, "username-password"]
+                      )}
                       disabled={isEditing}
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                        editAppAuth === "username-password"
+                        editAppAuth.includes("username-password")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                           : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600"
                       } disabled:opacity-50`}
@@ -2831,10 +2806,14 @@ Examples:
                     </button>
                     <button
                       type="button"
-                      onClick={() => setEditAppAuth(editAppAuth === "google" ? null : "google")}
+                      onClick={() => setEditAppAuth(
+                        editAppAuth.includes("google")
+                          ? editAppAuth.filter(a => a !== "google")
+                          : [...editAppAuth, "google"]
+                      )}
                       disabled={isEditing}
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                        editAppAuth === "google"
+                        editAppAuth.includes("google")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                           : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600"
                       } disabled:opacity-50`}
@@ -2848,6 +2827,27 @@ Examples:
                       Google
                     </button>
                   </div>
+                  {/* Auth prefill tags for mobile */}
+                  {editAppAuth.length > 0 && (
+                    <div className="flex flex-wrap gap-1 px-1">
+                      {editAppAuth.includes("username-password") && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-md text-xs">
+                          Add Password Auth
+                          <button type="button" onClick={() => setEditAppAuth(editAppAuth.filter(a => a !== "username-password"))} className="text-blue-400/60 hover:text-blue-300">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                          </button>
+                        </span>
+                      )}
+                      {editAppAuth.includes("google") && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-md text-xs">
+                          Add Google Auth
+                          <button type="button" onClick={() => setEditAppAuth(editAppAuth.filter(a => a !== "google"))} className="text-blue-400/60 hover:text-blue-300">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -2877,10 +2877,10 @@ Examples:
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            if (editPrompt.trim() && !isEditing) handleEdit(e);
+                            if ((editPrompt.trim() || editAppAuth.length > 0) && !isEditing) handleEdit(e);
                           }
                         }}
-                        placeholder="Describe changes..."
+                        placeholder={editAppAuth.length > 0 ? "Additional instructions (optional)..." : "Describe changes..."}
                         rows={1}
                         disabled={isEditing}
                         className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 resize-none text-sm disabled:opacity-50"
@@ -2889,7 +2889,7 @@ Examples:
                     </div>
                     <button
                       type="submit"
-                      disabled={!editPrompt.trim() || isEditing}
+                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing}
                       className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                     {isEditing ? (
@@ -3142,178 +3142,6 @@ Examples:
           </div>
         )}
 
-        {/* Upgrade Modal */}
-        {showUpgradeModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-              {/* Modal Header */}
-              <div className="relative px-6 pt-8 pb-4 text-center">
-                <button
-                  onClick={() => setShowUpgradeModal(false)}
-                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-                <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-gradient-to-br from-amber-400 to-orange-500 rounded-2xl">
-                  <svg
-                    className="w-8 h-8 text-white"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
-                    />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-bold text-white mb-2">
-                  Upgrade to Premium
-                </h3>
-                <p className="text-slate-400 text-sm">
-                  Unlock unlimited AI-powered edits for this project
-                </p>
-              </div>
-
-              {/* Pricing */}
-              <div className="px-6 py-4">
-                <div className="p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-slate-300 font-medium">
-                      Premium Project
-                    </span>
-                    <div className="text-right">
-                      <span className="text-2xl font-bold text-white">$60</span>
-                      <span className="text-slate-400 text-sm ml-1">AUD</span>
-                    </div>
-                  </div>
-                  <ul className="space-y-2">
-                    <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg
-                        className="w-4 h-4 text-emerald-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                      Unlimited AI-powered edits
-                    </li>
-                    <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg
-                        className="w-4 h-4 text-emerald-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                      Upload images for design reference
-                    </li>
-                    <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg
-                        className="w-4 h-4 text-emerald-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                      One-time payment, lifetime access
-                    </li>
-                    <li className="flex items-center gap-2 text-sm text-slate-300">
-                      <svg
-                        className="w-4 h-4 text-emerald-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                      Priority support
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="px-6 pb-6 space-y-3">
-                <button
-                  onClick={upgradeProject}
-                  disabled={isProcessingPayment}
-                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isProcessingPayment ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                        />
-                      </svg>
-                      Upgrade Now - $60 AUD
-                    </>
-                  )}
-                </button>
-                <button
-                  onClick={() => setShowUpgradeModal(false)}
-                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
-                >
-                  Maybe later
-                </button>
-                <p className="text-xs text-slate-500 text-center">
-                  Secure payment powered by Stripe
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* GitHub Export Modal */}
         {showGitHubModal && (
@@ -3923,6 +3751,13 @@ Examples:
 
           <form onSubmit={handleGenerate}>
             <div className="relative bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl shadow-slate-950/50 overflow-hidden focus-within:border-slate-700 transition-colors">
+              {/* Animated typing placeholder */}
+              {!prompt && (
+                <div className="absolute top-0 left-0 right-0 px-4 pt-4 pb-14 pointer-events-none z-0">
+                  <span className="text-slate-500 text-base">{typingPlaceholder}</span>
+                  <span className="inline-block w-[1.5px] h-[18px] bg-slate-400/80 ml-[1px] align-middle rounded-full animate-blink" />
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 value={prompt}
@@ -3933,9 +3768,8 @@ Examples:
                     if (prompt.trim()) handleGenerate(e);
                   }
                 }}
-                placeholder="Describe the app you want to build..."
                 rows={1}
-                className="w-full px-4 pt-4 pb-14 bg-transparent text-white placeholder-slate-500 focus:outline-none resize-none text-base"
+                className="w-full px-4 pt-4 pb-14 bg-transparent text-white focus:outline-none resize-none text-base relative z-10"
                 style={{ minHeight: "52px", maxHeight: "150px" }}
               />
 
@@ -4008,6 +3842,36 @@ Examples:
                       </svg>
                     )}
                   </button>
+
+                  <div className="w-px h-5 bg-slate-700 mx-0.5" />
+
+                  {/* Authentication button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(true)}
+                    className={`p-2 rounded-lg transition ${
+                      currentAppAuth.length > 0
+                        ? "text-blue-400 bg-blue-500/10 hover:bg-blue-500/20"
+                        : "text-slate-500 hover:text-slate-300 hover:bg-slate-800"
+                    }`}
+                    title={currentAppAuth.length > 0 ? `Auth: ${currentAppAuth.map(a => a === "username-password" ? "Username/Password" : "Google OAuth").join(" + ")}` : "Add authentication"}
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                    </svg>
+                  </button>
+
+                  {/* Database button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowDbModal(true)}
+                    className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition"
+                    title="Database options"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                    </svg>
+                  </button>
                 </div>
 
                 <button
@@ -4033,7 +3897,33 @@ Examples:
               </div>
             </div>
 
-            <p className="text-center text-xs text-slate-600 mt-3">
+            {/* Auth selection indicator */}
+            {currentAppAuth.length > 0 && (
+              <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap">
+                {currentAppAuth.map((auth) => (
+                  <div key={auth} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full">
+                    <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                    </svg>
+                    <span className="text-xs text-blue-300 font-medium">
+                      {auth === "username-password" ? "Username/Password" : "Google OAuth"}
+                    </span>
+                    <span className="text-xs text-violet-400">(30 tokens)</span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentAppAuth(currentAppAuth.filter(a => a !== auth))}
+                      className="ml-0.5 text-slate-400 hover:text-white transition"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-center text-xs text-slate-600 mt-2">
               Press Enter to generate or Shift+Enter for new line
             </p>
           </form>
@@ -4157,18 +4047,6 @@ Examples:
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                  {savedProject.tier === "premium" && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-400 bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-full">
-                      <svg
-                        className="w-3 h-3"
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                      </svg>
-                      Premium
-                    </span>
-                  )}
                   {savedProject.isPublished && (
                     <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-teal-400 bg-teal-500/10 rounded-full">
                       <svg
@@ -4283,147 +4161,7 @@ Examples:
     </div>
   );
 
-  const AuthenticationContent = () => (
-    <div className="max-w-2xl mx-auto w-full p-6">
-      <h2 className="text-2xl font-semibold text-white mb-2">Authentication</h2>
-      <p className="text-slate-400 text-sm mb-6">
-        Select an authentication method for your next generated app. This setting applies only to the next app you create.
-      </p>
-
-      <div className="space-y-4">
-        {/* No Auth Option */}
-        <button
-          onClick={() => setCurrentAppAuth(null)}
-          className={`w-full text-left p-5 rounded-xl border transition-all ${
-            currentAppAuth === null
-              ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
-              : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-          }`}
-        >
-          <div className="flex items-center gap-4">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-              currentAppAuth === null ? "bg-blue-500/20" : "bg-slate-800"
-            }`}>
-              <svg className={`w-5 h-5 ${currentAppAuth === null ? "text-blue-400" : "text-slate-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-              </svg>
-            </div>
-            <div className="flex-1">
-              <p className={`font-medium ${currentAppAuth === null ? "text-blue-300" : "text-white"}`}>No Authentication</p>
-              <p className="text-sm text-slate-400 mt-0.5">App will be generated without any auth system</p>
-            </div>
-            {currentAppAuth === null && (
-              <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-                <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            )}
-          </div>
-        </button>
-
-        {/* Username/Password Option */}
-        <button
-          onClick={() => setCurrentAppAuth("username-password")}
-          className={`w-full text-left p-5 rounded-xl border transition-all ${
-            currentAppAuth === "username-password"
-              ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
-              : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-          }`}
-        >
-          <div className="flex items-center gap-4">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-              currentAppAuth === "username-password" ? "bg-blue-500/20" : "bg-slate-800"
-            }`}>
-              <svg className={`w-5 h-5 ${currentAppAuth === "username-password" ? "text-blue-400" : "text-slate-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
-              </svg>
-            </div>
-            <div className="flex-1">
-              <p className={`font-medium ${currentAppAuth === "username-password" ? "text-blue-300" : "text-white"}`}>Username & Password</p>
-              <p className="text-sm text-slate-400 mt-0.5">Email/password sign up, login, and protected routes</p>
-            </div>
-            {currentAppAuth === "username-password" && (
-              <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-                <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            )}
-          </div>
-        </button>
-
-        {/* Google Auth Option */}
-        <button
-          onClick={() => setCurrentAppAuth("google")}
-          className={`w-full text-left p-5 rounded-xl border transition-all ${
-            currentAppAuth === "google"
-              ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
-              : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-          }`}
-        >
-          <div className="flex items-center gap-4">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-              currentAppAuth === "google" ? "bg-blue-500/20" : "bg-slate-800"
-            }`}>
-              <svg className={`w-5 h-5 ${currentAppAuth === "google" ? "text-blue-400" : "text-slate-400"}`} viewBox="0 0 24 24" fill="currentColor">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-            </div>
-            <div className="flex-1">
-              <p className={`font-medium ${currentAppAuth === "google" ? "text-blue-300" : "text-white"}`}>Google OAuth</p>
-              <p className="text-sm text-slate-400 mt-0.5">Sign in with Google, user profile, and protected routes</p>
-            </div>
-            {currentAppAuth === "google" && (
-              <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center">
-                <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-            )}
-          </div>
-        </button>
-      </div>
-
-      {/* Current selection indicator */}
-      {currentAppAuth && (
-        <div className="mt-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-sm text-blue-300">
-              <span className="font-medium">{currentAppAuth === "username-password" ? "Username & Password" : "Google OAuth"}</span> auth will be included in your next generated app. This resets after generation.
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const DatabaseContent = () => (
-    <div className="max-w-2xl mx-auto w-full p-6">
-      <h2 className="text-2xl font-semibold text-white mb-2">Database</h2>
-      <p className="text-slate-400 text-sm mb-6">
-        Configure database options for your generated apps.
-      </p>
-
-      <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-8 text-center">
-        <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
-          <svg className="w-8 h-8 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
-          </svg>
-        </div>
-        <h3 className="text-lg font-medium text-white mb-2">Coming Soon</h3>
-        <p className="text-slate-400 text-sm max-w-sm mx-auto">
-          Database configuration options will be available here soon. You'll be able to choose database providers and schema settings for your generated apps.
-        </p>
-      </div>
-    </div>
-  );
+  // AuthenticationContent and DatabaseContent are now modals, not page sections
 
   // Render content based on active section
   // Note: We call these as functions (not JSX components) to avoid remounting on every render,
@@ -4432,10 +4170,6 @@ Examples:
     switch (activeSection) {
       case "create":
         return CreateContent();
-      case "authentication":
-        return AuthenticationContent();
-      case "database":
-        return DatabaseContent();
       case "projects":
         return ProjectsContent();
       case "settings":
@@ -4499,6 +4233,11 @@ Examples:
           onSectionChange={setActiveSection}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={setIsSidebarCollapsed}
+          onBuyTokens={(tokenType) => {
+            setPurchaseTokenType(tokenType);
+            setTokenPurchaseAmount(tokenType === "app" ? 2 : 1);
+            setShowTokenPurchaseModal(true);
+          }}
         />
       )}
 
@@ -4602,303 +4341,704 @@ Examples:
         </div>
       )}
 
-      {/* App Payment Modal */}
-      {showAppPaymentModal && (
+      {/* Welcome Modal for New Users */}
+      {isNewUser && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[70] flex items-center justify-center p-4">
+          <style>{`
+            @keyframes welcome-modal-in {
+              from { opacity: 0; transform: scale(0.9) translateY(20px); }
+              to { opacity: 1; transform: scale(1) translateY(0); }
+            }
+            @keyframes welcome-logo-float {
+              0%, 100% { transform: translateY(0); }
+              50% { transform: translateY(-6px); }
+            }
+            @keyframes welcome-logo-glow-pulse {
+              0%, 100% { opacity: 0.4; transform: scale(1); }
+              50% { opacity: 0.8; transform: scale(1.15); }
+            }
+            @keyframes welcome-ring-spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+            @keyframes welcome-ring-spin-reverse {
+              from { transform: rotate(360deg); }
+              to { transform: rotate(0deg); }
+            }
+            @keyframes welcome-particle {
+              0% { opacity: 0; transform: translate(0, 0) scale(0); }
+              20% { opacity: 1; transform: scale(1); }
+              100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0); }
+            }
+            @keyframes welcome-shine-sweep {
+              0% { transform: translateX(-100%) rotate(25deg); }
+              100% { transform: translateX(200%) rotate(25deg); }
+            }
+            @keyframes welcome-bracket-blink {
+              0%, 40%, 100% { opacity: 0.6; }
+              20% { opacity: 1; }
+            }
+            @keyframes welcome-text-in {
+              from { opacity: 0; transform: translateY(10px); }
+              to { opacity: 1; transform: translateY(0); }
+            }
+            @keyframes welcome-card-in {
+              from { opacity: 0; transform: translateX(-12px); }
+              to { opacity: 1; transform: translateX(0); }
+            }
+          `}</style>
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            style={{ animation: "welcome-modal-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both" }}
+          >
+            {/* Animated Logo Header */}
+            <div className="relative px-6 pt-10 pb-4 text-center overflow-hidden">
+              {/* Background radial glow */}
+              <div className="absolute inset-0 flex items-start justify-center pointer-events-none" style={{ top: "-20px" }}>
+                <div
+                  className="w-64 h-64 rounded-full"
+                  style={{
+                    background: "radial-gradient(circle, rgba(99,102,241,0.15) 0%, rgba(139,92,246,0.08) 40%, transparent 70%)",
+                    animation: "welcome-logo-glow-pulse 3s ease-in-out infinite",
+                  }}
+                />
+              </div>
+
+              {/* Logo container with floating animation */}
+              <div
+                className="relative inline-block mb-5"
+                style={{ animation: "welcome-logo-float 4s ease-in-out infinite" }}
+              >
+                {/* Outer orbiting ring */}
+                <div
+                  className="absolute -inset-5 rounded-full border border-blue-500/20 border-dashed"
+                  style={{ animation: "welcome-ring-spin 12s linear infinite" }}
+                />
+                {/* Inner orbiting ring */}
+                <div
+                  className="absolute -inset-3 rounded-full border border-violet-500/25"
+                  style={{ animation: "welcome-ring-spin-reverse 8s linear infinite" }}
+                />
+
+                {/* Orbiting dots on the rings */}
+                <div
+                  className="absolute -inset-5"
+                  style={{ animation: "welcome-ring-spin 12s linear infinite" }}
+                >
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-400 rounded-full shadow-lg shadow-blue-400/50" />
+                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1 h-1 bg-violet-400 rounded-full shadow-lg shadow-violet-400/50" />
+                </div>
+                <div
+                  className="absolute -inset-3"
+                  style={{ animation: "welcome-ring-spin-reverse 8s linear infinite" }}
+                >
+                  <div className="absolute top-1/2 right-0 translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-indigo-400 rounded-full shadow-lg shadow-indigo-400/50" />
+                </div>
+
+                {/* Floating particles */}
+                {[
+                  { tx: "-30px", ty: "-40px", delay: "0s", dur: "2.5s", size: "3px", color: "#60a5fa" },
+                  { tx: "35px", ty: "-25px", delay: "0.4s", dur: "3s", size: "2px", color: "#a78bfa" },
+                  { tx: "-25px", ty: "35px", delay: "0.8s", dur: "2.8s", size: "2.5px", color: "#818cf8" },
+                  { tx: "40px", ty: "30px", delay: "1.2s", dur: "3.2s", size: "2px", color: "#60a5fa" },
+                  { tx: "-40px", ty: "5px", delay: "1.6s", dur: "2.6s", size: "3px", color: "#c084fc" },
+                  { tx: "20px", ty: "-45px", delay: "2s", dur: "2.9s", size: "2px", color: "#818cf8" },
+                ].map((p, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-1/2 left-1/2 rounded-full"
+                    style={{
+                      width: p.size,
+                      height: p.size,
+                      backgroundColor: p.color,
+                      boxShadow: `0 0 6px ${p.color}`,
+                      "--tx": p.tx,
+                      "--ty": p.ty,
+                      animation: `welcome-particle ${p.dur} ease-out ${p.delay} infinite`,
+                    } as React.CSSProperties}
+                  />
+                ))}
+
+                {/* The actual logo with glow shadow */}
+                <div className="relative" style={{ filter: "drop-shadow(0 0 20px rgba(99,102,241,0.4)) drop-shadow(0 0 40px rgba(139,92,246,0.2))" }}>
+                  <Logo size={72} animate />
+                  {/* Shine sweep overlay */}
+                  <div className="absolute inset-0 overflow-hidden rounded-2xl" style={{ borderRadius: "18px" }}>
+                    <div
+                      className="absolute inset-0 w-[200%]"
+                      style={{
+                        background: "linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.15) 45%, rgba(255,255,255,0.25) 50%, rgba(255,255,255,0.15) 55%, transparent 60%)",
+                        animation: "welcome-shine-sweep 3s ease-in-out 0.5s infinite",
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <h3
+                className="text-2xl font-bold text-white mb-2"
+                style={{ animation: "welcome-text-in 0.5s ease-out 0.3s both" }}
+              >
+                Welcome to Pocket Dev!
+              </h3>
+              <p
+                className="text-slate-400 text-sm"
+                style={{ animation: "welcome-text-in 0.5s ease-out 0.5s both" }}
+              >
+                We&apos;ve given you free tokens to get started. Here&apos;s how they work:
+              </p>
+            </div>
+
+            {/* Token Explanation */}
+            <div className="px-6 py-4 space-y-3">
+              {/* App Tokens */}
+              <div
+                className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl"
+                style={{ animation: "welcome-card-in 0.5s ease-out 0.6s both" }}
+              >
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500/30 to-blue-600/20 flex items-center justify-center flex-shrink-0 border border-blue-500/20">
+                    <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">App Tokens</h4>
+                    <p className="text-xs text-blue-400 font-medium">4 free tokens awarded</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  App tokens let you create new projects. Each new project costs <span className="text-white font-medium">2 app tokens</span>, so you can create <span className="text-white font-medium">2 projects</span> for free.
+                </p>
+              </div>
+
+              {/* Integration Tokens */}
+              <div
+                className="p-4 bg-violet-500/5 border border-violet-500/20 rounded-xl"
+                style={{ animation: "welcome-card-in 0.5s ease-out 0.75s both" }}
+              >
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500/30 to-violet-600/20 flex items-center justify-center flex-shrink-0 border border-violet-500/20">
+                    <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Integration Tokens</h4>
+                    <p className="text-xs text-violet-400 font-medium">10 free tokens awarded</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Integration tokens let you make AI-powered edits to your projects. Each edit costs <span className="text-white font-medium">1 integration token</span>, so you get <span className="text-white font-medium">10 edits</span> for free.
+                </p>
+              </div>
+
+              {/* Buy More Note */}
+              <p
+                className="text-xs text-slate-500 text-center"
+                style={{ animation: "welcome-text-in 0.5s ease-out 0.9s both" }}
+              >
+                Need more? You can buy additional tokens anytime from the sidebar or the Tokens page.
+              </p>
+            </div>
+
+            {/* CTA */}
+            <div
+              className="px-6 pb-6"
+              style={{ animation: "welcome-text-in 0.5s ease-out 1s both" }}
+            >
+              <button
+                onClick={clearNewUser}
+                className="w-full px-5 py-3 bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40"
+              >
+                Got it, let&apos;s go!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Token Deduction Confirmation Modal */}
+      {showTokenConfirmModal && (() => {
+        const isGeneration = showTokenConfirmModal === "app";
+        const genIntegrationCost = getGenerationIntegrationCost();
+        const editIntCost = getEditIntegrationCost();
+        const appCost = isGeneration ? 2 : 0;
+        const integrationCost = isGeneration ? genIntegrationCost : editIntCost;
+        const appBalance = userData?.appTokens || 0;
+        const integrationBalance = userData?.integrationTokens || 0;
+
+        return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            {/* Header */}
+            <div className="relative px-6 pt-8 pb-4 text-center">
+              <button
+                onClick={() => setShowTokenConfirmModal(null)}
+                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div className={`inline-flex items-center justify-center w-14 h-14 mb-4 rounded-2xl ${
+                isGeneration
+                  ? "bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30"
+                  : "bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30"
+              }`}>
+                <svg className={`w-7 h-7 ${isGeneration ? "text-blue-400" : "text-violet-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-bold text-white mb-1">
+                {isGeneration ? "Create New Project" : "Edit Project"}
+              </h3>
+              <p className="text-slate-400 text-sm">
+                {isGeneration
+                  ? "This action will deduct tokens from your balance."
+                  : "This edit will deduct tokens from your balance."}
+              </p>
+            </div>
+
+            {/* Token Details */}
+            <div className="px-6 pb-4 space-y-3">
+              {/* App Tokens section (generation only) */}
+              {appCost > 0 && (
+                <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">App Tokens</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-slate-300">Project creation</span>
+                    <span className="text-sm font-bold text-blue-400">-{appCost}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                    <span>Balance: {appBalance}</span>
+                    <span>After: {appBalance - appCost}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Integration Tokens section */}
+              {integrationCost > 0 && (
+                <div className="p-4 rounded-xl border bg-violet-500/5 border-violet-500/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-violet-400 uppercase tracking-wide">Integration Tokens</span>
+                  </div>
+                  {isGeneration ? (
+                    <>
+                      {currentAppAuth.includes("username-password") && (
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-slate-300">Username & Password auth</span>
+                          <span className="text-sm font-bold text-violet-400">-30</span>
+                        </div>
+                      )}
+                      {currentAppAuth.includes("google") && (
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-slate-300">Google OAuth auth</span>
+                          <span className="text-sm font-bold text-violet-400">-30</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {editAppAuth.includes("username-password") && (
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-slate-300">Username & Password auth</span>
+                          <span className="text-sm font-bold text-violet-400">-30</span>
+                        </div>
+                      )}
+                      {editAppAuth.includes("google") && (
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-slate-300">Google OAuth auth</span>
+                          <span className="text-sm font-bold text-violet-400">-30</span>
+                        </div>
+                      )}
+                      {editAppAuth.length === 0 && (
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-slate-300">Edit changes</span>
+                          <span className="text-sm font-bold text-violet-400">-1</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                    <span>Balance: {integrationBalance}</span>
+                    <span>After: {integrationBalance - integrationCost}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+                <p className="text-xs text-amber-200/80">
+                  Tokens are non-refundable once deducted, even if you cancel during the process.
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 pb-6 space-y-2">
+              <button
+                onClick={() => {
+                  if (isGeneration) {
+                    setShowTokenConfirmModal(null);
+                    startGeneration();
+                  } else {
+                    proceedWithEdit();
+                  }
+                }}
+                className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all text-white ${
+                  isGeneration
+                    ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
+                    : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                }`}
+              >
+                {isGeneration ? "Create Project" : "Start Edit"}
+              </button>
+              <button
+                onClick={() => setShowTokenConfirmModal(null)}
+                className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Authentication Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="relative px-6 pt-6 pb-3 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Authentication</h3>
+                  <p className="text-xs text-slate-400">Select auth for your next app</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Options */}
+            <div className="p-4 space-y-2.5">
+              {/* Username/Password */}
+              <button
+                onClick={() => setCurrentAppAuth(
+                  currentAppAuth.includes("username-password")
+                    ? currentAppAuth.filter(a => a !== "username-password")
+                    : [...currentAppAuth, "username-password"]
+                )}
+                className={`w-full text-left p-4 rounded-xl border transition-all ${
+                  currentAppAuth.includes("username-password")
+                    ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
+                    : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${currentAppAuth.includes("username-password") ? "bg-blue-500/20" : "bg-slate-800"}`}>
+                    <svg className={`w-5 h-5 ${currentAppAuth.includes("username-password") ? "text-blue-400" : "text-slate-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-medium text-sm ${currentAppAuth.includes("username-password") ? "text-blue-300" : "text-white"}`}>Username & Password</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Email/password sign up, login & protected routes</p>
+                  </div>
+                  <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">30 tokens</span>
+                  {currentAppAuth.includes("username-password") && (
+                    <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+              </button>
+
+              {/* Google OAuth */}
+              <button
+                onClick={() => setCurrentAppAuth(
+                  currentAppAuth.includes("google")
+                    ? currentAppAuth.filter(a => a !== "google")
+                    : [...currentAppAuth, "google"]
+                )}
+                className={`w-full text-left p-4 rounded-xl border transition-all ${
+                  currentAppAuth.includes("google")
+                    ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
+                    : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${currentAppAuth.includes("google") ? "bg-blue-500/20" : "bg-slate-800"}`}>
+                    <svg className={`w-5 h-5 ${currentAppAuth.includes("google") ? "text-blue-400" : "text-slate-400"}`} viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-medium text-sm ${currentAppAuth.includes("google") ? "text-blue-300" : "text-white"}`}>Google OAuth</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Sign in with Google, profile & protected routes</p>
+                  </div>
+                  <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">30 tokens</span>
+                  {currentAppAuth.includes("google") && (
+                    <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+              </button>
+            </div>
+
+            {/* Info footer */}
+            {currentAppAuth.length > 0 && (
+              <div className="mx-4 mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <svg className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-xs text-blue-300">
+                    <span className="font-medium">{currentAppAuth.map(a => a === "username-password" ? "Username & Password" : "Google OAuth").join(" + ")}</span> auth will be included in your next app. Costs <span className="font-medium text-violet-400">{currentAppAuth.length * 30} integration tokens</span> + 2 app tokens.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Done button */}
+            <div className="px-4 pb-4">
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="w-full px-4 py-2.5 text-sm font-medium bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white rounded-xl transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Database Modal */}
+      {showDbModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            {/* Header */}
+            <div className="relative px-6 pt-6 pb-3 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Database</h3>
+                  <p className="text-xs text-slate-400">Configure database for your app</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDbModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Coming Soon */}
+            <div className="p-6 text-center">
+              <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
+                <svg className="w-7 h-7 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                </svg>
+              </div>
+              <h3 className="text-base font-medium text-white mb-2">Coming Soon</h3>
+              <p className="text-slate-400 text-sm mb-1">Database integration will cost <span className="text-violet-400 font-medium">50 integration tokens</span>.</p>
+              <p className="text-slate-500 text-xs">Choose database providers and schema settings for your generated apps.</p>
+            </div>
+
+            <div className="px-6 pb-5">
+              <button
+                onClick={() => setShowDbModal(false)}
+                className="w-full px-4 py-2.5 text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Token Purchase Modal */}
+      {showTokenPurchaseModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
             {/* Modal Header */}
             <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
               <button
-                onClick={() => {
-                  setShowAppPaymentModal(false);
-                  setPendingPromptForPayment("");
-                }}
+                onClick={() => { setShowTokenPurchaseModal(false); setInsufficientTokenMessage(null); }}
                 className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-              <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-gradient-to-br from-blue-500 to-violet-500 rounded-2xl">
-                <svg
-                  className="w-8 h-8 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 4v16m8-8H4"
-                  />
+              <div className={`inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl ${
+                purchaseTokenType === "app"
+                  ? "bg-gradient-to-br from-blue-500 to-violet-500"
+                  : "bg-gradient-to-br from-violet-500 to-purple-500"
+              }`}>
+                <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
                 </svg>
               </div>
               <h3 className="text-xl font-bold text-white mb-2">
-                Choose Your Plan
+                Buy {purchaseTokenType === "app" ? "App" : "Integration"} Tokens
               </h3>
-              <p className="text-slate-400 text-sm">
-                You've used your 2 free projects. Choose a plan to continue.
+              {insufficientTokenMessage ? (
+                <div className="mt-1 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-left">
+                  <div className="flex items-start gap-2">
+                    <svg className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                    </svg>
+                    <p className="text-sm text-red-300">{insufficientTokenMessage}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-slate-400 text-sm">
+                  {purchaseTokenType === "app"
+                    ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
+                    : "Integration tokens are used for AI edits and backend/API calls (1 token per action)."}
+                </p>
+              )}
+              <p className="text-slate-500 text-xs mt-2">
+                Current balance: {purchaseTokenType === "app" ? (userData?.appTokens || 0) : (userData?.integrationTokens || 0)} tokens
               </p>
             </div>
 
-            {/* Pricing Options */}
-            <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
-              {/* Basic Plan */}
-              <div className="p-4 bg-gradient-to-br from-blue-500/10 to-violet-500/10 border-2 border-blue-500/30 rounded-xl">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-white">Basic</h4>
-                    <p className="text-xs text-slate-400">One-time payment</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-2xl font-bold text-white">$5</span>
-                    <span className="text-slate-400 text-sm ml-1">AUD</span>
-                  </div>
-                </div>
-                <ul className="space-y-1.5">
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-blue-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Pocket AI generated application
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-blue-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Export to GitHub, or your favourite IDE & deploy anywhere
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-blue-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Saved to your account
-                  </li>
-                </ul>
-              </div>
-
-              {/* Premium Plan */}
-              <div className="p-4 bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-2 border-amber-500/30 rounded-xl relative overflow-hidden">
-                <div className="absolute top-2 right-2">
-                  <span className="px-2 py-0.5 bg-amber-500 text-white text-xs font-bold rounded-full">
-                    BEST VALUE
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-white flex items-center gap-2">
-                      Premium
-                      <svg
-                        className="w-5 h-5 text-amber-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
-                        />
-                      </svg>
-                    </h4>
-                    <p className="text-xs text-amber-400 font-medium">
-                      $5 + $60 = $65 AUD
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-2xl font-bold text-white">$65</span>
-                    <span className="text-slate-400 text-sm ml-1">AUD</span>
-                  </div>
-                </div>
-                <ul className="space-y-1.5">
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-amber-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    <span className="font-semibold text-white">
-                      Everything in Basic
-                    </span>
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-amber-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Unlimited AI edits
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-amber-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Backend functionalities
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg
-                      className="w-4 h-4 text-amber-400 flex-shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                    Priority human support
-                  </li>
-                </ul>
+            {/* Token Type Tabs */}
+            <div className="px-6 pb-3 flex-shrink-0">
+              <div className="flex bg-slate-800 rounded-lg p-1">
+                <button
+                  onClick={() => {
+                    setPurchaseTokenType("app");
+                    setTokenPurchaseAmount(2);
+                  }}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
+                    purchaseTokenType === "app"
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  App Tokens
+                </button>
+                <button
+                  onClick={() => {
+                    setPurchaseTokenType("integration");
+                    setTokenPurchaseAmount(1);
+                  }}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
+                    purchaseTokenType === "integration"
+                      ? "bg-violet-600 text-white"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Integration Tokens
+                </button>
               </div>
             </div>
 
-            {/* Payment Options */}
+            {/* Amount Selection */}
+            <div className="px-6 py-4 overflow-y-auto flex-1">
+              <p className="text-xs text-slate-400 mb-3">
+                {purchaseTokenType === "app"
+                  ? "1 AUD = 1 app token"
+                  : "1 AUD = 10 integration tokens"}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {(purchaseTokenType === "app"
+                  ? [
+                      { aud: 2, tokens: 2, label: "2 tokens" },
+                      { aud: 5, tokens: 5, label: "5 tokens" },
+                      { aud: 10, tokens: 10, label: "10 tokens" },
+                      { aud: 20, tokens: 20, label: "20 tokens" },
+                    ]
+                  : [
+                      { aud: 1, tokens: 10, label: "10 tokens" },
+                      { aud: 5, tokens: 50, label: "50 tokens" },
+                      { aud: 10, tokens: 100, label: "100 tokens" },
+                      { aud: 20, tokens: 200, label: "200 tokens" },
+                    ]
+                ).map((option) => (
+                  <button
+                    key={option.aud}
+                    onClick={() => setTokenPurchaseAmount(option.aud)}
+                    className={`p-3 rounded-xl border-2 transition-all text-left ${
+                      tokenPurchaseAmount === option.aud
+                        ? purchaseTokenType === "app"
+                          ? "border-blue-500 bg-blue-500/10"
+                          : "border-violet-500 bg-violet-500/10"
+                        : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                    }`}
+                  >
+                    <div className="text-lg font-bold text-white">${option.aud} AUD</div>
+                    <div className={`text-xs ${
+                      purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"
+                    }`}>
+                      {option.label}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Footer */}
             <div className="px-6 pb-6 space-y-3 flex-shrink-0">
-              {/* Basic Option */}
               <button
-                onClick={payForNewApp}
-                disabled={
-                  isProcessingBasicPayment || isProcessingPremiumPayment
-                }
-                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={purchaseTokens}
+                disabled={isProcessingTokenPurchase}
+                className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
+                  purchaseTokenType === "app"
+                    ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
+                    : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                }`}
               >
-                {isProcessingBasicPayment ? (
+                {isProcessingTokenPurchase ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Processing Basic...
+                    Processing...
                   </>
                 ) : (
                   <>
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                      />
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                     </svg>
-                    Pay $5 AUD - Basic
+                    Pay ${tokenPurchaseAmount} AUD - {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
                   </>
                 )}
               </button>
-
-              {/* Premium Option */}
               <button
-                onClick={payForPremiumApp}
-                disabled={
-                  isProcessingBasicPayment || isProcessingPremiumPayment
-                }
-                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isProcessingPremiumPayment ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Processing Premium...
-                  </>
-                ) : (
-                  <>
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
-                      />
-                    </svg>
-                    Pay $65 AUD - Premium
-                  </>
-                )}
-              </button>
-              <p className="text-xs text-slate-400 text-center">
-                Premium includes unlimited edits, backend functionalities &
-                priority support
-              </p>
-              <button
-                onClick={() => {
-                  setShowAppPaymentModal(false);
-                  setPendingPromptForPayment("");
-                }}
+                onClick={() => { setShowTokenPurchaseModal(false); setInsufficientTokenMessage(null); }}
                 className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
               >
                 Cancel
