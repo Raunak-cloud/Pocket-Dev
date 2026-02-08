@@ -1,15 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "./eslint-lint";
 
-const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
-const GEMINI_FLASH_MODEL = "gemini-3-flash-preview"; // For code generation
-const GEMINI_PRO_MODEL = "gemini-3-pro"; // For architecture/planning
+const GEMINI_FLASH_MODEL = "gemini-3-flash-preview"; // Always use Flash for all code generation
 const MAX_TOKENS = 64000; // Increased to support larger multi-file projects
-
-function getAnthropicClient() {
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-}
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -17,24 +10,6 @@ function getGeminiClient() {
     throw new Error("GEMINI_API_KEY not found in environment variables");
   }
   return new GoogleGenerativeAI(apiKey);
-}
-
-/** Check if error is due to insufficient credits/quota */
-function isInsufficientCreditsError(error: any): boolean {
-  const errorType = error?.error?.type || "";
-  const errorMessage = error?.error?.message || error?.message || "";
-  const errorCode = error?.status || error?.error?.status_code || 0;
-
-  return (
-    errorType === "invalid_request_error" ||
-    errorType === "permission_error" ||
-    errorCode === 403 ||
-    errorCode === 402 ||
-    errorMessage.toLowerCase().includes("credit") ||
-    errorMessage.toLowerCase().includes("quota") ||
-    errorMessage.toLowerCase().includes("billing") ||
-    errorMessage.toLowerCase().includes("payment")
-  );
 }
 
 // Auth detection keywords
@@ -1008,13 +983,25 @@ function recoverJSON(text: string): string {
     JSON.parse(text);
     return text;
   } catch (e) {
+    console.log("JSON parse failed, attempting recovery...");
+
+    // Remove any trailing commas before closing braces/brackets
+    text = text.replace(/,(\s*[}\]])/g, '$1');
+
+    // Fix common issues with escaped characters
+    // Remove any incomplete escape sequences at the end
+    text = text.replace(/\\+$/, '');
+
     // Count braces and brackets
     let braceCount = 0;
     let bracketCount = 0;
     let inString = false;
     let escape = false;
+    let lastNonWhitespace = '';
 
-    for (const char of text) {
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
       if (escape) {
         escape = false;
         continue;
@@ -1025,7 +1012,6 @@ function recoverJSON(text: string): string {
       }
       if (char === '"') {
         inString = !inString;
-        continue;
       }
       if (inString) continue;
 
@@ -1033,11 +1019,23 @@ function recoverJSON(text: string): string {
       if (char === '}') braceCount--;
       if (char === '[') bracketCount++;
       if (char === ']') bracketCount--;
+
+      if (char.trim()) {
+        lastNonWhitespace = char;
+      }
     }
 
     // Close any open strings
     if (inString) {
       text += '"';
+      // If we just closed a string, might need a comma or closing bracket
+      if (lastNonWhitespace !== ',' && lastNonWhitespace !== '[' && lastNonWhitespace !== '{') {
+        // Check what should come next based on context
+        const trimmed = text.trimEnd();
+        if (!trimmed.endsWith(',') && !trimmed.endsWith('[') && !trimmed.endsWith('{')) {
+          // Likely in an array or object, might need to close it
+        }
+      }
     }
 
     // Close any unclosed arrays
@@ -1045,6 +1043,9 @@ function recoverJSON(text: string): string {
 
     // Close any unclosed objects
     text += '}'.repeat(Math.max(0, braceCount));
+
+    // Try to fix trailing commas again after closing
+    text = text.replace(/,(\s*[}\]])/g, '$1');
 
     return text;
   }
@@ -1085,108 +1086,16 @@ async function lintAllFiles(files: GeneratedFile[]): Promise<LintResult> {
   };
 }
 
-/** Build multimodal content for the API */
-function buildUserContent(
-  prompt: string,
-  images?: UploadedImage[],
-): Anthropic.MessageCreateParams["messages"][0]["content"] {
-  const content: Anthropic.MessageCreateParams["messages"][0]["content"] = [];
-
-  // Add images and PDFs first if provided
-  if (images && images.length > 0) {
-    for (const file of images) {
-      // Extract base64 data from dataUrl
-      const base64Match = file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (base64Match) {
-        const mimeType = base64Match[1];
-        const base64Data = base64Match[2];
-
-        // Handle PDFs
-        if (mimeType === "application/pdf") {
-          content.push({
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: base64Data,
-            },
-          } as any);
-        }
-        // Handle images
-        else if (mimeType.startsWith("image/")) {
-          const mediaType = mimeType as
-            | "image/jpeg"
-            | "image/png"
-            | "image/gif"
-            | "image/webp";
-
-          content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: base64Data,
-            },
-          });
-        }
-      }
-    }
-  }
-
-  // Add the text prompt
-  let textPrompt = prompt;
-  if (images && images.length > 0) {
-    // Check if any images have downloadUrl (Firebase Storage URLs)
-    const imagesWithUrls = images.filter((img) => img.downloadUrl);
-
-    if (imagesWithUrls.length > 0) {
-      // If Firebase URLs are available, include them prominently in the prompt
-      const imageUrlList = imagesWithUrls
-        .map((img, i) => `${i + 1}. ${img.name}: ${img.downloadUrl}`)
-        .join("\n");
-
-      textPrompt = `I've uploaded ${images.length} image(s) above for design inspiration.
-
-🚨 CRITICAL: USER-UPLOADED IMAGES 🚨
-The user has provided ${imagesWithUrls.length} image(s) hosted on Firebase Storage. You MUST use these EXACT URLs in your generated code:
-
-${imageUrlList}
-
-REQUIREMENTS FOR THESE IMAGES:
-1. Use EXACTLY these URLs in your img src attributes
-2. Example: <img src="${imagesWithUrls[0].downloadUrl}" alt="${imagesWithUrls[0].name}" className="w-full h-auto" />
-3. DO NOT use placeholder URLs (via.placeholder.com, unsplash, etc.)
-4. Place these images prominently (hero sections, galleries, product images, etc.)
-5. The user expects to see their ACTUAL uploaded images in the final website
-6. These are real, hosted images - not placeholders
-
-${prompt}`;
-    } else {
-      // Fallback for when only dataUrl is available
-      textPrompt = `I've uploaded ${images.length} image(s) above. Please analyze these images for design inspiration.\n\n${prompt}`;
-    }
-  }
-
-  content.push({
-    type: "text",
-    text: textPrompt,
-  });
-
-  return content;
-}
-
 /** Generate using Gemini */
 async function generateWithGemini(
   prompt: string,
   images?: UploadedImage[],
   onProgress?: (msg: string) => void,
-  useProForPlanning: boolean = false,
 ): Promise<string> {
   const genAI = getGeminiClient();
-  // Use Gemini 3 Pro for architecture/planning, Flash for code generation
-  const modelName = useProForPlanning ? GEMINI_PRO_MODEL : GEMINI_FLASH_MODEL;
+  // Always use Gemini 3 Flash for all code generation
   const model = genAI.getGenerativeModel({
-    model: modelName,
+    model: GEMINI_FLASH_MODEL,
     generationConfig: {
       maxOutputTokens: 65536, // Max output tokens for Gemini (2M model can handle this)
       temperature: 0.7,
@@ -1195,7 +1104,7 @@ async function generateWithGemini(
     },
   });
 
-  onProgress?.(useProForPlanning ? "Planning with Gemini 3 Pro" : "Generating with Gemini 3 Flash");
+  onProgress?.("Generating with Gemini 3 Flash");
 
   const parts: any[] = [];
 
@@ -1256,13 +1165,42 @@ ${prompt}`;
   // Add additional instructions for Gemini to keep responses concise
   const geminiInstructions = `
 
-⚠️ CRITICAL GEMINI REQUIREMENTS:
-1. Output MUST be valid, complete JSON
-2. Response MUST end with the closing }
-3. If approaching token limit, prioritize completing the JSON structure
-4. Generate 4-6 core files maximum (can be extended later)
-5. Keep code concise but functional
-6. NEVER truncate - always close all braces and brackets
+⚠️ CRITICAL JSON FORMATTING REQUIREMENTS - READ CAREFULLY:
+
+1. Output MUST be 100% VALID JSON - no exceptions
+2. NO trailing commas anywhere (objects or arrays)
+3. ALL strings use double quotes " not single quotes '
+4. Escape ALL special chars in code: \\n \\t \\" \\\\ \\/ \\b \\f \\r
+5. NO JavaScript comments in JSON content (no // or /* */)
+6. Response MUST end with valid closing }
+7. If approaching token limit, STOP and close JSON properly
+8. Generate ONLY 3-4 essential files to stay within limits
+9. Keep code minimal but functional - remove verbose comments
+10. VERIFY JSON is valid before sending response
+
+MINIMAL FILE GENERATION:
+- app/layout.tsx (root layout)
+- app/page.tsx (home page)
+- app/globals.css (tailwind styles)
+- app/components/[Essential].tsx (only if absolutely needed)
+
+JSON STRUCTURE (exact format):
+{
+  "files": [
+    {"path": "app/page.tsx", "content": "code without comments"},
+    {"path": "app/layout.tsx", "content": "code without comments"}
+  ],
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.2.0"
+  }
+}
+
+BEFORE RESPONDING:
+✓ Verify NO trailing commas
+✓ Verify all strings properly quoted and escaped
+✓ Verify all { } [ ] are balanced
+✓ Keep response under 60,000 chars if possible
 `;
 
   // Detect if auth is needed to conditionally include templates
@@ -1292,17 +1230,12 @@ ${prompt}`;
 
 /** Generate React project with retry on lint errors */
 async function generateWithLinting(
-  client: Anthropic,
   prompt: string,
   images?: UploadedImage[],
   onProgress?: (msg: string) => void,
-  useGemini: boolean = false,
 ): Promise<GeneratedReactProject> {
   let attempts = 1;
   const maxAttempts = 3;
-
-  // Build user content with images if provided
-  const userContent = buildUserContent(prompt, images);
 
   while (attempts <= maxAttempts) {
     try {
@@ -1310,74 +1243,75 @@ async function generateWithLinting(
         `Generating React project (attempt ${attempts}/${maxAttempts})`,
       );
 
-      let text: string;
-
-      if (useGemini) {
-        // Use Gemini Flash for code generation
-        text = await generateWithGemini(prompt, images, onProgress, false);
-      } else {
-        // Detect auth for optimized system prompt
-        const needsAuth = detectAuthRequest(prompt);
-        const systemPrompt = needsAuth
-          ? BASE_SYSTEM_PROMPT
-          : BASE_SYSTEM_PROMPT.replace(/🔐 FIREBASE AUTHENTICATION[\s\S]*?(?=NEXT\.JS REQUIREMENTS:)/g, '');
-
-        // Generate code with Anthropic streaming
-        const stream = client.messages.stream({
-          model: CLAUDE_MODEL,
-          max_tokens: MAX_TOKENS,
-          temperature: 0.7,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userContent }],
-        });
-
-        const response = await stream.finalMessage();
-        text =
-          response.content[0].type === "text" ? response.content[0].text : "";
-      }
+      // Always use Gemini Flash for code generation
+      const text = await generateWithGemini(prompt, images, onProgress);
 
       let jsonText = extractJSON(text);
+
+      // Pre-process JSON to fix common Gemini issues
+      console.log("Original JSON length:", jsonText.length);
 
       // Check if JSON appears complete
       if (!jsonText.trim().endsWith("}")) {
         console.warn("JSON response appears truncated - attempting recovery");
-        console.warn("Response length:", jsonText.length);
         console.warn("Last 200 chars:", jsonText.substring(Math.max(0, jsonText.length - 200)));
-
-        // Attempt JSON recovery
         jsonText = recoverJSON(jsonText);
-        console.log("Recovery attempted, new length:", jsonText.length);
+        console.log("After recovery, new length:", jsonText.length);
       }
 
       let parsed;
-      try {
-        parsed = JSON.parse(jsonText);
-      } catch (e) {
-        // Try recovery one more time
-        console.warn("JSON parse failed, attempting recovery");
-        try {
-          jsonText = recoverJSON(jsonText);
-          parsed = JSON.parse(jsonText);
-          console.log("✅ JSON recovery successful!");
-        } catch (recoveryError) {
-          console.error("JSON parse error:", recoveryError);
-          console.error("Response length:", jsonText.length);
-          console.error("First 1000 chars:", jsonText.substring(0, 1000));
-          console.error(
-            "Last 500 chars:",
-            jsonText.substring(Math.max(0, jsonText.length - 500)),
-          );
+      let parseAttempts = 0;
+      const maxParseAttempts = 3;
 
-          if (attempts === maxAttempts) {
-            throw new Error(
-              `Failed to parse generated JSON after ${maxAttempts} attempts. ` +
-                `Response length: ${jsonText.length} chars. ` +
-                `Try a simpler prompt (fewer pages/features) or try again.`,
-            );
+      while (parseAttempts < maxParseAttempts) {
+        try {
+          parsed = JSON.parse(jsonText);
+          console.log("✅ JSON parsed successfully!");
+          break;
+        } catch (e: any) {
+          parseAttempts++;
+          console.warn(`JSON parse attempt ${parseAttempts} failed:`, e.message);
+
+          if (parseAttempts === 1) {
+            // First attempt: Remove trailing commas
+            console.log("Attempt 1: Removing trailing commas...");
+            jsonText = jsonText.replace(/,(\s*[}\]])/g, '$1');
+          } else if (parseAttempts === 2) {
+            // Second attempt: More aggressive recovery
+            console.log("Attempt 2: Aggressive JSON recovery...");
+            jsonText = recoverJSON(jsonText);
+            // Also try to fix unescaped newlines in strings
+            jsonText = jsonText.replace(/([^\\])(\\n)/g, '$1\\\\n');
+          } else {
+            // Final attempt failed
+            console.error("All JSON parse attempts failed");
+            console.error("Response length:", jsonText.length);
+            console.error("First 500 chars:", jsonText.substring(0, 500));
+            console.error("Last 500 chars:", jsonText.substring(Math.max(0, jsonText.length - 500)));
+            console.error("Parse error:", e.message);
+
+            if (attempts === maxAttempts) {
+              // Try to extract position information from error message
+              const match = e.message.match(/position (\d+)/);
+              const position = match ? parseInt(match[1]) : 0;
+              const context = position > 0 ? jsonText.substring(Math.max(0, position - 100), Math.min(jsonText.length, position + 100)) : '';
+
+              throw new Error(
+                `Failed to parse generated JSON after ${maxAttempts} attempts.\n` +
+                `Error: ${e.message}\n` +
+                (context ? `Context around error: ${context}\n` : '') +
+                `Try a simpler prompt or try again.`
+              );
+            }
+            attempts++;
+            break; // Break out of parse loop to retry generation
           }
-          attempts++;
-          continue;
         }
+      }
+
+      // If we failed all parse attempts, continue to next generation attempt
+      if (!parsed) {
+        continue;
       }
 
       // Validate structure
@@ -1457,32 +1391,9 @@ async function generateWithLinting(
 
         let fixText: string;
         try {
-          if (useGemini) {
-            // Use Gemini Flash for fixing code
-            const fixPrompt = `${prompt}\n\nThe generated code has ESLint errors. Fix them and return the complete JSON again:\n\n${errorSummary}\n\nReturn ONLY valid JSON with all files.`;
-            fixText = await generateWithGemini(fixPrompt, images, onProgress, false);
-          } else {
-            // Use Anthropic for fix
-            const fixStream = client.messages.stream({
-              model: CLAUDE_MODEL,
-              max_tokens: MAX_TOKENS,
-              temperature: 0.2,
-              system: BASE_SYSTEM_PROMPT,
-              messages: [
-                { role: "user", content: prompt },
-                { role: "assistant", content: jsonText },
-                {
-                  role: "user",
-                  content: `The code has ESLint errors. Fix them and return the complete JSON again:\n\n${errorSummary}\n\nReturn ONLY valid JSON with all files.`,
-                },
-              ],
-            });
-            const fixResponse = await fixStream.finalMessage();
-            fixText =
-              fixResponse.content[0].type === "text"
-                ? fixResponse.content[0].text
-                : "";
-          }
+          // Use Gemini Flash for fixing code
+          const fixPrompt = `${prompt}\n\nThe generated code has ESLint errors. Fix them and return the complete JSON again:\n\n${errorSummary}\n\nReturn ONLY valid JSON with all files.`;
+          fixText = await generateWithGemini(fixPrompt, images, onProgress);
         } catch (fixError: any) {
           // If fix attempt fails due to API issues, continue to next attempt
           console.error(
@@ -1523,14 +1434,6 @@ async function generateWithLinting(
         }
       }
     } catch (apiError: any) {
-      // Handle insufficient credits - throw to trigger Gemini fallback
-      if (!useGemini && isInsufficientCreditsError(apiError)) {
-        console.error(
-          "Insufficient credits detected, will try Gemini fallback",
-        );
-        throw apiError; // This will be caught by the outer function to retry with Gemini
-      }
-
       // Handle API errors like overloaded, rate limits, etc.
       if (
         apiError?.error?.type === "overloaded_error" ||
@@ -1571,24 +1474,8 @@ async function generateWithLinting(
   // Return last result even if it has lint errors
   onProgress?.("⚠ Returning code with some linting issues");
   try {
-    let text: string;
-
-    if (useGemini) {
-      // Use Gemini Flash for fallback code generation
-      text = await generateWithGemini(prompt, images, onProgress, false);
-    } else {
-      const stream = client.messages.stream({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS,
-        temperature: 0.7,
-        system: BASE_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userContent }],
-      });
-
-      const response = await stream.finalMessage();
-      text =
-        response.content[0].type === "text" ? response.content[0].text : "";
-    }
+    // Use Gemini Flash for fallback code generation
+    const text = await generateWithGemini(prompt, images, onProgress);
 
     const jsonText = extractJSON(text);
     const parsed = JSON.parse(jsonText);
@@ -1627,34 +1514,7 @@ export async function generateReactProject(
   images?: UploadedImage[],
   onProgress?: (message: string) => void,
 ): Promise<GeneratedReactProject> {
-  const client = getAnthropicClient();
-
-  try {
-    // Try Claude first
-    onProgress?.("Using Claude AI");
-    return await generateWithLinting(client, prompt, images, onProgress, false);
-  } catch (error: any) {
-    // If Claude fails with any API error, fallback to Gemini
-    console.log(
-      "Claude API failed, falling back to Gemini:",
-      error?.message || error,
-    );
-    onProgress?.("⚠️ Switching to Gemini AI (Claude API error)");
-
-    try {
-      return await generateWithLinting(
-        client,
-        prompt,
-        images,
-        onProgress,
-        true,
-      );
-    } catch (geminiError: any) {
-      // If Gemini also fails, throw a combined error
-      throw new Error(
-        `Both AI services failed. Claude: ${error?.error?.message || error?.message || "Unknown error"}. ` +
-          `Gemini: ${geminiError?.message || "Unknown error"}. Please check your API keys and try again.`,
-      );
-    }
-  }
+  // Always use Gemini 3 Flash for all code generation
+  onProgress?.("Using Gemini 3 Flash AI");
+  return await generateWithLinting(prompt, images, onProgress);
 }
