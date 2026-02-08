@@ -64,33 +64,29 @@ export async function POST(request: NextRequest) {
 
       try {
         const adminDb = getAdminDb();
-
-        // Idempotency check: ensure we haven't already processed this session
-        const existingTx = await adminDb
-          .collection("tokenTransactions")
-          .where("stripeSessionId", "==", session.id)
-          .limit(1)
-          .get();
-
-        if (!existingTx.empty) {
-          console.log(`[webhook] Token purchase already processed for session ${session.id}, skipping`);
-          return NextResponse.json({ received: true });
-        }
-
         const tokensAmount = parseInt(tokensToCredit, 10);
         const tokenField = tokenType === "app" ? "appTokens" : "integrationTokens";
 
-        // Use a transaction to atomically credit tokens
+        // Idempotency check INSIDE the transaction using session ID as doc ID
+        let alreadyCredited = false;
+
         await adminDb.runTransaction(async (transaction) => {
+          const txRef = adminDb.collection("tokenTransactions").doc(session.id);
+          const txDoc = await transaction.get(txRef);
+
+          if (txDoc.exists) {
+            alreadyCredited = true;
+            return;
+          }
+
           const userRef = adminDb.collection("users").doc(userId);
           const userDoc = await transaction.get(userRef);
 
           const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
           const newBalance = currentBalance + tokensAmount;
 
-          transaction.update(userRef, { [tokenField]: newBalance });
+          transaction.set(userRef, { [tokenField]: newBalance }, { merge: true });
 
-          const txRef = adminDb.collection("tokenTransactions").doc();
           transaction.set(txRef, {
             userId,
             type: "purchase",
@@ -104,7 +100,11 @@ export async function POST(request: NextRequest) {
           });
         });
 
-        console.log(`[webhook] Credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
+        if (alreadyCredited) {
+          console.log(`[webhook] Token purchase already processed for session ${session.id}, skipping`);
+        } else {
+          console.log(`[webhook] Credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
+        }
       } catch (error) {
         console.error("[webhook] Error crediting tokens:", error);
         return NextResponse.json(

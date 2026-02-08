@@ -134,17 +134,25 @@ function StackBlitzPreview({
   previewKey: number;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const vmRef = useRef<VM | null>(null);
+  const prevFilesRef = useRef<Record<string, string> | null>(null);
+  const projectRef = useRef<ReactProject | null>(null);
   const [loadingState, setLoadingState] = useState<
     "initializing" | "loading" | "ready" | "error"
   >("initializing");
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
 
+  // Keep project ref in sync for use in embed creation effect
+  projectRef.current = project;
+
+  // Effect 1: Full embed creation — only when previewKey changes (new generation / open project)
   useEffect(() => {
-    if (!project || !wrapperRef.current) return;
+    if (!projectRef.current || !wrapperRef.current) return;
 
     let mounted = true;
     let initTimeout: NodeJS.Timeout;
+    vmRef.current = null;
 
     const initializeEmbed = async () => {
       // Wait for React to finish rendering
@@ -152,7 +160,7 @@ function StackBlitzPreview({
         initTimeout = setTimeout(resolve, 1000);
       });
 
-      if (!mounted || !wrapperRef.current) return;
+      if (!mounted || !wrapperRef.current || !projectRef.current) return;
 
       try {
         setLoadingState("initializing");
@@ -169,7 +177,7 @@ function StackBlitzPreview({
         container.className = "w-full h-full min-h-[85vh]";
         wrapper.appendChild(container);
 
-        const files = prepareStackBlitzFiles(project);
+        const files = prepareStackBlitzFiles(projectRef.current);
 
         const vm = await sdk.embedProject(
           container,
@@ -192,6 +200,8 @@ function StackBlitzPreview({
 
         if (!mounted) return;
 
+        vmRef.current = vm;
+        prevFilesRef.current = files;
         setLoadingState("loading");
 
         try {
@@ -222,6 +232,7 @@ function StackBlitzPreview({
       if (initTimeout) {
         clearTimeout(initTimeout);
       }
+      vmRef.current = null;
       // Safely clean up StackBlitz DOM on unmount
       if (wrapperRef.current) {
         try {
@@ -233,7 +244,52 @@ function StackBlitzPreview({
         }
       }
     };
-  }, [project, previewKey, retryCount]);
+  }, [previewKey, retryCount]);
+
+  // Effect 2: Apply file diffs on project change (edits / rollbacks) without recreating embed
+  useEffect(() => {
+    if (!project) return;
+
+    const newFiles = prepareStackBlitzFiles(project);
+
+    // If no VM yet (embed still initializing), just store files for future diffing
+    if (!vmRef.current) {
+      prevFilesRef.current = newFiles;
+      return;
+    }
+
+    const oldFiles = prevFilesRef.current || {};
+
+    // Compute diff
+    const create: Record<string, string> = {};
+    const destroy: string[] = [];
+
+    for (const [path, content] of Object.entries(newFiles)) {
+      if (oldFiles[path] !== content) {
+        create[path] = content;
+      }
+    }
+    for (const path of Object.keys(oldFiles)) {
+      if (!(path in newFiles)) {
+        destroy.push(path);
+      }
+    }
+
+    if (Object.keys(create).length > 0 || destroy.length > 0) {
+      vmRef.current
+        .applyFsDiff({ create, destroy })
+        .then(() => {
+          prevFilesRef.current = newFiles;
+        })
+        .catch((err) => {
+          console.error("Error applying file diff, falling back to full reload:", err);
+          prevFilesRef.current = newFiles;
+          setRetryCount((prev) => prev + 1);
+        });
+    } else {
+      prevFilesRef.current = newFiles;
+    }
+  }, [project]);
 
   return (
     <div className="relative h-full">
@@ -357,9 +413,15 @@ function ReactGeneratorContent() {
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
   const [showTokenPurchaseModal, setShowTokenPurchaseModal] = useState(false);
   const [purchaseTokenType, setPurchaseTokenType] = useState<"app" | "integration">("app");
-  const [tokenPurchaseAmount, setTokenPurchaseAmount] = useState(2);
+  const [tokenPurchaseAmount, setTokenPurchaseAmount] = useState(0);
   const [isProcessingTokenPurchase, setIsProcessingTokenPurchase] = useState(false);
   const [showTokenConfirmModal, setShowTokenConfirmModal] = useState<"app" | "integration" | null>(null);
+  const [skipEditTokenConfirm, setSkipEditTokenConfirm] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("skipEditTokenConfirm") === "true";
+    }
+    return false;
+  });
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDbModal, setShowDbModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -384,6 +446,7 @@ function ReactGeneratorContent() {
   >("idle");
   const [githubExportMessage, setGithubExportMessage] = useState("");
   const [githubRepoUrl, setGithubRepoUrl] = useState("");
+  const [exportSuccessMessage, setExportSuccessMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -489,16 +552,81 @@ function ReactGeneratorContent() {
     const tokenPayment = searchParams.get("token_payment");
 
     if (tokenPayment === "success" && user) {
-      // Refresh user data to get updated token balances
       const handleTokenSuccess = async () => {
-        await refreshUserData();
-        window.history.replaceState({}, "", "/");
+        const sessionId = searchParams.get("session_id");
         const tokenType = searchParams.get("tokenType") || "tokens";
         const amount = searchParams.get("amount") || "";
+
+        let credited = false;
+        if (sessionId) {
+          try {
+            const response = await fetch("/api/verify-token-payment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sessionId }),
+            });
+            const data = await response.json();
+            if (data.success) {
+              credited = true;
+              await refreshUserData();
+            }
+          } catch (e) {
+            console.error("Error verifying token payment:", e);
+          }
+        }
+
+        if (!credited) {
+          await refreshUserData();
+        }
+
+        window.history.replaceState({}, "", "/");
+
+        // Check for pending edit to resume
+        const pendingEditStr = sessionStorage.getItem("pendingEdit");
+        if (pendingEditStr) {
+          sessionStorage.removeItem("pendingEdit");
+          try {
+            const pendingEdit = JSON.parse(pendingEditStr);
+            // Load saved projects, find the one we were editing, and reopen it
+            const projectsQuery = query(
+              collection(db, "projects"),
+              where("userId", "==", user.uid),
+              orderBy("createdAt", "desc"),
+            );
+            const snapshot = await getDocs(projectsQuery);
+            const projects: SavedProject[] = snapshot.docs
+              .filter((d) => !d.data().deleted)
+              .map((d) => ({
+                id: d.id,
+                ...d.data(),
+                createdAt: d.data().createdAt?.toDate() || new Date(),
+                updatedAt: d.data().updatedAt?.toDate() || new Date(),
+              })) as SavedProject[];
+            setSavedProjects(projects);
+
+            const targetProject = projects.find(p => p.id === pendingEdit.projectId);
+            if (targetProject) {
+              // Reopen the project
+              openSavedProject(targetProject);
+              // Restore edit prompt and auth
+              setEditPrompt(pendingEdit.editPrompt || "");
+              setEditAppAuth(pendingEdit.editAppAuth || []);
+              // Auto-trigger the edit after a short delay for UI to settle
+              setTimeout(() => {
+                alert(`Payment successful! ${amount} ${tokenType} tokens added. Your edit will now continue.`);
+              }, 500);
+              return;
+            }
+          } catch (e) {
+            console.error("Error restoring pending edit:", e);
+          }
+        }
+
         alert(`Payment successful! ${amount} ${tokenType} tokens have been added to your account.`);
       };
       handleTokenSuccess();
     } else if (tokenPayment === "cancelled") {
+      sessionStorage.removeItem("pendingEdit");
       window.history.replaceState({}, "", "/");
       setError("Payment cancelled. You can try again when ready.");
     }
@@ -621,7 +749,7 @@ function ReactGeneratorContent() {
       };
       setProject(restoredProject);
       await updateProjectInFirestore(currentProjectId, restoredProject);
-      setPreviewKey((prev) => prev + 1);
+      // Preview updates via applyFsDiff (Effect 2 in StackBlitzPreview)
       if (publishedUrl) {
         setHasUnpublishedChanges(true);
       }
@@ -721,6 +849,15 @@ function ReactGeneratorContent() {
 
       if (!data.url) {
         throw new Error("No checkout URL received");
+      }
+
+      // Save pending edit context so we can resume after payment
+      if (currentProjectId && status === "success" && (editPrompt.trim() || editAppAuth.length > 0)) {
+        sessionStorage.setItem("pendingEdit", JSON.stringify({
+          projectId: currentProjectId,
+          editPrompt: editPrompt.trim(),
+          editAppAuth,
+        }));
       }
 
       window.location.href = data.url;
@@ -1049,10 +1186,14 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
         : `This edit requires ${editCost} integration tokens`;
       setInsufficientTokenMessage(`${reason} but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
       setPurchaseTokenType("integration");
-      // Auto-set purchase amount based on auth selection
-      const authCount = editAppAuth.length;
-      setTokenPurchaseAmount(authCount >= 2 ? 60 : authCount === 1 ? 30 : 3);
+      setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
+      return;
+    }
+
+    // Skip confirmation if user opted out
+    if (skipEditTokenConfirm) {
+      proceedWithEdit();
       return;
     }
 
@@ -1305,8 +1446,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setEditFiles([]); // Clear edit files after successful edit
       setEditAppAuth([]); // Reset edit auth after successful edit
 
-      // Force preview refresh by updating key
-      setPreviewKey((prev) => prev + 1);
+      // Preview updates via applyFsDiff (Effect 2 in StackBlitzPreview)
 
       // Update project in Firestore if we have a project ID
       if (currentProjectId && user) {
@@ -1635,7 +1775,7 @@ ${pdfUrlList}
       const deficit = 2 - appTokenBalance;
       setInsufficientTokenMessage(`You need 2 app tokens to create a project but only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`);
       setPurchaseTokenType("app");
-      setTokenPurchaseAmount(2);
+      setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
       return;
     }
@@ -1652,8 +1792,7 @@ ${pdfUrlList}
         const deficit = integrationCost - integrationBalance;
         setInsufficientTokenMessage(`Adding ${authNames} authentication requires ${integrationCost} integration tokens but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
         setPurchaseTokenType("integration");
-        const authCount = currentAppAuth.length;
-        setTokenPurchaseAmount(authCount >= 2 ? 60 : 30);
+        setTokenPurchaseAmount(0);
         setShowTokenPurchaseModal(true);
         return;
       }
@@ -2003,16 +2142,8 @@ The easiest way to deploy is with [Vercel](https://vercel.com/new).
     setShowExportDropdown(false);
 
     try {
-      const zip = new JSZip();
       const files = prepareStackBlitzFiles(project);
-
-      Object.entries(files).forEach(([path, content]) => {
-        zip.file(path, content);
-      });
-
-      zip.file(
-        ".gitignore",
-        `# dependencies
+      files[".gitignore"] = `# dependencies
 /node_modules
 /.pnp
 .pnp.js
@@ -2045,8 +2176,50 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-`,
-      );
+`;
+
+      // Try File System Access API to write files directly to a folder
+      if ("showDirectoryPicker" in window) {
+        try {
+          const dirHandle = await (window as any).showDirectoryPicker({
+            mode: "readwrite",
+          });
+
+          for (const [filePath, content] of Object.entries(files)) {
+            const parts = filePath.split("/");
+            let currentDir = dirHandle;
+
+            for (let i = 0; i < parts.length - 1; i++) {
+              currentDir = await currentDir.getDirectoryHandle(parts[i], {
+                create: true,
+              });
+            }
+
+            const fileHandle = await currentDir.getFileHandle(
+              parts[parts.length - 1],
+              { create: true },
+            );
+            const writable = await fileHandle.createWritable();
+            await writable.write(content);
+            await writable.close();
+          }
+
+          setExportSuccessMessage(
+            "Project exported! Open the folder in VS Code to start coding.",
+          );
+          setTimeout(() => setExportSuccessMessage(""), 5000);
+          return;
+        } catch (fsError: any) {
+          if (fsError.name === "AbortError") return;
+          // Fall through to ZIP download
+        }
+      }
+
+      // Fallback: ZIP download
+      const zip = new JSZip();
+      Object.entries(files).forEach(([path, content]) => {
+        zip.file(path, content);
+      });
 
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
@@ -2058,13 +2231,10 @@ next-env.d.ts
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      // Try to open in VS Code via vscode:// protocol
-      setTimeout(() => {
-        window.open(
-          "vscode://file/" + encodeURIComponent(a.download),
-          "_blank",
-        );
-      }, 500);
+      setExportSuccessMessage(
+        "Project downloaded! Extract the ZIP and open the folder in VS Code.",
+      );
+      setTimeout(() => setExportSuccessMessage(""), 5000);
     } catch (error) {
       console.error("VS Code export error:", error);
       setError("Failed to export to VS Code");
@@ -2080,16 +2250,8 @@ next-env.d.ts
     setShowExportDropdown(false);
 
     try {
-      const zip = new JSZip();
       const files = prepareStackBlitzFiles(project);
-
-      Object.entries(files).forEach(([path, content]) => {
-        zip.file(path, content);
-      });
-
-      zip.file(
-        ".gitignore",
-        `# dependencies
+      files[".gitignore"] = `# dependencies
 /node_modules
 /.pnp
 .pnp.js
@@ -2122,8 +2284,50 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-`,
-      );
+`;
+
+      // Try File System Access API to write files directly to a folder
+      if ("showDirectoryPicker" in window) {
+        try {
+          const dirHandle = await (window as any).showDirectoryPicker({
+            mode: "readwrite",
+          });
+
+          for (const [filePath, content] of Object.entries(files)) {
+            const parts = filePath.split("/");
+            let currentDir = dirHandle;
+
+            for (let i = 0; i < parts.length - 1; i++) {
+              currentDir = await currentDir.getDirectoryHandle(parts[i], {
+                create: true,
+              });
+            }
+
+            const fileHandle = await currentDir.getFileHandle(
+              parts[parts.length - 1],
+              { create: true },
+            );
+            const writable = await fileHandle.createWritable();
+            await writable.write(content);
+            await writable.close();
+          }
+
+          setExportSuccessMessage(
+            "Project exported! Open the folder in Cursor to start coding.",
+          );
+          setTimeout(() => setExportSuccessMessage(""), 5000);
+          return;
+        } catch (fsError: any) {
+          if (fsError.name === "AbortError") return;
+          // Fall through to ZIP download
+        }
+      }
+
+      // Fallback: ZIP download
+      const zip = new JSZip();
+      Object.entries(files).forEach(([path, content]) => {
+        zip.file(path, content);
+      });
 
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
@@ -2135,13 +2339,10 @@ next-env.d.ts
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      // Try to open in Cursor via cursor:// protocol
-      setTimeout(() => {
-        window.open(
-          "cursor://file/" + encodeURIComponent(a.download),
-          "_blank",
-        );
-      }, 500);
+      setExportSuccessMessage(
+        "Project downloaded! Extract the ZIP and open the folder in Cursor.",
+      );
+      setTimeout(() => setExportSuccessMessage(""), 5000);
     } catch (error) {
       console.error("Cursor export error:", error);
       setError("Failed to export to Cursor");
@@ -3558,6 +3759,46 @@ next-env.d.ts
           </div>
         )}
 
+        {/* Export Success Toast */}
+        {exportSuccessMessage && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex items-center gap-3 px-5 py-3 bg-emerald-600 text-white rounded-xl shadow-2xl text-sm font-medium">
+              <svg
+                className="w-5 h-5 flex-shrink-0"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+              {exportSuccessMessage}
+              <button
+                onClick={() => setExportSuccessMessage("")}
+                className="ml-2 p-0.5 hover:bg-emerald-500 rounded transition"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Delete Confirmation Modal */}
         {showDeleteModal && projectToDelete && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -3741,6 +3982,20 @@ next-env.d.ts
                     Tokens are non-refundable once deducted, even if you cancel during the process.
                   </p>
                 </div>
+                {!isGeneration && (
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={skipEditTokenConfirm}
+                      onChange={(e) => {
+                        setSkipEditTokenConfirm(e.target.checked);
+                        localStorage.setItem("skipEditTokenConfirm", String(e.target.checked));
+                      }}
+                      className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
+                    />
+                    <span className="text-xs text-slate-400 group-hover:text-slate-300 transition">Don&apos;t show this again for edits</span>
+                  </label>
+                )}
               </div>
               <div className="px-6 pb-6 space-y-2">
                 <button
@@ -5210,6 +5465,20 @@ next-env.d.ts
                   Tokens are non-refundable once deducted, even if you cancel during the process.
                 </p>
               </div>
+              {!isGeneration && (
+                <label className="flex items-center gap-2 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={skipEditTokenConfirm}
+                    onChange={(e) => {
+                      setSkipEditTokenConfirm(e.target.checked);
+                      localStorage.setItem("skipEditTokenConfirm", String(e.target.checked));
+                    }}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span className="text-xs text-slate-400 group-hover:text-slate-300 transition">Don&apos;t show this again for edits</span>
+                </label>
+              )}
             </div>
 
             {/* Actions */}

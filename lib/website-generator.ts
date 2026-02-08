@@ -1,19 +1,17 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode, type LintMessage } from "./eslint-lint";
 import { injectImages, stripImagesForEdit } from "./image-generator";
 
 const MAX_LINT_RETRIES = 3;
-const MODEL = "claude-sonnet-4-5-20250929";
-const MAX_TOKENS = 16000; // Increased for complete, detailed websites
+const MODEL = "gemini-3-flash-preview";
+const MAX_TOKENS = 65536;
 
 function getClient() {
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-}
-
-/** Pull the text out of a Claude response (first TextBlock). */
-function getText(msg: Anthropic.Message): string {
-  const block = msg.content[0];
-  return block.type === "text" ? block.text : "";
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY not found in environment variables");
+  }
+  return new GoogleGenerativeAI(apiKey);
 }
 
 const SYSTEM_PROMPT = `🚨🚨🚨 ABSOLUTE MANDATORY REQUIREMENTS - NO EXCEPTIONS 🚨🚨🚨
@@ -283,27 +281,83 @@ interface SectionMarker {
 
 function createSectionMarkers(): SectionMarker[] {
   return [
-    { pattern: /<nav/i, message: "Setting up your navigation bar", announced: false },
-    { pattern: /hero|<header/i, message: "Designing a stunning hero section", announced: false },
-    { pattern: /<section[^>]*features/i, message: "Building your feature highlights", announced: false },
-    { pattern: /<section[^>]*about/i, message: "Creating the about section", announced: false },
-    { pattern: /<section[^>]*services/i, message: "Adding your services showcase", announced: false },
-    { pattern: /<section[^>]*pricing/i, message: "Crafting the pricing table", announced: false },
-    { pattern: /<section[^>]*testimonial/i, message: "Adding customer stories", announced: false },
-    { pattern: /<section[^>]*gallery/i, message: "Setting up the image gallery", announced: false },
-    { pattern: /<section[^>]*contact/i, message: "Creating the contact section", announced: false },
-    { pattern: /<section[^>]*product/i, message: "Building your product showcase", announced: false },
-    { pattern: /<section[^>]*menu/i, message: "Designing the menu section", announced: false },
-    { pattern: /<section[^>]*team/i, message: "Adding your team section", announced: false },
-    { pattern: /<footer/i, message: "Finishing with the footer", announced: false },
-    { pattern: /POLLINATIONS_IMG/i, message: "Preparing custom images", announced: false },
+    {
+      pattern: /<nav/i,
+      message: "Setting up your navigation bar",
+      announced: false,
+    },
+    {
+      pattern: /hero|<header/i,
+      message: "Designing a stunning hero section",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*features/i,
+      message: "Building your feature highlights",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*about/i,
+      message: "Creating the about section",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*services/i,
+      message: "Adding your services showcase",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*pricing/i,
+      message: "Crafting the pricing table",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*testimonial/i,
+      message: "Adding customer stories",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*gallery/i,
+      message: "Setting up the image gallery",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*contact/i,
+      message: "Creating the contact section",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*product/i,
+      message: "Building your product showcase",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*menu/i,
+      message: "Designing the menu section",
+      announced: false,
+    },
+    {
+      pattern: /<section[^>]*team/i,
+      message: "Adding your team section",
+      announced: false,
+    },
+    {
+      pattern: /<footer/i,
+      message: "Finishing with the footer",
+      announced: false,
+    },
+    {
+      pattern: /POLLINATIONS_IMG/i,
+      message: "Preparing custom images",
+      announced: false,
+    },
   ];
 }
 
 function checkForNewSections(
   html: string,
   markers: SectionMarker[],
-  onProgress: (msg: string) => void
+  onProgress: (msg: string) => void,
 ): void {
   for (const marker of markers) {
     if (!marker.announced && marker.pattern.test(html)) {
@@ -316,10 +370,10 @@ function checkForNewSections(
 // ── shared lint → fix loop ───────────────────────────────────
 
 async function runLintFixLoop(
-  client: Anthropic,
+  genAI: GoogleGenerativeAI,
   initialHtml: string,
   contextPrompt: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
 ): Promise<{ html: string; report: WebsiteLintReport; attempts: number }> {
   let html = initialHtml;
   let attempts = 1;
@@ -333,27 +387,25 @@ async function runLintFixLoop(
       .map((m) => `Line ${m.line}: [${m.rule}] ${m.message}`)
       .join("\n");
 
-    const fix = await client.messages.create({
+    const model = genAI.getGenerativeModel({
       model: MODEL,
-      max_tokens: MAX_TOKENS,
-      temperature: 0.2,
-      system: SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: contextPrompt },
-        { role: "assistant", content: html },
-        {
-          role: "user",
-          content:
-            "The JavaScript in the website above has ESLint errors. " +
-            "Fix every error listed below and return the COMPLETE corrected HTML.\n\n" +
-            errorLines +
-            "\n\nRemember: const/let only, === only, no unused variables, semicolons everywhere. " +
-            "Return ONLY raw HTML.",
-        },
-      ],
+      systemInstruction: SYSTEM_PROMPT,
+      generationConfig: { maxOutputTokens: MAX_TOKENS, temperature: 0.2 },
     });
 
-    html = stripFences(getText(fix) || html);
+    const fixPrompt =
+      "Original request: " + contextPrompt +
+      "\n\nCurrent HTML:\n" + html +
+      "\n\nThe JavaScript in the website above has ESLint errors. " +
+      "Fix every error listed below and return the COMPLETE corrected HTML.\n\n" +
+      errorLines +
+      "\n\nRemember: const/let only, === only, no unused variables, semicolons everywhere. " +
+      "Return ONLY raw HTML.";
+
+    const result = await model.generateContent(fixPrompt);
+    const fixedText = result.response.text();
+
+    html = stripFences(fixedText || html);
     attempts++;
     report = await lintHtml(html);
   }
@@ -365,41 +417,40 @@ async function runLintFixLoop(
 
 export async function generateWebsite(
   prompt: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
 ): Promise<GeneratedWebsite> {
-  const client = getClient();
+  const genAI = getClient();
   const markers = createSectionMarkers();
   let fullHtml = "";
 
   // Initial progress
   onProgress?.("Starting to build your website");
 
-  // Stream the generation to get real-time progress
-  const stream = client.messages.stream({
+  const model = genAI.getGenerativeModel({
     model: MODEL,
-    max_tokens: MAX_TOKENS,
-    temperature: 0.7,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: prompt }],
+    systemInstruction: SYSTEM_PROMPT,
+    generationConfig: { maxOutputTokens: MAX_TOKENS, temperature: 0.7 },
   });
 
-  // Process chunks as they arrive
-  stream.on("text", (text) => {
+  // Stream the generation to get real-time progress
+  const result = await model.generateContentStream(prompt);
+
+  for await (const chunk of result.stream) {
+    const text = chunk.text();
     fullHtml += text;
-    checkForNewSections(fullHtml, markers, onProgress!);
-  });
-
-  // Wait for completion
-  await stream.finalMessage();
+    if (onProgress) {
+      checkForNewSections(fullHtml, markers, onProgress);
+    }
+  }
 
   const initialHtml = stripFences(fullHtml);
 
   // Lint fix loop
   const { html, report, attempts } = await runLintFixLoop(
-    client,
+    genAI,
     initialHtml,
     prompt,
-    onProgress
+    onProgress,
   );
 
   // Image injection
@@ -415,32 +466,34 @@ export async function generateWebsite(
 
 export async function editWebsite(
   currentHtml: string,
-  editPrompt: string
+  editPrompt: string,
 ): Promise<GeneratedWebsite> {
-  const client = getClient();
+  const genAI = getClient();
   const strippedHtml = stripImagesForEdit(currentHtml);
-  const res = await client.messages.create({
+
+  const model = genAI.getGenerativeModel({
     model: MODEL,
-    max_tokens: MAX_TOKENS,
-    temperature: 0.5,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content:
-          "Here is the current website HTML:\n\n" +
-          strippedHtml +
-          "\n\nEdit request: " +
-          editPrompt +
-          "\n\nApply the requested changes and return the COMPLETE modified HTML document. " +
-          "Keep all existing sections unless explicitly asked to remove them. " +
-          "Return ONLY raw HTML. No markdown fences, no explanations.",
-      },
-    ],
+    systemInstruction: SYSTEM_PROMPT,
+    generationConfig: { maxOutputTokens: MAX_TOKENS, temperature: 0.5 },
   });
 
-  const editedHtml = stripFences(getText(res) || strippedHtml);
-  const { html, report, attempts } = await runLintFixLoop(client, editedHtml, editPrompt);
+  const result = await model.generateContent(
+    "Here is the current website HTML:\n\n" +
+    strippedHtml +
+    "\n\nEdit request: " +
+    editPrompt +
+    "\n\nApply the requested changes and return the COMPLETE modified HTML document. " +
+    "Keep all existing sections unless explicitly asked to remove them. " +
+    "Return ONLY raw HTML. No markdown fences, no explanations.",
+  );
+
+  const responseText = result.response.text();
+  const editedHtml = stripFences(responseText || strippedHtml);
+  const { html, report, attempts } = await runLintFixLoop(
+    genAI,
+    editedHtml,
+    editPrompt,
+  );
   const finalHtml = await injectImages(html);
   return { html: finalHtml, lintReport: report, attempts };
 }

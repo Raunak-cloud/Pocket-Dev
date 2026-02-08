@@ -53,7 +53,8 @@ export function prepareStackBlitzFiles(project: ReactProject): StackBlitzFiles {
       "next": "^14.0.0",
       "react": "^18.2.0",
       "react-dom": "^18.2.0",
-      "lucide-react": "^0.294.0"
+      "lucide-react": "^0.294.0",
+      ...(hasAuthentication(project) ? { "firebase": "^10.7.1" } : {}),
     },
     devDependencies: {
       "@types/node": "^20",
@@ -165,6 +166,27 @@ body {
       rgb(var(--background-end-rgb))
     )
     rgb(var(--background-start-rgb));
+}`;
+  }
+
+  // Add global error handler to catch ChunkLoadError and auto-reload
+  if (!files["app/global-error.tsx"]) {
+    files["app/global-error.tsx"] = `"use client";
+import { useEffect } from "react";
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  useEffect(() => {
+    if (error.name === "ChunkLoadError" || error.message?.includes("Loading chunk")) {
+      window.location.reload();
+    }
+  }, [error]);
+  return (
+    <html><body style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", fontFamily: "system-ui", background: "#0a0a0a", color: "#fff" }}>
+      <div style={{ textAlign: "center" }}>
+        <h2 style={{ marginBottom: 16 }}>Something went wrong</h2>
+        <button onClick={() => reset()} style={{ padding: "8px 20px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Try again</button>
+      </div>
+    </body></html>
+  );
 }`;
   }
 
