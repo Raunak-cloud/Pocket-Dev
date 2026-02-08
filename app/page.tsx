@@ -23,6 +23,7 @@ import {
   orderBy,
   serverTimestamp,
   increment,
+  Timestamp,
 } from "firebase/firestore";
 import { db, storage } from "@/lib/firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -69,6 +70,14 @@ interface SavedProject {
   customDomain?: string;
   tier?: "free" | "premium";
   paidAt?: Date;
+}
+
+interface EditHistoryEntry {
+  id: string;
+  prompt: string;
+  files: GeneratedFile[];
+  dependencies: Record<string, string>;
+  timestamp: Date;
 }
 
 const EXAMPLES = [
@@ -363,6 +372,9 @@ function ReactGeneratorContent() {
   const [currentAppAuth, setCurrentAppAuth] = useState<string[]>([]);
   const [insufficientTokenMessage, setInsufficientTokenMessage] = useState<string | null>(null);
   const [editAppAuth, setEditAppAuth] = useState<string[]>([]);
+  const [editHistory, setEditHistory] = useState<EditHistoryEntry[]>([]);
+  const [showEditHistory, setShowEditHistory] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
   const [showGitHubModal, setShowGitHubModal] = useState(false);
   const [githubToken, setGithubToken] = useState("");
   const [githubRepoName, setGithubRepoName] = useState("");
@@ -382,6 +394,7 @@ function ReactGeneratorContent() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const generationCancelledRef = useRef(false);
+  const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Auto-resize textarea
@@ -572,6 +585,54 @@ function ReactGeneratorContent() {
     }
   };
 
+  // Load edit history for a project
+  const loadEditHistory = async (projectId: string) => {
+    try {
+      const historyQuery = query(
+        collection(db, "projects", projectId, "editHistory"),
+        orderBy("timestamp", "asc"),
+      );
+      const snapshot = await getDocs(historyQuery);
+      const history: EditHistoryEntry[] = snapshot.docs.map((d) => ({
+        id: d.id,
+        prompt: d.data().prompt,
+        files: d.data().files,
+        dependencies: d.data().dependencies,
+        timestamp: d.data().timestamp instanceof Timestamp
+          ? d.data().timestamp.toDate()
+          : new Date(),
+      }));
+      setEditHistory(history);
+    } catch (error) {
+      console.error("Error loading edit history:", error);
+      setEditHistory([]);
+    }
+  };
+
+  // Rollback to a previous version from edit history
+  const rollbackToVersion = async (entry: EditHistoryEntry) => {
+    if (!currentProjectId || !user) return;
+    setIsRollingBack(true);
+    try {
+      const restoredProject: ReactProject = {
+        files: entry.files,
+        dependencies: entry.dependencies,
+        lintReport: { passed: true, errors: 0, warnings: 0 },
+      };
+      setProject(restoredProject);
+      await updateProjectInFirestore(currentProjectId, restoredProject);
+      setPreviewKey((prev) => prev + 1);
+      if (publishedUrl) {
+        setHasUnpublishedChanges(true);
+      }
+    } catch (error) {
+      console.error("Error rolling back:", error);
+      setError("Failed to rollback. Please try again.");
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
   // Open a saved project
   const openSavedProject = (savedProject: SavedProject) => {
     setProject({
@@ -589,6 +650,8 @@ function ReactGeneratorContent() {
     setActiveSection("create");
     // Force StackBlitz to re-initialize with new project data
     setPreviewKey((prev) => prev + 1);
+    // Load edit history
+    loadEditHistory(savedProject.id);
   };
 
   // Delete project
@@ -612,6 +675,7 @@ function ReactGeneratorContent() {
         setPublishedUrl(null);
         setSandboxId(null);
         setHasUnpublishedChanges(false);
+        setEditHistory([]);
       }
 
       // Refresh projects list
@@ -951,6 +1015,22 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
     setShowCancelConfirm(null);
   };
 
+  // Calculate integration token cost for generation based on auth selection
+  const getGenerationIntegrationCost = () => {
+    let cost = 0;
+    if (currentAppAuth.includes("username-password")) cost += 30;
+    if (currentAppAuth.includes("google")) cost += 30;
+    return cost;
+  };
+
+  // Calculate integration token cost for edit based on auth selection
+  const getEditIntegrationCost = () => {
+    let cost = 0;
+    if (editAppAuth.includes("username-password")) cost += 30;
+    if (editAppAuth.includes("google")) cost += 30;
+    return cost > 0 ? cost : 3; // Minimum 3 for regular edits
+  };
+
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!editPrompt.trim() && editAppAuth.length === 0) || isEditing || !project) return;
@@ -966,10 +1046,12 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
       ];
       const reason = authNames.length > 0
         ? `This edit with ${authNames.join(" + ")} authentication requires ${editCost} integration tokens`
-        : `This edit requires ${editCost} integration token`;
+        : `This edit requires ${editCost} integration tokens`;
       setInsufficientTokenMessage(`${reason} but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
       setPurchaseTokenType("integration");
-      setTokenPurchaseAmount(editCost);
+      // Auto-set purchase amount based on auth selection
+      const authCount = editAppAuth.length;
+      setTokenPurchaseAmount(authCount >= 2 ? 60 : authCount === 1 ? 30 : 3);
       setShowTokenPurchaseModal(true);
       return;
     }
@@ -984,9 +1066,22 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Ro
     if (!project) return;
     setShowTokenConfirmModal(null);
     setIsEditing(true);
+    editStartTimeRef.current = Date.now();
     setError("");
     setEditProgressMessages([]);
     setIsEditMinimized(false);
+
+    // Deduct integration tokens upfront (refundable if cancelled within 10s)
+    if (user) {
+      try {
+        const editCost = getEditIntegrationCost();
+        const userRef = doc(db, "users", user.uid);
+        await updateDoc(userRef, { integrationTokens: increment(-editCost) });
+        await refreshUserData();
+      } catch (err) {
+        console.error("Error deducting tokens:", err);
+      }
+    }
 
     // Start progress simulation
     const editProgressSteps = [
@@ -1128,6 +1223,32 @@ You MUST return ALL of these exact files in your response: ${existingFilePaths}
 Even if you only modify 1-2 files, you must include ALL files in the output JSON.
 Do not skip any files. Keep unmodified files exactly as they are.`;
 
+    // Save current project state as a snapshot before applying the edit
+    if (currentProjectId && user) {
+      try {
+        const editPromptText = editPrompt.trim() || (authLabels.length > 0 ? `Add ${authLabels.join(" and ")}` : "Edit");
+        const historyRef = collection(db, "projects", currentProjectId, "editHistory");
+        const historyDoc = await addDoc(historyRef, {
+          prompt: editPromptText,
+          files: project.files,
+          dependencies: project.dependencies,
+          timestamp: serverTimestamp(),
+        });
+        setEditHistory((prev) => [
+          ...prev,
+          {
+            id: historyDoc.id,
+            prompt: editPromptText,
+            files: project.files,
+            dependencies: project.dependencies,
+            timestamp: new Date(),
+          },
+        ]);
+      } catch (historyError) {
+        console.error("Error saving edit history:", historyError);
+      }
+    }
+
     try {
       // Filter for images and PDFs (Anthropic API supports both)
       const mediaFiles = editFiles.filter(
@@ -1191,14 +1312,6 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       if (currentProjectId && user) {
         try {
           await updateProjectInFirestore(currentProjectId, mergedProject);
-
-          // Deduct integration tokens for the edit (30 per auth type, or 1 for regular edit)
-          const editCost = getEditIntegrationCost();
-          const userRef = doc(db, "users", user.uid);
-          await updateDoc(userRef, {
-            integrationTokens: increment(-editCost),
-          });
-          await refreshUserData();
 
           // Mark that there are unpublished changes
           if (publishedUrl) {
@@ -1504,21 +1617,6 @@ ${pdfUrlList}
   };
 
   // Calculate integration token cost for generation based on auth selection
-  const getGenerationIntegrationCost = () => {
-    let cost = 0;
-    if (currentAppAuth.includes("username-password")) cost += 30;
-    if (currentAppAuth.includes("google")) cost += 30;
-    return cost;
-  };
-
-  // Calculate integration token cost for edit based on auth selection
-  const getEditIntegrationCost = () => {
-    let cost = 0;
-    if (editAppAuth.includes("username-password")) cost += 30;
-    if (editAppAuth.includes("google")) cost += 30;
-    return cost > 0 ? cost : 1; // Minimum 1 for regular edits
-  };
-
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1554,7 +1652,8 @@ ${pdfUrlList}
         const deficit = integrationCost - integrationBalance;
         setInsufficientTokenMessage(`Adding ${authNames} authentication requires ${integrationCost} integration tokens but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`);
         setPurchaseTokenType("integration");
-        setTokenPurchaseAmount(integrationCost);
+        const authCount = currentAppAuth.length;
+        setTokenPurchaseAmount(authCount >= 2 ? 60 : 30);
         setShowTokenPurchaseModal(true);
         return;
       }
@@ -2071,7 +2170,7 @@ next-env.d.ts
             onToggleCollapse={setIsSidebarCollapsed}
             onBuyTokens={(tokenType) => {
               setPurchaseTokenType(tokenType);
-              setTokenPurchaseAmount(tokenType === "app" ? 2 : 1);
+              setTokenPurchaseAmount(0);
               setShowTokenPurchaseModal(true);
             }}
           />
@@ -2090,7 +2189,7 @@ next-env.d.ts
                   </svg>
                   Edit Tokens: {userData?.integrationTokens || 0}
                   <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-slate-700 text-slate-200 text-xs rounded-lg shadow-xl z-50">
-                    Each AI edit costs 1 integration token. Buy more in the Tokens section.
+                    Each AI edit costs 3 integration tokens. Buy more in the Tokens section.
                   </span>
                 </span>
                 {project.lintReport.passed ? (
@@ -2381,6 +2480,7 @@ next-env.d.ts
                     setSandboxId(null);
                     setCurrentProjectId(null);
                     setHasUnpublishedChanges(false);
+                    setEditHistory([]);
                   }}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition"
                 >
@@ -2504,7 +2604,7 @@ next-env.d.ts
               </div>
 
               {/* Integration token balance indicator */}
-              {(userData?.integrationTokens || 0) < 3 && (
+              {(userData?.integrationTokens || 0) < 6 && (
                 <div className="px-4 py-3 bg-gradient-to-r from-violet-500/10 to-blue-500/10 border-b border-violet-500/20">
                   <div className="flex items-center gap-2 mb-2">
                     <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -2515,18 +2615,75 @@ next-env.d.ts
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mb-2">
-                    {userData?.integrationTokens || 0} token{(userData?.integrationTokens || 0) !== 1 ? "s" : ""} remaining. Each edit costs 1 token.
+                    {userData?.integrationTokens || 0} token{(userData?.integrationTokens || 0) !== 1 ? "s" : ""} remaining. Each edit costs 3 tokens.
                   </p>
                   <button
                     onClick={() => {
                       setPurchaseTokenType("integration");
-                      setTokenPurchaseAmount(1);
+                      setTokenPurchaseAmount(0);
                       setShowTokenPurchaseModal(true);
                     }}
                     className="w-full px-3 py-1.5 bg-gradient-to-r from-violet-500 to-blue-500 hover:from-violet-400 hover:to-blue-400 text-white text-xs font-medium rounded-lg transition"
                   >
                     Buy Integration Tokens
                   </button>
+                </div>
+              )}
+
+              {/* Edit History */}
+              {editHistory.length > 0 && (
+                <div className="border-b border-slate-800">
+                  <button
+                    onClick={() => setShowEditHistory(!showEditHistory)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/50 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-xs font-medium text-slate-300">
+                        Edit History ({editHistory.length})
+                      </span>
+                    </div>
+                    <svg className={`w-3.5 h-3.5 text-slate-500 transition-transform ${showEditHistory ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {showEditHistory && (
+                    <div className="max-h-48 overflow-y-auto">
+                      {[...editHistory].reverse().map((entry, idx) => (
+                        <div key={entry.id} className="px-4 py-2 border-t border-slate-800/50 hover:bg-slate-800/30 group">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-slate-300 truncate" title={entry.prompt}>
+                                {entry.prompt}
+                              </p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">
+                                {entry.timestamp.toLocaleString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                                {idx === 0 && <span className="ml-1.5 text-blue-400">(latest)</span>}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => rollbackToVersion(entry)}
+                              disabled={isRollingBack || isEditing}
+                              className="flex-shrink-0 opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-md transition disabled:opacity-50"
+                              title="Rollback to this version"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                              </svg>
+                              Rollback
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3486,6 +3643,381 @@ next-env.d.ts
             </div>
           </div>
         )}
+
+        {/* Token Deduction Confirmation Modal (success view) */}
+        {showTokenConfirmModal && (() => {
+          const isGeneration = showTokenConfirmModal === "app";
+          const genIntegrationCost = getGenerationIntegrationCost();
+          const editIntCost = getEditIntegrationCost();
+          const appCost = isGeneration ? 2 : 0;
+          const integrationCost = isGeneration ? genIntegrationCost : editIntCost;
+          const appBalance = userData?.appTokens || 0;
+          const integrationBalance = userData?.integrationTokens || 0;
+
+          return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="relative px-6 pt-8 pb-4 text-center">
+                <button
+                  onClick={() => setShowTokenConfirmModal(null)}
+                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <div className={`inline-flex items-center justify-center w-14 h-14 mb-4 rounded-2xl ${
+                  isGeneration
+                    ? "bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30"
+                    : "bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30"
+                }`}>
+                  <svg className={`w-7 h-7 ${isGeneration ? "text-blue-400" : "text-violet-400"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-bold text-white mb-1">
+                  {isGeneration ? "Create New Project" : "Edit Project"}
+                </h3>
+                <p className="text-slate-400 text-sm">
+                  {isGeneration
+                    ? "This action will deduct tokens from your balance."
+                    : "This edit will deduct tokens from your balance."}
+                </p>
+              </div>
+              <div className="px-6 pb-4 space-y-3">
+                {appCost > 0 && (
+                  <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">App Tokens</span>
+                    </div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-slate-300">Project creation</span>
+                      <span className="text-sm font-bold text-blue-400">-{appCost}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                      <span>Balance: {appBalance}</span>
+                      <span>After: {appBalance - appCost}</span>
+                    </div>
+                  </div>
+                )}
+                {integrationCost > 0 && (
+                  <div className="p-4 rounded-xl border bg-violet-500/5 border-violet-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-violet-400 uppercase tracking-wide">Integration Tokens</span>
+                    </div>
+                    {!isGeneration && (
+                      <>
+                        {editAppAuth.includes("username-password") && (
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm text-slate-300">Username & Password auth</span>
+                            <span className="text-sm font-bold text-violet-400">-30</span>
+                          </div>
+                        )}
+                        {editAppAuth.includes("google") && (
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm text-slate-300">Google OAuth auth</span>
+                            <span className="text-sm font-bold text-violet-400">-30</span>
+                          </div>
+                        )}
+                        {editAppAuth.length === 0 && (
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm text-slate-300">Edit changes</span>
+                            <span className="text-sm font-bold text-violet-400">-3</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                      <span>Balance: {integrationBalance}</span>
+                      <span>After: {integrationBalance - integrationCost}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                  <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                  </svg>
+                  <p className="text-xs text-amber-200/80">
+                    Tokens are non-refundable once deducted, even if you cancel during the process.
+                  </p>
+                </div>
+              </div>
+              <div className="px-6 pb-6 space-y-2">
+                <button
+                  onClick={() => {
+                    if (isGeneration) {
+                      setShowTokenConfirmModal(null);
+                      startGeneration();
+                    } else {
+                      proceedWithEdit();
+                    }
+                  }}
+                  className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all text-white ${
+                    isGeneration
+                      ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
+                      : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                  }`}
+                >
+                  {isGeneration ? "Create Project" : "Start Edit"}
+                </button>
+                <button
+                  onClick={() => setShowTokenConfirmModal(null)}
+                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* Token Purchase Modal (success view) */}
+        {showTokenPurchaseModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
+              <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
+                <button
+                  onClick={() => { setShowTokenPurchaseModal(false); setInsufficientTokenMessage(null); }}
+                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <div className={`inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl ${
+                  purchaseTokenType === "app"
+                    ? "bg-gradient-to-br from-blue-500 to-violet-500"
+                    : "bg-gradient-to-br from-violet-500 to-purple-500"
+                }`}>
+                  <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-bold text-white mb-2">
+                  Buy {purchaseTokenType === "app" ? "App" : "Integration"} Tokens
+                </h3>
+                {insufficientTokenMessage ? (
+                  <div className="mt-1 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-left">
+                    <div className="flex items-start gap-2">
+                      <svg className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                      </svg>
+                      <p className="text-sm text-red-300">{insufficientTokenMessage}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-slate-400 text-sm">
+                    {purchaseTokenType === "app"
+                      ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
+                      : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
+                  </p>
+                )}
+                <p className="text-slate-500 text-xs mt-2">
+                  Current balance: {purchaseTokenType === "app" ? (userData?.appTokens || 0) : (userData?.integrationTokens || 0)} tokens
+                </p>
+              </div>
+              <div className="px-6 pb-3 flex-shrink-0">
+                <div className="flex bg-slate-800 rounded-lg p-1">
+                  <button
+                    onClick={() => { setPurchaseTokenType("app"); setTokenPurchaseAmount(0); }}
+                    className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
+                      purchaseTokenType === "app" ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    App Tokens
+                  </button>
+                  <button
+                    onClick={() => { setPurchaseTokenType("integration"); setTokenPurchaseAmount(0); }}
+                    className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
+                      purchaseTokenType === "integration" ? "bg-violet-600 text-white" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Integration Tokens
+                  </button>
+                </div>
+              </div>
+              <div className="px-6 py-4 overflow-y-auto flex-1">
+                <p className="text-xs text-slate-400 mb-3">
+                  {purchaseTokenType === "app" ? "1 AUD = 1 app token" : "1 AUD = 10 integration tokens"}
+                </p>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  {(purchaseTokenType === "app"
+                    ? [
+                        { aud: 2, tokens: 2, label: "2 tokens" },
+                        { aud: 5, tokens: 5, label: "5 tokens" },
+                        { aud: 10, tokens: 10, label: "10 tokens" },
+                        { aud: 20, tokens: 20, label: "20 tokens" },
+                      ]
+                    : [
+                        { aud: 1, tokens: 10, label: "10 tokens" },
+                        { aud: 5, tokens: 50, label: "50 tokens" },
+                        { aud: 10, tokens: 100, label: "100 tokens" },
+                        { aud: 20, tokens: 200, label: "200 tokens" },
+                      ]
+                  ).map((option) => (
+                    <button
+                      key={option.aud}
+                      onClick={() => setTokenPurchaseAmount(option.aud)}
+                      className={`p-3 rounded-xl border-2 transition-all text-left ${
+                        tokenPurchaseAmount === option.aud
+                          ? purchaseTokenType === "app"
+                            ? "border-blue-500 bg-blue-500/10"
+                            : "border-violet-500 bg-violet-500/10"
+                          : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                      }`}
+                    >
+                      <div className="text-lg font-bold text-white">${option.aud} AUD</div>
+                      <div className={`text-xs ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}>
+                        {option.label}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">$</span>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="Custom amount"
+                    value={tokenPurchaseAmount || ""}
+                    onChange={(e) => setTokenPurchaseAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                    className={`w-full pl-7 pr-16 py-2.5 bg-slate-800/50 border rounded-xl text-white text-sm font-medium focus:outline-none transition placeholder-slate-500 ${
+                      purchaseTokenType === "app"
+                        ? "border-blue-500/30 focus:border-blue-500"
+                        : "border-violet-500/30 focus:border-violet-500"
+                    }`}
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">AUD</span>
+                </div>
+                {tokenPurchaseAmount > 0 && (
+                  <div className={`mt-3 p-3 rounded-xl border ${
+                    purchaseTokenType === "app" ? "bg-blue-500/5 border-blue-500/20" : "bg-violet-500/5 border-violet-500/20"
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-slate-300">You&apos;ll receive</span>
+                      <span className={`text-lg font-bold ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}>
+                        {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="px-6 pb-6 space-y-3 flex-shrink-0">
+                {tokenPurchaseAmount > 0 && (
+                  <button
+                    onClick={purchaseTokens}
+                    disabled={isProcessingTokenPurchase}
+                    className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
+                      purchaseTokenType === "app"
+                        ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
+                        : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                    }`}
+                  >
+                    {isProcessingTokenPurchase ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                        </svg>
+                        Pay ${tokenPurchaseAmount} AUD - {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
+                      </>
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={() => { setShowTokenPurchaseModal(false); setInsufficientTokenMessage(null); }}
+                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                >
+                  Cancel
+                </button>
+                {tokenPurchaseAmount > 0 && (
+                  <p className="text-xs text-slate-500 text-center">
+                    Secure payment powered by Stripe
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cancel Confirmation Modal (success view) */}
+        {showCancelConfirm && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="relative px-6 pt-8 pb-4 text-center">
+                <button
+                  onClick={() => setShowCancelConfirm(null)}
+                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-amber-500/20 rounded-2xl">
+                  <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-bold text-white mb-2">
+                  {showCancelConfirm === "generation" ? "Cancel Generation?" : "Cancel Editing?"}
+                </h3>
+                <p className="text-slate-400 text-sm">
+                  {showCancelConfirm === "generation"
+                    ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost."
+                    : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost."}
+                </p>
+                {showCancelConfirm === "edit" && (Date.now() - editStartTimeRef.current) < 10000 && (
+                  <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                    <p className="text-xs text-emerald-300">Cancelling now will refund your integration tokens.</p>
+                  </div>
+                )}
+                {showCancelConfirm === "edit" && (Date.now() - editStartTimeRef.current) >= 10000 && (
+                  <div className="mt-3 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                    <p className="text-xs text-amber-300">More than 10 seconds have passed. Tokens cannot be refunded.</p>
+                  </div>
+                )}
+              </div>
+              <div className="px-6 pb-6 flex gap-3">
+                <button
+                  onClick={() => setShowCancelConfirm(null)}
+                  className="flex-1 px-4 py-2.5 text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-medium transition"
+                >
+                  Keep Going
+                </button>
+                <button
+                  onClick={async () => {
+                    if (showCancelConfirm === "generation") {
+                      confirmCancelGeneration();
+                    } else {
+                      const withinRefundWindow = (Date.now() - editStartTimeRef.current) < 10000;
+                      setIsEditing(false);
+                      setEditProgressMessages([]);
+                      setShowCancelConfirm(null);
+                      if (withinRefundWindow && user) {
+                        try {
+                          const editCost = getEditIntegrationCost();
+                          const userRef = doc(db, "users", user.uid);
+                          await updateDoc(userRef, { integrationTokens: increment(editCost) });
+                          await refreshUserData();
+                        } catch (err) {
+                          console.error("Error refunding tokens:", err);
+                        }
+                      }
+                    }
+                  }}
+                  className="flex-1 px-4 py-2.5 text-white bg-red-600 hover:bg-red-500 rounded-xl text-sm font-medium transition"
+                >
+                  Yes, Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -3769,12 +4301,12 @@ next-env.d.ts
                   }
                 }}
                 rows={1}
-                className="w-full px-4 pt-4 pb-14 bg-transparent text-white focus:outline-none resize-none text-base relative z-10"
+                className="w-full px-4 pt-4 pb-14 bg-transparent text-white focus:outline-none resize-none text-base relative z-[1]"
                 style={{ minHeight: "52px", maxHeight: "150px" }}
               />
 
               {/* Bottom bar */}
-              <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2.5 bg-slate-900/50">
+              <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2.5 bg-slate-900/50 z-[2]">
                 <div className="flex items-center gap-1">
                   <input
                     ref={fileInputRef}
@@ -4235,7 +4767,7 @@ next-env.d.ts
           onToggleCollapse={setIsSidebarCollapsed}
           onBuyTokens={(tokenType) => {
             setPurchaseTokenType(tokenType);
-            setTokenPurchaseAmount(tokenType === "app" ? 2 : 1);
+            setTokenPurchaseAmount(0);
             setShowTokenPurchaseModal(true);
           }}
         />
@@ -4275,33 +4807,13 @@ next-env.d.ts
                 onClick={() => setShowCancelConfirm(null)}
                 className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
               <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-amber-500/20 rounded-2xl">
-                <svg
-                  className="w-8 h-8 text-amber-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                  />
+                <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
               <h3 className="text-xl font-bold text-white mb-2">
@@ -4314,6 +4826,16 @@ next-env.d.ts
                   ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost."
                   : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost."}
               </p>
+              {showCancelConfirm === "edit" && (Date.now() - editStartTimeRef.current) < 10000 && (
+                <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                  <p className="text-xs text-emerald-300">Cancelling now will refund your integration tokens.</p>
+                </div>
+              )}
+              {showCancelConfirm === "edit" && (Date.now() - editStartTimeRef.current) >= 10000 && (
+                <div className="mt-3 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                  <p className="text-xs text-amber-300">More than 10 seconds have passed. Tokens cannot be refunded.</p>
+                </div>
+              )}
             </div>
             <div className="px-6 pb-6 flex gap-3">
               <button
@@ -4323,13 +4845,24 @@ next-env.d.ts
                 Keep Going
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (showCancelConfirm === "generation") {
                     confirmCancelGeneration();
                   } else {
+                    const withinRefundWindow = (Date.now() - editStartTimeRef.current) < 10000;
                     setIsEditing(false);
                     setEditProgressMessages([]);
                     setShowCancelConfirm(null);
+                    if (withinRefundWindow && user) {
+                      try {
+                        const editCost = getEditIntegrationCost();
+                        const userRef = doc(db, "users", user.uid);
+                        await updateDoc(userRef, { integrationTokens: increment(editCost) });
+                        await refreshUserData();
+                      } catch (err) {
+                        console.error("Error refunding tokens:", err);
+                      }
+                    }
                   }
                 }}
                 className="flex-1 px-4 py-2.5 text-white bg-red-600 hover:bg-red-500 rounded-xl text-sm font-medium transition"
@@ -4657,7 +5190,7 @@ next-env.d.ts
                       {editAppAuth.length === 0 && (
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-sm text-slate-300">Edit changes</span>
-                          <span className="text-sm font-bold text-violet-400">-1</span>
+                          <span className="text-sm font-bold text-violet-400">-3</span>
                         </div>
                       )}
                     </>
@@ -4928,7 +5461,7 @@ next-env.d.ts
                 <p className="text-slate-400 text-sm">
                   {purchaseTokenType === "app"
                     ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
-                    : "Integration tokens are used for AI edits and backend/API calls (1 token per action)."}
+                    : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
                 </p>
               )}
               <p className="text-slate-500 text-xs mt-2">
@@ -4942,7 +5475,7 @@ next-env.d.ts
                 <button
                   onClick={() => {
                     setPurchaseTokenType("app");
-                    setTokenPurchaseAmount(2);
+                    setTokenPurchaseAmount(0);
                   }}
                   className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
                     purchaseTokenType === "app"
@@ -4955,7 +5488,7 @@ next-env.d.ts
                 <button
                   onClick={() => {
                     setPurchaseTokenType("integration");
-                    setTokenPurchaseAmount(1);
+                    setTokenPurchaseAmount(0);
                   }}
                   className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
                     purchaseTokenType === "integration"
@@ -4975,7 +5508,7 @@ next-env.d.ts
                   ? "1 AUD = 1 app token"
                   : "1 AUD = 10 integration tokens"}
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2 mb-3">
                 {(purchaseTokenType === "app"
                   ? [
                       { aud: 2, tokens: 2, label: "2 tokens" },
@@ -5010,42 +5543,74 @@ next-env.d.ts
                   </button>
                 ))}
               </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">$</span>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="Custom amount"
+                  value={tokenPurchaseAmount || ""}
+                  onChange={(e) => setTokenPurchaseAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                  className={`w-full pl-7 pr-16 py-2.5 bg-slate-800/50 border rounded-xl text-white text-sm font-medium focus:outline-none transition placeholder-slate-500 ${
+                    purchaseTokenType === "app"
+                      ? "border-blue-500/30 focus:border-blue-500"
+                      : "border-violet-500/30 focus:border-violet-500"
+                  }`}
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">AUD</span>
+              </div>
+              {tokenPurchaseAmount > 0 && (
+                <div className={`mt-3 p-3 rounded-xl border ${
+                  purchaseTokenType === "app" ? "bg-blue-500/5 border-blue-500/20" : "bg-violet-500/5 border-violet-500/20"
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-300">You&apos;ll receive</span>
+                    <span className={`text-lg font-bold ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}>
+                      {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Footer */}
             <div className="px-6 pb-6 space-y-3 flex-shrink-0">
-              <button
-                onClick={purchaseTokens}
-                disabled={isProcessingTokenPurchase}
-                className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                  purchaseTokenType === "app"
-                    ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                    : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
-                }`}
-              >
-                {isProcessingTokenPurchase ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                    </svg>
-                    Pay ${tokenPurchaseAmount} AUD - {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
-                  </>
-                )}
-              </button>
+              {tokenPurchaseAmount > 0 && (
+                <button
+                  onClick={purchaseTokens}
+                  disabled={isProcessingTokenPurchase}
+                  className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
+                    purchaseTokenType === "app"
+                      ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
+                      : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                  }`}
+                >
+                  {isProcessingTokenPurchase ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                      </svg>
+                      Pay ${tokenPurchaseAmount} AUD - {purchaseTokenType === "app" ? tokenPurchaseAmount : tokenPurchaseAmount * 10} tokens
+                    </>
+                  )}
+                </button>
+              )}
               <button
                 onClick={() => { setShowTokenPurchaseModal(false); setInsufficientTokenMessage(null); }}
                 className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
               >
                 Cancel
               </button>
-              <p className="text-xs text-slate-500 text-center">
-                Secure payment powered by Stripe
-              </p>
+              {tokenPurchaseAmount > 0 && (
+                <p className="text-xs text-slate-500 text-center">
+                  Secure payment powered by Stripe
+                </p>
+              )}
             </div>
           </div>
         </div>

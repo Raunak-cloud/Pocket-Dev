@@ -185,41 +185,41 @@ export default function GenerationProgress({
         </div>
 
         {/* Header section */}
-        <div className="px-6 pt-6 pb-4 text-center">
+        <div className="px-8 pt-8 pb-5 text-center">
           {/* Logo with glow */}
-          <div className="relative inline-flex mb-3">
+          <div className="relative inline-flex mb-4">
             <div className="absolute inset-0 blur-xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-25 scale-150" />
-            <div className="relative p-2.5 rounded-2xl bg-gradient-to-br from-slate-800/80 to-slate-800/40 ring-1 ring-white/[0.08]">
-              <Logo size={32} animate />
+            <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-slate-800/80 to-slate-800/40 ring-1 ring-white/[0.08]">
+              <Logo size={40} animate />
             </div>
           </div>
 
-          <h2 className="text-base font-semibold text-white tracking-tight mb-1">
+          <h2 className="text-xl font-bold text-white tracking-tight mb-2">
             {isEditMode ? "Editing your app" : `Building ${getAppType()}`}
           </h2>
-          <p className="text-slate-400 text-xs leading-relaxed max-w-xs mx-auto line-clamp-2">
+          <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto line-clamp-2">
             {cleanPrompt}
           </p>
         </div>
 
         {/* Progress section */}
-        <div className="px-6 pb-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+        <div className="px-8 pb-5">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">
               Progress
             </span>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-500">
+              <span className="text-xs text-slate-500">
                 {isEditMode ? "5-7 min" : "~5-7 min"}
               </span>
-              <span className="text-xs font-semibold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
+              <span className="text-sm font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
                 {Math.round(progress)}%
               </span>
             </div>
           </div>
 
           {/* Fancy progress bar */}
-          <div className="relative h-2 bg-slate-800/80 rounded-full overflow-hidden ring-1 ring-white/[0.04]">
+          <div className="relative h-2.5 bg-slate-800/80 rounded-full overflow-hidden ring-1 ring-white/[0.04]">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-500 rounded-full transition-all duration-700 ease-out"
               style={{ width: `${progress}%` }}
@@ -238,10 +238,10 @@ export default function GenerationProgress({
         </div>
 
         {/* Divider */}
-        <div className="mx-6 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
+        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
 
         {/* Steps list */}
-        <div className="flex-1 px-3 py-3 overflow-y-auto">
+        <div className="flex-1 px-5 py-4 overflow-y-auto">
           {steps.map((step, i) => {
             const isCompleted = i < currentStep - 1;
             const isCurrent = i === currentStep - 1;
@@ -249,7 +249,7 @@ export default function GenerationProgress({
             return (
               <div
                 key={step.id}
-                className={`relative flex items-center gap-3 px-3 py-[7px] rounded-xl transition-all duration-400 ${
+                className={`relative flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-400 ${
                   isCurrent
                     ? "bg-gradient-to-r from-blue-500/[0.08] to-violet-500/[0.04]"
                     : ""
@@ -258,7 +258,7 @@ export default function GenerationProgress({
                 {/* Vertical line connector */}
                 {i < steps.length - 1 && (
                   <div
-                    className={`absolute left-[23px] top-[28px] w-px h-[calc(100%-14px)] transition-colors duration-500 ${
+                    className={`absolute left-[27px] top-[36px] w-px h-[calc(100%-20px)] transition-colors duration-500 ${
                       isCompleted ? "bg-emerald-500/30" : "bg-slate-700/40"
                     }`}
                   />
@@ -267,9 +267,9 @@ export default function GenerationProgress({
                 {/* Step indicator */}
                 <div className="relative flex-shrink-0 z-10">
                   {isCompleted ? (
-                    <div className="w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center ring-1 ring-emerald-500/30">
+                    <div className="w-6 h-6 rounded-full bg-emerald-500/15 flex items-center justify-center ring-1 ring-emerald-500/30">
                       <svg
-                        className="w-3 h-3 text-emerald-400"
+                        className="w-3.5 h-3.5 text-emerald-400"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -283,12 +283,12 @@ export default function GenerationProgress({
                       </svg>
                     </div>
                   ) : isCurrent ? (
-                    <div className="w-5 h-5 rounded-full bg-blue-500/15 flex items-center justify-center ring-1 ring-blue-500/40">
-                      <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                    <div className="w-6 h-6 rounded-full bg-blue-500/15 flex items-center justify-center ring-1 ring-blue-500/40">
+                      <div className="w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
                     </div>
                   ) : (
-                    <div className="w-5 h-5 rounded-full bg-slate-800/60 flex items-center justify-center ring-1 ring-slate-700/40">
-                      <div className="w-1.5 h-1.5 bg-slate-600 rounded-full" />
+                    <div className="w-6 h-6 rounded-full bg-slate-800/60 flex items-center justify-center ring-1 ring-slate-700/40">
+                      <div className="w-2 h-2 bg-slate-600 rounded-full" />
                     </div>
                   )}
                 </div>
@@ -304,7 +304,7 @@ export default function GenerationProgress({
                   }`}
                 >
                   <svg
-                    className="w-3.5 h-3.5"
+                    className="w-4.5 h-4.5"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -320,7 +320,7 @@ export default function GenerationProgress({
 
                 {/* Label */}
                 <span
-                  className={`text-[13px] transition-all duration-300 ${
+                  className={`text-[15px] transition-all duration-300 ${
                     isCompleted
                       ? "text-slate-500"
                       : isCurrent
@@ -335,7 +335,7 @@ export default function GenerationProgress({
                 {isCurrent && (
                   <div className="ml-auto flex items-center gap-2">
                     <svg
-                      className="w-3.5 h-3.5 text-blue-400/70 animate-spin"
+                      className="w-4 h-4 text-blue-400/70 animate-spin"
                       fill="none"
                       viewBox="0 0 24 24"
                     >
@@ -358,7 +358,7 @@ export default function GenerationProgress({
 
                 {/* Completed check badge */}
                 {isCompleted && (
-                  <span className="ml-auto text-[10px] text-emerald-500/50 font-medium">
+                  <span className="ml-auto text-xs text-emerald-500/50 font-medium">
                     Done
                   </span>
                 )}
@@ -368,17 +368,17 @@ export default function GenerationProgress({
         </div>
 
         {/* Divider */}
-        <div className="mx-6 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
+        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
 
         {/* Actions */}
-        <div className="px-6 py-3 flex items-center justify-center gap-2">
+        <div className="px-8 py-4 flex items-center justify-center gap-3">
           {onToggleMinimize && (
             <button
               onClick={onToggleMinimize}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-700/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-700/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
             >
               <svg
-                className="w-3 h-3"
+                className="w-3.5 h-3.5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -396,10 +396,10 @@ export default function GenerationProgress({
           {onCancel && (
             <button
               onClick={onCancel}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
             >
               <svg
-                className="w-3 h-3"
+                className="w-3.5 h-3.5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
