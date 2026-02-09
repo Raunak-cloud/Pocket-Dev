@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { lintCode } from "./eslint-lint";
 import { getUILibraryContext, closeMCPClient } from "./mcp-client";
 
@@ -36,14 +36,28 @@ const BASE_SYSTEM_PROMPT = `You are an expert Next.js developer who creates prof
 5. All code must be properly linted (no unused vars, use const/let, semicolons)
 6. Every component must be complete with real content (no placeholders)
 
-📸 USER-UPLOADED IMAGES:
-If the user provides image URLs (Firebase Storage URLs starting with https://), you MUST:
-- Use EXACTLY those URLs in your img src attributes
-- Example: <img src="https://firebasestorage.googleapis.com/..." alt="User uploaded image" className="w-full h-auto" />
-- DO NOT use placeholder URLs like via.placeholder.com or unsplash when user has uploaded images
+📸 IMAGES — USE POLLINATIONS AI (MANDATORY):
+For ALL images in the generated app, you MUST use Pollinations AI URLs:
+- Format: https://image.pollinations.ai/prompt/{URL_ENCODED_DESCRIPTION}?width={W}&height={H}&nologo=true
+- The description should be a detailed, vivid prompt describing the desired image
+- URL-encode the description (spaces become %20, etc.)
+- Always set width/height appropriate to the context (hero: 1200x600, card: 600x400, avatar: 200x200, product: 500x500)
+- Add &nologo=true to remove watermark
+- NEVER use images.unsplash.com, via.placeholder.com, picsum.photos, or any other image source
+- ONLY allowed image sources: image.pollinations.ai and firebasestorage.googleapis.com (for user uploads)
+
+Examples:
+- Hero: <img src="https://image.pollinations.ai/prompt/modern%20minimalist%20workspace%20with%20laptop%20and%20coffee%20cup%20on%20clean%20white%20desk?width=1200&height=600&nologo=true" alt="Modern workspace" className="w-full h-auto" />
+- Product: <img src="https://image.pollinations.ai/prompt/sleek%20wireless%20bluetooth%20headphones%20product%20photo%20on%20white%20background?width=500&height=500&nologo=true" alt="Wireless headphones" className="w-full h-auto" />
+- Food: <img src="https://image.pollinations.ai/prompt/gourmet%20margherita%20pizza%20with%20fresh%20basil%20on%20wooden%20board%20restaurant%20photography?width=600&height=400&nologo=true" alt="Margherita pizza" className="w-full h-auto" />
+- Portrait: <img src="https://image.pollinations.ai/prompt/professional%20headshot%20of%20a%20smiling%20business%20person%20in%20modern%20office?width=300&height=300&nologo=true" alt="Team member" className="w-full h-auto rounded-full" />
+
+🚨 CRITICAL: Every <img> tag MUST use a https://image.pollinations.ai/prompt/... URL. Do NOT use any other image domain.
+
+📸 USER-UPLOADED IMAGES (override):
+If the user provides image URLs (Firebase Storage URLs starting with https://firebasestorage.googleapis.com), you MUST:
+- Use EXACTLY those URLs instead of Pollinations for those specific images
 - Place the user's images prominently (hero sections, galleries, cards, etc.)
-- The user expects to see their ACTUAL uploaded images in the generated website
-- These are real hosted images, not placeholders
 
 For design reference (when images are shown visually):
 - Carefully analyze the design, layout, colors, typography, and style from the images
@@ -907,7 +921,7 @@ NEXT.JS REQUIREMENTS:
 - Follow Next.js naming: page.tsx (route), layout.tsx (layout), loading.tsx (optional)
 - Use proper TypeScript types for props and params
 - IMPORTANT: Use regular <img> tags for images (NOT next/image) - it requires extra configuration for external URLs
-- Example: <img src="https://images.unsplash.com/..." alt="Description" className="w-full h-auto" />
+- IMPORTANT: Use Pollinations AI for ALL images: <img src="https://image.pollinations.ai/prompt/DESCRIPTION?width=800&height=600&nologo=true" alt="Description" className="w-full h-auto" />
 
 CODE REQUIREMENTS:
 
@@ -928,7 +942,8 @@ CONTENT REQUIREMENTS:
 ✅ Products/menu items: minimum 8-12 with descriptions and prices
 ✅ About sections: 3-4 full paragraphs
 ✅ Use regular <img> tags for all images (NOT next/image)
-✅ Allowed image sources: images.unsplash.com, via.placeholder.com, firebasestorage.googleapis.com, picsum.photos
+✅ ALL images MUST use https://image.pollinations.ai/prompt/{DESCRIPTION}?width={W}&height={H}&nologo=true
+✅ NEVER use unsplash, placeholder.com, or picsum — ONLY Pollinations AI URLs
 
 ROUTING SETUP:
 
@@ -1124,6 +1139,173 @@ export interface GeneratedReactProject {
   attempts: number;
 }
 
+/** Known npm package versions for auto-detection from import statements */
+const KNOWN_PACKAGES: Record<string, string> = {
+  // Animation
+  'framer-motion': '^10.16.4',
+  'gsap': '^3.12.2',
+  'animejs': '^3.2.2',
+  '@react-spring/web': '^9.7.3',
+
+  // UI Libraries
+  'lucide-react': '^0.294.0',
+  'react-icons': '^4.12.0',
+  '@heroicons/react': '^2.0.18',
+  '@phosphor-icons/react': '^2.0.15',
+
+  // Utility
+  'clsx': '^2.0.0',
+  'tailwind-merge': '^2.0.0',
+  'class-variance-authority': '^0.7.0',
+  'date-fns': '^2.30.0',
+  'dayjs': '^1.11.10',
+  'lodash': '^4.17.21',
+  'uuid': '^9.0.0',
+  'nanoid': '^5.0.3',
+  'axios': '^1.6.2',
+  'zod': '^3.22.4',
+
+  // UI Components
+  '@radix-ui/react-dialog': '^1.0.5',
+  '@radix-ui/react-dropdown-menu': '^2.0.6',
+  '@radix-ui/react-slot': '^1.0.2',
+  '@radix-ui/react-tabs': '^1.0.4',
+  '@radix-ui/react-toast': '^1.1.5',
+  '@radix-ui/react-tooltip': '^1.0.7',
+  '@radix-ui/react-accordion': '^1.1.2',
+  '@radix-ui/react-avatar': '^1.0.4',
+  '@radix-ui/react-checkbox': '^1.0.4',
+  '@radix-ui/react-select': '^2.0.0',
+  '@radix-ui/react-switch': '^1.0.3',
+  '@radix-ui/react-popover': '^1.0.7',
+  '@headlessui/react': '^1.7.17',
+
+  // Charts
+  'recharts': '^2.10.1',
+  'chart.js': '^4.4.1',
+  'react-chartjs-2': '^5.2.0',
+  'd3': '^7.8.5',
+
+  // Forms
+  'react-hook-form': '^7.48.2',
+  '@hookform/resolvers': '^3.3.2',
+  'formik': '^2.4.5',
+
+  // State
+  'zustand': '^4.4.6',
+  'jotai': '^2.5.1',
+  '@tanstack/react-query': '^5.8.4',
+  'swr': '^2.2.4',
+
+  // Maps & Media
+  'react-map-gl': '^7.1.6',
+  'mapbox-gl': '^3.0.1',
+  'react-player': '^2.13.0',
+  'swiper': '^11.0.5',
+  'embla-carousel-react': '^8.0.0',
+
+  // Markdown & Editor
+  'react-markdown': '^9.0.1',
+  'react-syntax-highlighter': '^15.5.0',
+  '@tiptap/react': '^2.1.13',
+
+  // Toast/Notification
+  'react-hot-toast': '^2.4.1',
+  'sonner': '^1.2.4',
+  'react-toastify': '^9.1.3',
+
+  // Firebase
+  'firebase': '^10.13.0',
+
+  // Stripe
+  '@stripe/stripe-js': '^2.3.0',
+  '@stripe/react-stripe-js': '^2.4.0',
+
+  // Three.js / 3D
+  'three': '^0.159.0',
+  '@react-three/fiber': '^8.15.12',
+  '@react-three/drei': '^9.92.1',
+
+  // Misc
+  'react-countup': '^6.5.0',
+  'react-intersection-observer': '^9.5.3',
+  'react-type-animation': '^3.2.0',
+  'next-themes': '^0.2.1',
+  'sharp': '^0.33.0',
+};
+
+/** Scan generated files for import/require statements and ensure all
+ *  external packages are included in the dependencies object.
+ */
+function detectAndAddMissingDependencies(
+  files: GeneratedFile[],
+  dependencies: Record<string, string>,
+): Record<string, string> {
+  const detected = new Set<string>();
+
+  for (const file of files) {
+    if (!file.path.endsWith('.tsx') && !file.path.endsWith('.ts') &&
+        !file.path.endsWith('.jsx') && !file.path.endsWith('.js')) {
+      continue;
+    }
+
+    // Match: import ... from 'package' or import ... from "package"
+    // Also matches: import 'package' (side-effect imports)
+    const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'".\/][^'"]*)['"]/g;
+    let match;
+    while ((match = importRegex.exec(file.content)) !== null) {
+      let pkg = match[1];
+      // For scoped packages like @radix-ui/react-dialog, keep the full scope
+      // For regular packages like framer-motion/something, take just framer-motion
+      if (pkg.startsWith('@')) {
+        // Scoped: @scope/name or @scope/name/subpath → @scope/name
+        const parts = pkg.split('/');
+        pkg = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : pkg;
+      } else {
+        // Regular: name or name/subpath → name
+        pkg = pkg.split('/')[0];
+      }
+
+      // Skip Next.js path aliases (@/ is project root alias)
+      if (pkg.startsWith('@/') || pkg.startsWith('~')) {
+        continue;
+      }
+
+      // Skip built-in Next.js/React modules and Node.js builtins
+      if (['react', 'react-dom', 'next',
+           'fs', 'path', 'os', 'crypto', 'stream', 'util', 'events',
+           'http', 'https', 'url', 'querystring', 'buffer', 'child_process',
+          ].includes(pkg)) {
+        continue;
+      }
+
+      detected.add(pkg);
+    }
+  }
+
+  // Add missing dependencies
+  let added = 0;
+  for (const pkg of detected) {
+    if (!dependencies[pkg]) {
+      const version = KNOWN_PACKAGES[pkg] || 'latest';
+      dependencies[pkg] = version;
+      added++;
+      console.log(`📦 Auto-detected dependency: ${pkg}@${version}`);
+    }
+  }
+
+  // Always ensure core Next.js deps are present
+  if (!dependencies['next']) dependencies['next'] = '^14.0.0';
+  if (!dependencies['react']) dependencies['react'] = '^18.2.0';
+  if (!dependencies['react-dom']) dependencies['react-dom'] = '^18.2.0';
+
+  if (added > 0) {
+    console.log(`📦 Added ${added} missing dependencies from import analysis`);
+  }
+
+  return dependencies;
+}
+
 /** Extract JSON from various formats */
 function extractJSON(text: string): string {
   // Remove any markdown code blocks
@@ -1148,79 +1330,136 @@ function extractJSON(text: string): string {
   return text;
 }
 
-/** Smart JSON recovery - attempts to complete truncated JSON */
-function recoverJSON(text: string): string {
-  try {
-    // Try parsing as-is first
-    JSON.parse(text);
-    return text;
-  } catch (e) {
-    console.log("JSON parse failed, attempting recovery...");
-
-    // Remove any trailing commas before closing braces/brackets
-    text = text.replace(/,(\s*[}\]])/g, '$1');
-
-    // Fix common issues with escaped characters
-    // Remove any incomplete escape sequences at the end
-    text = text.replace(/\\+$/, '');
-
-    // Count braces and brackets
-    let braceCount = 0;
-    let bracketCount = 0;
-    let inString = false;
-    let escape = false;
-    let lastNonWhitespace = '';
-
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (char === '\\') {
-        escape = true;
-        continue;
-      }
-      if (char === '"') {
-        inString = !inString;
-      }
-      if (inString) continue;
-
-      if (char === '{') braceCount++;
-      if (char === '}') braceCount--;
-      if (char === '[') bracketCount++;
-      if (char === ']') bracketCount--;
-
-      if (char.trim()) {
-        lastNonWhitespace = char;
-      }
-    }
-
-    // Close any open strings
-    if (inString) {
-      text += '"';
-      // If we just closed a string, might need a comma or closing bracket
-      if (lastNonWhitespace !== ',' && lastNonWhitespace !== '[' && lastNonWhitespace !== '{') {
-        // Check what should come next based on context
-        const trimmed = text.trimEnd();
-        if (!trimmed.endsWith(',') && !trimmed.endsWith('[') && !trimmed.endsWith('{')) {
-          // Likely in an array or object, might need to close it
-        }
-      }
-    }
-
-    // Close any unclosed arrays
-    text += ']'.repeat(Math.max(0, bracketCount));
-
-    // Close any unclosed objects
-    text += '}'.repeat(Math.max(0, braceCount));
-
-    // Try to fix trailing commas again after closing
-    text = text.replace(/,(\s*[}\]])/g, '$1');
-
-    return text;
+/** Fix double-escaped JSON from Gemini.
+ * Gemini sometimes returns JSON with literal \n instead of actual newlines,
+ * and \" instead of " for structural quotes. This makes the JSON unparseable
+ * because position 1 becomes a backslash instead of a quote or closing brace.
+ */
+function fixDoubleEscapedJSON(text: string): string | null {
+  // Quick check: if the text starts with {\ it's likely double-escaped
+  // (valid JSON would have { followed by " or whitespace or })
+  if (text.length < 3 || text[0] !== '{' || text[1] !== '\\') {
+    return null;
   }
+
+  console.log("Detected double-escaped JSON, attempting to unescape...");
+
+  // Method 1: Try treating the entire text as a JSON string value
+  // If Gemini returned the JSON as if it were inside quotes, this will work
+  try {
+    const unescaped = JSON.parse(`"${text}"`);
+    JSON.parse(unescaped); // Verify the unescaped result is valid JSON
+    console.log("Fixed double-escaped JSON via JSON.parse string method");
+    return unescaped;
+  } catch {
+    // Fall through to manual method
+  }
+
+  // Method 2: Manual unescape - carefully unescape one level of escaping
+  // The key insight: in double-escaped JSON, structural escapes use \n, \", etc.
+  // while content-level escapes use \\n, \\\", etc. (one more level of escaping)
+  try {
+    let fixed = text;
+
+    // Step 1: Protect content-level escapes (double-escaped → placeholder)
+    // Order matters: longer sequences first to avoid partial matches
+    fixed = fixed.replace(/\\\\\\\\/g, '\x00BS\x00');   // \\\\ (4 chars) → placeholder (escaped backslash in content)
+    fixed = fixed.replace(/\\\\\\"/g, '\x00QT\x00');    // \\\" (4 chars) → placeholder (escaped quote in content)
+    fixed = fixed.replace(/\\\\n/g, '\x00NL\x00');      // \\n (3 chars) → placeholder (newline in content)
+    fixed = fixed.replace(/\\\\t/g, '\x00TB\x00');      // \\t (3 chars) → placeholder (tab in content)
+    fixed = fixed.replace(/\\\\r/g, '\x00CR\x00');      // \\r (3 chars) → placeholder (cr in content)
+
+    // Step 2: Unescape structural escapes
+    fixed = fixed.replace(/\\n/g, '\n');   // structural newline
+    fixed = fixed.replace(/\\t/g, '\t');   // structural tab
+    fixed = fixed.replace(/\\r/g, '\r');   // structural carriage return
+    fixed = fixed.replace(/\\"/g, '"');    // structural quote
+    fixed = fixed.replace(/\\\\/g, '\\');  // structural backslash
+
+    // Step 3: Restore content-level escapes
+    fixed = fixed.replace(/\x00BS\x00/g, '\\\\');
+    fixed = fixed.replace(/\x00QT\x00/g, '\\"');
+    fixed = fixed.replace(/\x00NL\x00/g, '\\n');
+    fixed = fixed.replace(/\x00TB\x00/g, '\\t');
+    fixed = fixed.replace(/\x00CR\x00/g, '\\r');
+
+    JSON.parse(fixed); // Verify it's valid
+    console.log("Fixed double-escaped JSON via manual unescape");
+    return fixed;
+  } catch {
+    console.log("Manual double-escape fix failed");
+  }
+
+  return null;
+}
+
+/** Recovery for truncated JSON - safely close unclosed braces/brackets */
+function recoverTruncatedJSON(text: string): string {
+  // Remove trailing commas
+  text = text.replace(/,(\s*[}\]])/g, '$1');
+
+  // Count braces and brackets (respecting strings)
+  let braceCount = 0;
+  let bracketCount = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (escape) { escape = false; continue; }
+    if (char === '\\') { escape = true; continue; }
+    if (char === '"') { inString = !inString; }
+    if (inString) continue;
+    if (char === '{') braceCount++;
+    if (char === '}') braceCount--;
+    if (char === '[') bracketCount++;
+    if (char === ']') bracketCount--;
+  }
+
+  // Close any open strings
+  if (inString) {
+    text += '"';
+  }
+
+  // Close unclosed structures
+  text += ']'.repeat(Math.max(0, bracketCount));
+  text += '}'.repeat(Math.max(0, braceCount));
+
+  // Final cleanup
+  text = text.replace(/,(\s*[}\]])/g, '$1');
+
+  return text;
+}
+
+/** Try to recover JSON by truncating at the last parseable file boundary.
+ * Searches backwards from the end for }, patterns and tries to close
+ * the JSON at each one. The }, inside content strings will produce
+ * invalid JSON (rejected by JSON.parse), while structural boundaries
+ * will produce valid JSON. This brute-force approach is reliable because
+ * JSON.parse acts as the validator.
+ */
+function truncateAtLastCompleteFile(text: string): string | null {
+  let searchFrom = text.length - 1;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const boundary = text.lastIndexOf('},', searchFrom);
+    if (boundary === -1 || boundary < 20) break;
+
+    const truncated = text.substring(0, boundary + 1) + '], "dependencies": {}}';
+    try {
+      const parsed = JSON.parse(truncated);
+      if (parsed.files && Array.isArray(parsed.files) && parsed.files.length > 0) {
+        console.log(`Recovered ${parsed.files.length} files by truncating at boundary position ${boundary}`);
+        return truncated;
+      }
+    } catch {
+      // This }, was inside a content string - try the previous one
+    }
+
+    searchFrom = boundary - 1;
+  }
+
+  return null;
 }
 
 /** Lint all generated files */
@@ -1273,6 +1512,23 @@ async function generateWithGemini(
       temperature: 0.7,
       topP: 0.95,
       responseMimeType: "application/json", // Force JSON output
+      responseSchema: {
+        type: SchemaType.OBJECT,
+        properties: {
+          files: {
+            type: SchemaType.ARRAY,
+            items: {
+              type: SchemaType.OBJECT,
+              properties: {
+                path: { type: SchemaType.STRING, description: "File path like app/page.tsx" },
+                content: { type: SchemaType.STRING, description: "Complete file content as a properly escaped JSON string" },
+              },
+              required: ["path", "content"],
+            },
+          },
+        },
+        required: ["files"],
+      },
     },
   });
 
@@ -1323,10 +1579,10 @@ ${imageUrlList}
 REQUIREMENTS FOR THESE IMAGES:
 1. Use EXACTLY these URLs in your img src attributes
 2. Example: <img src="${imagesWithUrls[0].downloadUrl}" alt="${imagesWithUrls[0].name}" className="w-full h-auto" />
-3. DO NOT use placeholder URLs (via.placeholder.com, unsplash, etc.)
-4. Place these images prominently (hero sections, galleries, product images, etc.)
-5. The user expects to see their ACTUAL uploaded images in the final website
-6. These are real, hosted images - not placeholders
+3. For any ADDITIONAL images beyond the user uploads, use Pollinations AI: https://image.pollinations.ai/prompt/{DESCRIPTION}?width=800&height=600&nologo=true
+4. DO NOT use unsplash, placeholder.com, or picsum for ANY images
+5. Place the user's images prominently (hero sections, galleries, product images, etc.)
+6. The user expects to see their ACTUAL uploaded images in the final website
 
 ${prompt}`;
     } else {
@@ -1439,57 +1695,85 @@ async function generateWithLinting(
       if (!jsonText.trim().endsWith("}")) {
         console.warn("JSON response appears truncated - attempting recovery");
         console.warn("Last 200 chars:", jsonText.substring(Math.max(0, jsonText.length - 200)));
-        jsonText = recoverJSON(jsonText);
+        jsonText = recoverTruncatedJSON(jsonText);
         console.log("After recovery, new length:", jsonText.length);
       }
 
       let parsed;
-      let parseAttempts = 0;
-      const maxParseAttempts = 3;
 
-      while (parseAttempts < maxParseAttempts) {
-        try {
-          parsed = JSON.parse(jsonText);
-          console.log("✅ JSON parsed successfully!");
-          break;
-        } catch (e: any) {
-          parseAttempts++;
-          console.warn(`JSON parse attempt ${parseAttempts} failed:`, e.message);
+      // Strategy 1: Direct parse
+      try {
+        parsed = JSON.parse(jsonText);
+        console.log("JSON parsed successfully on first try!");
+      } catch (e1: any) {
+        console.warn(`Direct JSON parse failed: ${e1.message}`);
 
-          if (parseAttempts === 1) {
-            // First attempt: Remove trailing commas
-            console.log("Attempt 1: Removing trailing commas...");
-            jsonText = jsonText.replace(/,(\s*[}\]])/g, '$1');
-          } else if (parseAttempts === 2) {
-            // Second attempt: More aggressive recovery
-            console.log("Attempt 2: Aggressive JSON recovery...");
-            jsonText = recoverJSON(jsonText);
-            // Also try to fix unescaped newlines in strings
-            jsonText = jsonText.replace(/([^\\])(\\n)/g, '$1\\\\n');
-          } else {
-            // Final attempt failed
-            console.error("All JSON parse attempts failed");
-            console.error("Response length:", jsonText.length);
-            console.error("First 500 chars:", jsonText.substring(0, 500));
-            console.error("Last 500 chars:", jsonText.substring(Math.max(0, jsonText.length - 500)));
-            console.error("Parse error:", e.message);
-
-            if (attempts === maxAttempts) {
-              // Try to extract position information from error message
-              const match = e.message.match(/position (\d+)/);
-              const position = match ? parseInt(match[1]) : 0;
-              const context = position > 0 ? jsonText.substring(Math.max(0, position - 100), Math.min(jsonText.length, position + 100)) : '';
-
-              throw new Error(
-                `Failed to parse generated JSON after ${maxAttempts} attempts.\n` +
-                `Error: ${e.message}\n` +
-                (context ? `Context around error: ${context}\n` : '') +
-                `Try a simpler prompt or try again.`
-              );
-            }
-            attempts++;
-            break; // Break out of parse loop to retry generation
+        // Strategy 2: Fix double-escaped JSON (Gemini sometimes returns this)
+        const fixedDoubleEscape = fixDoubleEscapedJSON(jsonText);
+        if (fixedDoubleEscape) {
+          try {
+            parsed = JSON.parse(fixedDoubleEscape);
+            console.log("JSON parsed after fixing double-escaping!");
+          } catch (e2: any) {
+            console.warn(`Double-escape fix parsed but failed validation: ${e2.message}`);
           }
+        }
+
+        // Strategy 3: Remove trailing commas only (safe, non-destructive)
+        if (!parsed) {
+          try {
+            const cleaned = jsonText.replace(/,(\s*[}\]])/g, '$1');
+            parsed = JSON.parse(cleaned);
+            console.log("JSON parsed after removing trailing commas!");
+          } catch (e3: any) {
+            console.warn(`Trailing comma fix failed: ${e3.message}`);
+          }
+        }
+
+        // Strategy 4: Truncate at last complete file entry
+        if (!parsed) {
+          const truncated = truncateAtLastCompleteFile(jsonText);
+          if (truncated) {
+            try {
+              parsed = JSON.parse(truncated);
+              console.log("JSON parsed after truncating at last complete file!");
+            } catch (e4: any) {
+              console.warn(`Truncation recovery failed: ${e4.message}`);
+            }
+          }
+        }
+
+        // Strategy 5: Handle truncated JSON (close unclosed braces/brackets)
+        if (!parsed) {
+          try {
+            const recovered = recoverTruncatedJSON(jsonText);
+            parsed = JSON.parse(recovered);
+            console.log("JSON parsed after closing unclosed structures!");
+          } catch (e5: any) {
+            console.warn(`Structure recovery failed: ${e5.message}`);
+          }
+        }
+
+        // All strategies failed
+        if (!parsed) {
+          console.error("All JSON parse strategies failed");
+          console.error("Response length:", jsonText.length);
+          console.error("First 500 chars:", jsonText.substring(0, 500));
+          console.error("Last 500 chars:", jsonText.substring(Math.max(0, jsonText.length - 500)));
+
+          if (attempts === maxAttempts) {
+            const match = e1.message.match(/position (\d+)/);
+            const position = match ? parseInt(match[1]) : 0;
+
+            throw new Error(
+              `Failed to parse AI response after ${maxAttempts} attempts.\n` +
+              `JSON Parse Error: ${e1.message}\n` +
+              `Error at position ${position} of ${jsonText.length} chars.\n` +
+              `This is likely a temporary issue with the AI response. Please try again.`
+            );
+          }
+          attempts++;
+          continue; // Retry generation
         }
       }
 
@@ -1514,19 +1798,15 @@ async function generateWithLinting(
         continue;
       }
 
-      let { files, dependencies } = parsed;
+      let { files, dependencies = {} } = parsed;
 
-      // Detect if Firebase auth was generated and auto-add dependency if missing
-      const hasFirebaseAuth = files.some((f: any) =>
-        f.content.includes('firebase/auth') ||
-        f.content.includes('firebase/firestore') ||
-        f.content.includes('FIREBASE_CONFIG_PLACEHOLDER')
-      );
-
-      if (hasFirebaseAuth && !dependencies['firebase']) {
-        console.log('🔥 Firebase auth detected, adding firebase dependency');
-        dependencies['firebase'] = '^10.13.0';
+      // Ensure dependencies is an object
+      if (!dependencies || typeof dependencies !== 'object') {
+        dependencies = {};
       }
+
+      // Auto-detect all dependencies from import statements in generated files
+      dependencies = detectAndAddMissingDependencies(files, dependencies);
 
       // CRITICAL FIX: Always generate package.json file with all dependencies
       const hasPackageJson = files.some((f: any) => f.path === 'package.json');
@@ -1565,13 +1845,6 @@ async function generateWithLinting(
             const pkg = JSON.parse(files[pkgIndex].content);
             // Merge dependencies from both sources
             pkg.dependencies = { ...pkg.dependencies, ...dependencies };
-
-            // Double-check: If Firebase auth is detected, ensure firebase is in package.json
-            if (hasFirebaseAuth && !pkg.dependencies['firebase']) {
-              console.log('🔥 Force-adding firebase dependency to package.json');
-              pkg.dependencies['firebase'] = '^10.13.0';
-            }
-
             files[pkgIndex].content = JSON.stringify(pkg, null, 2);
             console.log('✅ Updated package.json with dependencies:', Object.keys(pkg.dependencies).join(', '));
           } catch (e) {
@@ -1676,7 +1949,7 @@ async function generateWithLinting(
             onProgress?.("✓ Fixed all linting errors!");
             return {
               files: fixedParsed.files,
-              dependencies: fixedParsed.dependencies,
+              dependencies: fixedParsed.dependencies || {},
               lintReport: fixedLintReport,
               attempts: attempts + 1,
             };
@@ -1730,15 +2003,44 @@ async function generateWithLinting(
     // Use Gemini Flash for fallback code generation
     const text = await generateWithGemini(prompt, images, onProgress);
 
-    const jsonText = extractJSON(text);
-    const parsed = JSON.parse(jsonText);
+    let jsonText = extractJSON(text);
+
+    // Try all recovery strategies (same as main loop)
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      // Try double-escape fix
+      const fixed = fixDoubleEscapedJSON(jsonText);
+      if (fixed) {
+        try { parsed = JSON.parse(fixed); } catch {}
+      }
+      // Try trailing comma removal
+      if (!parsed) {
+        try { parsed = JSON.parse(jsonText.replace(/,(\s*[}\]])/g, '$1')); } catch {}
+      }
+      // Try truncating at last complete file (handles unescaped quotes in content)
+      if (!parsed) {
+        const truncated = truncateAtLastCompleteFile(jsonText);
+        if (truncated) {
+          try { parsed = JSON.parse(truncated); } catch {}
+        }
+      }
+      // Try closing unclosed structures
+      if (!parsed) {
+        try { parsed = JSON.parse(recoverTruncatedJSON(jsonText)); } catch {}
+      }
+      if (!parsed) {
+        throw new Error("All JSON recovery strategies failed");
+      }
+    }
 
     if (!parsed.files || !Array.isArray(parsed.files)) {
       throw new Error("Invalid response structure");
     }
 
     const lintReport = await lintAllFiles(parsed.files);
-    return { ...parsed, lintReport, attempts };
+    return { files: parsed.files, dependencies: parsed.dependencies || {}, lintReport, attempts };
   } catch (e: any) {
     // Handle API errors specifically
     if (e?.error?.type === "overloaded_error" || e?.status === 529) {

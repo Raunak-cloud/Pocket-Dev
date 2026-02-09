@@ -688,8 +688,8 @@ function ReactGeneratorContent() {
       userId: user.uid,
       prompt: projectPrompt,
       files: projectData.files,
-      dependencies: projectData.dependencies,
-      lintReport: projectData.lintReport,
+      dependencies: projectData.dependencies || {},
+      lintReport: projectData.lintReport || { passed: true, errors: 0, warnings: 0 },
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -723,8 +723,8 @@ function ReactGeneratorContent() {
     const projectRef = doc(db, "projects", projectId);
     await updateDoc(projectRef, {
       files: projectData.files,
-      dependencies: projectData.dependencies,
-      lintReport: projectData.lintReport,
+      dependencies: projectData.dependencies || {},
+      lintReport: projectData.lintReport || { passed: true, errors: 0, warnings: 0 },
       updatedAt: serverTimestamp(),
     });
   };
@@ -975,8 +975,8 @@ function ReactGeneratorContent() {
       const history: EditHistoryEntry[] = snapshot.docs.map((d) => ({
         id: d.id,
         prompt: d.data().prompt,
-        files: d.data().files,
-        dependencies: d.data().dependencies,
+        files: d.data().files || [],
+        dependencies: d.data().dependencies || {},
         timestamp: d.data().timestamp instanceof Timestamp
           ? d.data().timestamp.toDate()
           : new Date(),
@@ -995,7 +995,7 @@ function ReactGeneratorContent() {
     try {
       const restoredProject: ReactProject = {
         files: entry.files,
-        dependencies: entry.dependencies,
+        dependencies: entry.dependencies || {},
         lintReport: { passed: true, errors: 0, warnings: 0 },
       };
       setProject(restoredProject);
@@ -1016,8 +1016,8 @@ function ReactGeneratorContent() {
   const openSavedProject = (savedProject: SavedProject) => {
     setProject({
       files: savedProject.files,
-      dependencies: savedProject.dependencies,
-      lintReport: savedProject.lintReport,
+      dependencies: savedProject.dependencies || {},
+      lintReport: savedProject.lintReport || { passed: true, errors: 0, warnings: 0 },
     });
     setCurrentProjectId(savedProject.id);
     setGenerationPrompt(savedProject.prompt);
@@ -1558,7 +1558,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         const historyDoc = await addDoc(historyRef, {
           prompt: editPromptText,
           files: project.files,
-          dependencies: project.dependencies,
+          dependencies: project.dependencies || {},
           timestamp: serverTimestamp(),
         });
         setEditHistory((prev) => [
@@ -1567,7 +1567,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
             id: historyDoc.id,
             prompt: editPromptText,
             files: project.files,
-            dependencies: project.dependencies,
+            dependencies: project.dependencies || {},
             timestamp: new Date(),
           },
         ]);
