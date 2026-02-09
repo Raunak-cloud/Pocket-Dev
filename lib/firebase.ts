@@ -1,4 +1,4 @@
-import { initializeApp, getApps } from "firebase/app";
+import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
@@ -13,12 +13,16 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// Initialize Firebase only if no apps exist
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+// Initialize Firebase only if no apps exist and API key is available
+// (API key is missing during SSR prerendering at build time)
+let app: FirebaseApp | undefined;
+if (firebaseConfig.apiKey) {
+  app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+}
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+export const auth = app ? getAuth(app) : (null as any);
+export const db = app ? getFirestore(app) : (null as any);
+export const storage = app ? getStorage(app) : (null as any);
 
 // Configure Google provider to always show account selection
 export const googleProvider = new GoogleAuthProvider();

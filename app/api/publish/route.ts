@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     };
     vercelFiles.push({
       file: "package.json",
-      data: Buffer.from(JSON.stringify(packageJson, null, 2), "utf-8").toString("base64"),
+      data: JSON.stringify(packageJson, null, 2),
     });
 
     // Add tsconfig.json
@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
     };
     vercelFiles.push({
       file: "tsconfig.json",
-      data: Buffer.from(JSON.stringify(tsconfig, null, 2), "utf-8").toString("base64"),
+      data: JSON.stringify(tsconfig, null, 2),
     });
 
     // Add next.config.js (simple, no special settings needed)

@@ -114,9 +114,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Handle premium plan upgrade
+    if (metadata.type === "premium_upgrade") {
+      const { projectId, userId } = metadata;
+
+      if (!projectId || !userId) {
+        console.error("[webhook] Missing premium upgrade metadata:", metadata);
+        return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
+      }
+
+      try {
+        const adminDb = getAdminDb();
+        await adminDb.collection("projects").doc(projectId).update({
+          tier: "premium",
+          paidAt: new Date(),
+          stripeSessionId: session.id,
+          stripeSubscriptionId: session.subscription,
+        });
+
+        console.log(`[webhook] Project ${projectId} upgraded to premium for user ${userId}`);
+      } catch (error) {
+        console.error("[webhook] Error upgrading project to premium:", error);
+        return NextResponse.json(
+          { error: "Failed to upgrade project" },
+          { status: 500 }
+        );
+      }
+    }
+
     // Legacy: Handle project upgrade (kept for existing sessions)
     const { projectId, userId } = metadata;
-    if (projectId && userId && metadata.type !== "token_purchase") {
+    if (projectId && userId && metadata.type !== "token_purchase" && metadata.type !== "premium_upgrade") {
       try {
         const adminDb = getAdminDb();
         await adminDb.collection("projects").doc(projectId).update({

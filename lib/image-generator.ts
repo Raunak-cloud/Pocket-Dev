@@ -20,12 +20,12 @@ const FALLBACK_IMG =
   "data:image/svg+xml;charset=utf-8," +
   encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">' +
-      "<defs><linearGradient id=\"g\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\">" +
-      "<stop offset=\"0%\" stop-color=\"#667eea\"/>" +
-      "<stop offset=\"100%\" stop-color=\"#764ba2\"/>" +
+      '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">' +
+      '<stop offset="0%" stop-color="#667eea"/>' +
+      '<stop offset="100%" stop-color="#764ba2"/>' +
       "</linearGradient></defs>" +
-      "<rect width=\"800\" height=\"600\" fill=\"url(#g)\"/>" +
-      "</svg>"
+      '<rect width="800" height="600" fill="url(#g)"/>' +
+      "</svg>",
   );
 
 // ── prompt helper ─────────────────────────────────────────────
@@ -102,7 +102,7 @@ export async function injectImages(html: string): Promise<string> {
 
   // Parallel fetch — failures are caught per-image
   const dataUrls = await Promise.all(
-    placeholders.map(({ alt }) => fetchImage(alt).catch(() => FALLBACK_IMG))
+    placeholders.map(({ alt }) => fetchImage(alt).catch(() => FALLBACK_IMG)),
   );
 
   // Replace in the HTML.  split/join avoids the $ special-char
