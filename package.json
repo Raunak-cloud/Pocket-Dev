@@ -9,7 +9,9 @@
     "start": "next start",
     "lint": "eslint",
     "mcp:eslint": "tsx mcp/eslint-server.ts",
-    "mcp:test": "tsx mcp/test-eslint.ts"
+    "mcp:ui-libraries": "tsx mcp/ui-libraries-server.ts",
+    "mcp:test": "tsx mcp/test-eslint.ts",
+    "mcp:test-ui": "tsx mcp/test-ui-libraries.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

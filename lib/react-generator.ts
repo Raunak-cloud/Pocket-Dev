@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "./eslint-lint";
+import { getUILibraryContext, closeMCPClient } from "./mcp-client";
 
 const GEMINI_FLASH_MODEL = "gemini-3-flash-preview"; // Always use Flash for all code generation
 const MAX_TOKENS = 64000; // Increased to support larger multi-file projects
@@ -59,13 +60,20 @@ TECH STACK:
 
 FILE STRUCTURE YOU MUST GENERATE:
 
-1. app/layout.tsx - Root layout with Navbar/Footer
-2. app/page.tsx - Home page (/)
-3. app/about/page.tsx - About page (/about)
-4. app/[pageName]/page.tsx - Additional pages
-5. app/components/Navbar.tsx - Navigation bar
-6. app/components/Footer.tsx - Footer component
-7. app/components/[Others].tsx - Reusable components
+🚨 CRITICAL: You MUST generate package.json file with ALL dependencies 🚨
+
+1. package.json - Package configuration with ALL dependencies (REQUIRED)
+2. app/layout.tsx - Root layout with Navbar/Footer
+3. app/page.tsx - Home page (/)
+4. app/globals.css - Tailwind CSS styles
+5. app/about/page.tsx - About page (/about)
+6. app/[pageName]/page.tsx - Additional pages
+7. app/components/Navbar.tsx - Navigation bar
+8. app/components/Footer.tsx - Footer component
+9. app/components/[Others].tsx - Reusable components
+10. tsconfig.json - TypeScript configuration (REQUIRED)
+11. next.config.ts - Next.js configuration (REQUIRED)
+12. tailwind.config.ts - Tailwind configuration (REQUIRED)
 
 REQUIRED PAGES BY TYPE:
 
@@ -699,13 +707,134 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
 }
 \`\`\`
 
-DEPENDENCIES TO ADD:
-When auth is detected, add to dependencies object:
+🚨 PACKAGE.JSON - CRITICAL REQUIREMENTS 🚨
+
+You MUST ALWAYS generate a package.json file. Here's the structure:
+
+WITHOUT Firebase (default):
 \`\`\`json
 {
-  "firebase": "^10.13.0"
+  "name": "generated-nextjs-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.294.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
 }
 \`\`\`
+
+WITH Firebase (when auth is requested):
+\`\`\`json
+{
+  "name": "generated-nextjs-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.294.0",
+    "firebase": "^10.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}
+\`\`\`
+
+ADDITIONAL CONFIGURATION FILES REQUIRED:
+
+tsconfig.json:
+\`\`\`json
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": { "@/*": ["./*"] }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+\`\`\`
+
+next.config.ts:
+\`\`\`typescript
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: '**' }
+    ]
+  }
+};
+
+export default nextConfig;
+\`\`\`
+
+tailwind.config.ts:
+\`\`\`typescript
+import type { Config } from 'tailwindcss';
+
+const config: Config = {
+  content: [
+    './pages/**/*.{js,ts,jsx,tsx,mdx}',
+    './components/**/*.{js,ts,jsx,tsx,mdx}',
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};
+
+export default config;
+\`\`\`
+
+app/globals.css:
+\`\`\`css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+\`\`\`
+
+🚨 CRITICAL: Always include package.json, tsconfig.json, next.config.ts, tailwind.config.ts, and app/globals.css in your files array!
 
 DO NOT generate authentication unless explicitly requested by user.
 
@@ -895,24 +1024,67 @@ OUTPUT FORMAT (CRITICAL):
 
 You MUST return ONLY a valid JSON object. No markdown code blocks, no explanations, no extra text.
 
-Structure:
+🚨 REQUIRED FILES IN OUTPUT (must include ALL of these):
+1. package.json - WITH ALL DEPENDENCIES (including firebase if auth is used)
+2. tsconfig.json - TypeScript configuration
+3. next.config.ts - Next.js configuration
+4. tailwind.config.ts - Tailwind configuration
+5. app/globals.css - Tailwind CSS imports
+6. app/layout.tsx - Root layout
+7. app/page.tsx - Home page
+8. app/components/*.tsx - All components
+9. Any additional pages
+
+EXAMPLE Structure:
 {
   "files": [
-    {"path": "App.jsx", "content": "import { BrowserRouter as Router..."},
-    {"path": "pages/Home.jsx", "content": "import React from 'react'..."},
-    {"path": "pages/About.jsx", "content": "import React from 'react'..."},
-    {"path": "components/Navbar.jsx", "content": "import React from 'react'..."},
-    {"path": "components/Footer.jsx", "content": "import React from 'react'..."}
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"generated-nextjs-app\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"dev\": \"next dev\",\n    \"build\": \"next build\",\n    \"start\": \"next start\"\n  },\n  \"dependencies\": {\n    \"next\": \"^14.0.0\",\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\",\n    \"lucide-react\": \"^0.294.0\",\n    \"firebase\": \"^10.13.0\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^20\",\n    \"@types/react\": \"^19\",\n    \"@types/react-dom\": \"^19\",\n    \"typescript\": \"^5\"\n  }\n}"
+    },
+    {
+      "path": "tsconfig.json",
+      "content": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2017\",\n    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n    \"allowJs\": true,\n    \"skipLibCheck\": true,\n    \"strict\": true,\n    \"noEmit\": true,\n    \"esModuleInterop\": true,\n    \"module\": \"esnext\",\n    \"moduleResolution\": \"bundler\",\n    \"resolveJsonModule\": true,\n    \"isolatedModules\": true,\n    \"jsx\": \"preserve\",\n    \"incremental\": true,\n    \"plugins\": [{\"name\": \"next\"}],\n    \"paths\": {\"@/*\": [\"./*\"]}\n  },\n  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\", \".next/types/**/*.ts\"],\n  \"exclude\": [\"node_modules\"]\n}"
+    },
+    {
+      "path": "next.config.ts",
+      "content": "import type { NextConfig } from 'next';\n\nconst nextConfig: NextConfig = {\n  images: {\n    remotePatterns: [\n      { protocol: 'https', hostname: '**' }\n    ]\n  }\n};\n\nexport default nextConfig;"
+    },
+    {
+      "path": "tailwind.config.ts",
+      "content": "import type { Config } from 'tailwindcss';\n\nconst config: Config = {\n  content: [\n    './pages/**/*.{js,ts,jsx,tsx,mdx}',\n    './components/**/*.{js,ts,jsx,tsx,mdx}',\n    './app/**/*.{js,ts,jsx,tsx,mdx}',\n  ],\n  theme: {\n    extend: {},\n  },\n  plugins: [],\n};\n\nexport default config;"
+    },
+    {
+      "path": "app/globals.css",
+      "content": "@tailwind base;\n@tailwind components;\n@tailwind utilities;"
+    },
+    {
+      "path": "app/layout.tsx",
+      "content": "import type { Metadata } from 'next';\nimport './globals.css';\n\nexport const metadata: Metadata = {\n  title: 'App Name',\n  description: 'App description',\n};\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang=\"en\">\n      <body>{children}</body>\n    </html>\n  );\n}"
+    },
+    {
+      "path": "app/page.tsx",
+      "content": "export default function HomePage() {\n  return (\n    <div>\n      <h1>Home Page</h1>\n    </div>\n  );\n}"
+    }
   ],
   "dependencies": {
     "next": "^14.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "lucide-react": "^0.294.0"
+    "lucide-react": "^0.294.0",
+    "firebase": "^10.13.0"
   }
 }
 
-🚨 CRITICAL: Your ENTIRE response must be ONLY this JSON object. Do NOT wrap it in markdown code blocks. Do NOT add any explanatory text before or after. Just pure JSON starting with { and ending with }.`;
+🚨 CRITICAL RULES:
+1. Your ENTIRE response must be ONLY this JSON object
+2. Do NOT wrap it in markdown code blocks (no backticks or code fences)
+3. Do NOT add any explanatory text before or after
+4. Just pure JSON starting with { and ending with }
+5. MUST include package.json with firebase dependency if auth is used
+6. MUST include all configuration files (tsconfig.json, next.config.ts, tailwind.config.ts)
+7. MUST include app/globals.css with Tailwind imports
+8. Properly escape all special characters in JSON strings (\\n, \\", \\\\, etc.)\`;`;
 
 interface GeneratedFile {
   path: string;
@@ -1206,10 +1378,22 @@ BEFORE RESPONDING:
   // Detect if auth is needed to conditionally include templates
   const needsAuth = detectAuthRequest(textPrompt);
 
+  // Get UI library context from MCP
+  onProgress?.("Fetching modern UI components via MCP...");
+  let uiLibraryContext = "";
+  try {
+    uiLibraryContext = await getUILibraryContext(textPrompt);
+  } catch (error) {
+    console.warn("Failed to get UI library context from MCP:", error);
+    // Continue without MCP context
+  }
+
   // Build optimized prompt
-  const optimizedPrompt = needsAuth
-    ? BASE_SYSTEM_PROMPT + geminiInstructions + "\n\nUser Request: " + textPrompt
-    : BASE_SYSTEM_PROMPT.replace(/🔐 FIREBASE AUTHENTICATION[\s\S]*?(?=NEXT\.JS REQUIREMENTS:)/g, '') + geminiInstructions + "\n\nUser Request: " + textPrompt;
+  const basePrompt = needsAuth
+    ? BASE_SYSTEM_PROMPT
+    : BASE_SYSTEM_PROMPT.replace(/🔐 FIREBASE AUTHENTICATION[\s\S]*?(?=NEXT\.JS REQUIREMENTS:)/g, '');
+
+  const optimizedPrompt = basePrompt + uiLibraryContext + geminiInstructions + "\n\nUser Request: " + textPrompt;
 
   parts.push({ text: optimizedPrompt });
 
@@ -1330,7 +1514,7 @@ async function generateWithLinting(
         continue;
       }
 
-      const { files, dependencies } = parsed;
+      let { files, dependencies } = parsed;
 
       // Detect if Firebase auth was generated and auto-add dependency if missing
       const hasFirebaseAuth = files.some((f: any) =>
@@ -1340,7 +1524,76 @@ async function generateWithLinting(
       );
 
       if (hasFirebaseAuth && !dependencies['firebase']) {
+        console.log('🔥 Firebase auth detected, adding firebase dependency');
         dependencies['firebase'] = '^10.13.0';
+      }
+
+      // CRITICAL FIX: Always generate package.json file with all dependencies
+      const hasPackageJson = files.some((f: any) => f.path === 'package.json');
+
+      if (!hasPackageJson) {
+        console.log('📦 Generating package.json file with dependencies');
+
+        const packageJson = {
+          name: "generated-nextjs-app",
+          version: "0.1.0",
+          private: true,
+          scripts: {
+            dev: "next dev",
+            build: "next build",
+            start: "next start",
+            lint: "next lint"
+          },
+          dependencies: dependencies,
+          devDependencies: {
+            "@types/node": "^20",
+            "@types/react": "^19",
+            "@types/react-dom": "^19",
+            "typescript": "^5"
+          }
+        };
+
+        files.push({
+          path: 'package.json',
+          content: JSON.stringify(packageJson, null, 2)
+        });
+      } else {
+        // Update existing package.json with new dependencies
+        const pkgIndex = files.findIndex((f: any) => f.path === 'package.json');
+        if (pkgIndex !== -1) {
+          try {
+            const pkg = JSON.parse(files[pkgIndex].content);
+            // Merge dependencies from both sources
+            pkg.dependencies = { ...pkg.dependencies, ...dependencies };
+
+            // Double-check: If Firebase auth is detected, ensure firebase is in package.json
+            if (hasFirebaseAuth && !pkg.dependencies['firebase']) {
+              console.log('🔥 Force-adding firebase dependency to package.json');
+              pkg.dependencies['firebase'] = '^10.13.0';
+            }
+
+            files[pkgIndex].content = JSON.stringify(pkg, null, 2);
+            console.log('✅ Updated package.json with dependencies:', Object.keys(pkg.dependencies).join(', '));
+          } catch (e) {
+            console.error('Failed to update package.json:', e);
+          }
+        }
+      }
+
+      // ADDITIONAL CHECK: Verify required config files exist
+      const requiredConfigFiles = [
+        'tsconfig.json',
+        'next.config.ts',
+        'tailwind.config.ts',
+        'app/globals.css'
+      ];
+
+      const missingFiles = requiredConfigFiles.filter(
+        reqFile => !files.some((f: any) => f.path === reqFile)
+      );
+
+      if (missingFiles.length > 0) {
+        console.warn('⚠️ Missing required config files:', missingFiles.join(', '));
       }
 
       // Validate files have required properties
