@@ -24,7 +24,7 @@ const SYSTEM_PROMPT = `🚨🚨🚨 ABSOLUTE MANDATORY REQUIREMENTS - NO EXCEPTI
 1. 🚫 ZERO HORIZONTAL OVERFLOW - Add: html, body { overflow-x: hidden; max-width: 100vw; }
                                    img { max-width: 100%; height: auto; display: block; }
 2. 📱 MOBILE MENU - Must work on mobile (<768px) with hamburger → full-screen overlay
-3. 🖼️  MAXIMUM 6 IMAGES - Use POLLINATIONS_IMG_1 through IMG_6 only (no more, no less)
+3. 🖼️  MAXIMUM 8 IMAGES - Use POLLINATIONS_IMG_1 through IMG_6 only (no more, no less)
 4. 📏 RESPONSIVE FONTS - Use clamp(): h1 { font-size: clamp(2rem, 5vw, 4rem); }
 5. ⚡ LOADING STATES - Add loading="lazy" to images, skeleton loaders, smooth transitions
 6. 🎯 COMPLETE CONTENT - NO "Lorem ipsum", placeholders, or empty tags
@@ -63,7 +63,7 @@ CRITICAL TECHNICAL REQUIREMENTS - MUST BE PERFECT
 5. ✅ Add box-shadow only on scroll (use JavaScript IntersectionObserver or scroll event)
 
 🔴 IMAGES - STRICT LIMIT AND FORMAT:
-1. ✅ MAXIMUM 6 IMAGES total across entire website (no exceptions)
+1. ✅ MAXIMUM 8 IMAGES total across entire website (no exceptions)
 2. ✅ Suggested distribution: 1 hero image + 3-5 section/feature images = 6 max
 3. ✅ Every <img> MUST use: src="POLLINATIONS_IMG_1" (numbered 1-6 only)
 4. ✅ Every <img> MUST have: loading="lazy" (except hero image can be loading="eager")
@@ -417,15 +417,15 @@ STRUCTURE:
    - Style icons: width 20px, opacity 0.7, hover opacity 1, gap 16px
    - Copyright text with year and company name
 
-━━━ IMAGES - STRICT RULES (MAXIMUM 6 IMAGES) ━━━
+━━━ IMAGES - STRICT RULES (MAXIMUM 8 IMAGES) ━━━
 
-🚨 CRITICAL: Use MAXIMUM 6 images total across the entire website - NO EXCEPTIONS 🚨
+🚨 CRITICAL: Use MAXIMUM 8 images total across the entire website - NO EXCEPTIONS 🚨
 
 IMAGE DISTRIBUTION STRATEGY:
 ✅ Option A: 1 hero + 3 features + 2 testimonials/gallery = 6 total
 ✅ Option B: 1 hero + 5 section backgrounds/illustrations = 6 total
 ✅ Option C: 0 hero + 6 product/portfolio images = 6 total
-❌ NEVER exceed 6 images total
+❌ NEVER exceed 8 images total
 
 IMAGE FORMAT & ATTRIBUTES (REQUIRED):
 Every <img> element MUST include ALL of these attributes:
@@ -1047,8 +1047,8 @@ If business/corporate: VERIFY you have 4-6+ complete service descriptions
 🚨 COMMON MISTAKES TO AVOID (DON'T DO THESE)
 ═══════════════════════════════════════════════════════════════
 
-❌ MISTAKE 1: Using more than 6 images
-   ✅ FIX: Count your POLLINATIONS_IMG_X tags. If > 6, delete extras.
+❌ MISTAKE 1: Using more than 8 images
+   ✅ FIX: Count your POLLINATIONS_IMG_X tags. If > 8, delete extras.
 
 ❌ MISTAKE 2: Forgetting overflow-x: hidden on html and body
    ✅ FIX: Add to first CSS rule: html, body { overflow-x: hidden; max-width: 100vw; }
@@ -1305,8 +1305,10 @@ async function runLintFixLoop(
     });
 
     const fixPrompt =
-      "Original request: " + contextPrompt +
-      "\n\nCurrent HTML:\n" + html +
+      "Original request: " +
+      contextPrompt +
+      "\n\nCurrent HTML:\n" +
+      html +
       "\n\nThe JavaScript in the website above has ESLint errors. " +
       "Fix every error listed below and return the COMPLETE corrected HTML.\n\n" +
       errorLines +
@@ -1390,12 +1392,12 @@ export async function editWebsite(
 
   const result = await model.generateContent(
     "Here is the current website HTML:\n\n" +
-    strippedHtml +
-    "\n\nEdit request: " +
-    editPrompt +
-    "\n\nApply the requested changes and return the COMPLETE modified HTML document. " +
-    "Keep all existing sections unless explicitly asked to remove them. " +
-    "Return ONLY raw HTML. No markdown fences, no explanations.",
+      strippedHtml +
+      "\n\nEdit request: " +
+      editPrompt +
+      "\n\nApply the requested changes and return the COMPLETE modified HTML document. " +
+      "Keep all existing sections unless explicitly asked to remove them. " +
+      "Return ONLY raw HTML. No markdown fences, no explanations.",
   );
 
   const responseText = result.response.text();
