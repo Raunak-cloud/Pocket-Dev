@@ -42,7 +42,7 @@ async function fetchImage(prompt: string): Promise<string> {
     POLLINATIONS_BASE +
     "/" +
     encodeURIComponent(enhancePrompt(prompt)) +
-    "?model=flux";
+    "?model=imagen-4";
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${process.env.POLLINATIONS_API_KEY}` },

@@ -82,12 +82,13 @@ FILE STRUCTURE YOU MUST GENERATE:
 4. app/globals.css - Tailwind CSS styles
 5. app/about/page.tsx - About page (/about)
 6. app/[pageName]/page.tsx - Additional pages
-7. app/components/Navbar.tsx - Navigation bar
-8. app/components/Footer.tsx - Footer component
-9. app/components/[Others].tsx - Reusable components
-10. tsconfig.json - TypeScript configuration (REQUIRED)
-11. next.config.ts - Next.js configuration (REQUIRED)
-12. tailwind.config.ts - Tailwind configuration (REQUIRED)
+7. app/loading.tsx - Loading indicator shown during page navigation (REQUIRED)
+8. app/components/Navbar.tsx - Navigation bar
+9. app/components/Footer.tsx - Footer component
+10. app/components/[Others].tsx - Reusable components
+11. tsconfig.json - TypeScript configuration (REQUIRED)
+12. next.config.ts - Next.js configuration (REQUIRED)
+13. tailwind.config.ts - Tailwind configuration (REQUIRED)
 
 REQUIRED PAGES BY TYPE:
 
@@ -918,7 +919,7 @@ NEXT.JS REQUIREMENTS:
 - Use 'use client' directive for interactive components (forms, buttons, state)
 - Export metadata from page.tsx files for SEO
 - Use Next.js Link component for navigation: import Link from 'next/link'
-- Follow Next.js naming: page.tsx (route), layout.tsx (layout), loading.tsx (optional)
+- Follow Next.js naming: page.tsx (route), layout.tsx (layout), loading.tsx (REQUIRED for loading states)
 - Use proper TypeScript types for props and params
 - IMPORTANT: Use regular <img> tags for images (NOT next/image) - it requires extra configuration for external URLs
 - IMPORTANT: Use Pollinations AI for ALL images: <img src="https://image.pollinations.ai/prompt/DESCRIPTION?width=800&height=600&nologo=true" alt="Description" className="w-full h-auto" />
@@ -952,6 +953,7 @@ Example app/layout.tsx structure:
 import type { Metadata } from 'next';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
+import NavigationLoader from './components/NavigationLoader';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -967,6 +969,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <NavigationLoader />
         <div className="flex flex-col min-h-screen">
           <Navbar />
           <main className="flex-1">
@@ -1022,6 +1025,106 @@ export default function Navbar() {
         </div>
       </div>
     </nav>
+  );
+}
+\`\`\`
+
+⚡ LOADING INDICATORS (MANDATORY):
+
+Every generated app MUST include loading indicators for page navigation. Generate these files:
+
+app/loading.tsx (REQUIRED - shows loading UI during route transitions):
+\`\`\`tsx
+export default function Loading() {
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-12 h-12 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+        <p className="text-gray-500 text-sm animate-pulse">Loading...</p>
+      </div>
+    </div>
+  );
+}
+\`\`\`
+
+app/components/NavigationLoader.tsx (REQUIRED - top progress bar on link clicks):
+\`\`\`tsx
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
+
+export default function NavigationLoader() {
+  const pathname = usePathname();
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const startLoading = useCallback(() => {
+    setLoading(true);
+    setProgress(0);
+
+    let current = 0;
+    const interval = setInterval(() => {
+      current += Math.random() * 15 + 5;
+      if (current >= 90) {
+        clearInterval(interval);
+        current = 90;
+      }
+      setProgress(current);
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setProgress(100);
+    const timeout = setTimeout(() => {
+      setLoading(false);
+      setProgress(0);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [pathname]);
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest('a');
+      if (anchor && anchor.href && anchor.href.startsWith(window.location.origin) && anchor.href !== window.location.href) {
+        startLoading();
+      }
+    };
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [startLoading]);
+
+  if (!loading && progress === 0) return null;
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-1 bg-transparent">
+      <div
+        className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+        style={{ width: \`\${progress}%\` }}
+      />
+    </div>
+  );
+}
+\`\`\`
+
+IMPORTANT: Include <NavigationLoader /> at the top of the <body> in app/layout.tsx:
+\`\`\`tsx
+import NavigationLoader from './components/NavigationLoader';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <NavigationLoader />
+        <div className="flex flex-col min-h-screen">
+          <Navbar />
+          <main className="flex-1">{children}</main>
+          <Footer />
+        </div>
+      </body>
+    </html>
   );
 }
 \`\`\`
@@ -1853,12 +1956,55 @@ async function generateWithLinting(
         }
       }
 
+      // Auto-inject loading indicator files if not generated
+      const hasLoadingFile = files.some((f: any) => f.path === 'app/loading.tsx');
+      if (!hasLoadingFile) {
+        console.log('⚡ Auto-injecting app/loading.tsx');
+        files.push({
+          path: 'app/loading.tsx',
+          content: `export default function Loading() {\n  return (\n    <div className="flex items-center justify-center min-h-[60vh]">\n      <div className="flex flex-col items-center gap-4">\n        <div className="w-12 h-12 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>\n        <p className="text-gray-500 text-sm animate-pulse">Loading...</p>\n      </div>\n    </div>\n  );\n}\n`
+        });
+      }
+
+      const hasNavLoader = files.some((f: any) => f.path === 'app/components/NavigationLoader.tsx');
+      if (!hasNavLoader) {
+        console.log('⚡ Auto-injecting app/components/NavigationLoader.tsx');
+        files.push({
+          path: 'app/components/NavigationLoader.tsx',
+          content: `'use client';\n\nimport { useEffect, useState, useCallback } from 'react';\nimport { usePathname } from 'next/navigation';\n\nexport default function NavigationLoader() {\n  const pathname = usePathname();\n  const [loading, setLoading] = useState(false);\n  const [progress, setProgress] = useState(0);\n\n  const startLoading = useCallback(() => {\n    setLoading(true);\n    setProgress(0);\n    let current = 0;\n    const interval = setInterval(() => {\n      current += Math.random() * 15 + 5;\n      if (current >= 90) {\n        clearInterval(interval);\n        current = 90;\n      }\n      setProgress(current);\n    }, 200);\n    return () => clearInterval(interval);\n  }, []);\n\n  useEffect(() => {\n    setProgress(100);\n    const timeout = setTimeout(() => {\n      setLoading(false);\n      setProgress(0);\n    }, 300);\n    return () => clearTimeout(timeout);\n  }, [pathname]);\n\n  useEffect(() => {\n    const handleClick = (e: MouseEvent) => {\n      const anchor = (e.target as HTMLElement).closest('a');\n      if (anchor && anchor.href && anchor.href.startsWith(window.location.origin) && anchor.href !== window.location.href) {\n        startLoading();\n      }\n    };\n    document.addEventListener('click', handleClick, true);\n    return () => document.removeEventListener('click', handleClick, true);\n  }, [startLoading]);\n\n  if (!loading && progress === 0) return null;\n\n  return (\n    <div className=\"fixed top-0 left-0 right-0 z-[9999] h-1 bg-transparent\">\n      <div\n        className=\"h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]\"\n        style={{ width: \`\${progress}%\` }}\n      />\n    </div>\n  );\n}\n`
+        });
+      }
+
+      // Ensure NavigationLoader is imported in layout.tsx
+      const layoutIndex = files.findIndex((f: any) => f.path === 'app/layout.tsx');
+      if (layoutIndex !== -1) {
+        const layoutContent = files[layoutIndex].content;
+        if (!layoutContent.includes('NavigationLoader')) {
+          console.log('⚡ Auto-injecting NavigationLoader into layout.tsx');
+          let updated = layoutContent;
+          // Add import
+          if (updated.includes("import")) {
+            updated = updated.replace(
+              /(import\s+.*?['"];?\n)/,
+              `$1import NavigationLoader from './components/NavigationLoader';\n`
+            );
+          }
+          // Add component after <body...>
+          updated = updated.replace(
+            /(<body[^>]*>)/,
+            `$1\n        <NavigationLoader />`
+          );
+          files[layoutIndex].content = updated;
+        }
+      }
+
       // ADDITIONAL CHECK: Verify required config files exist
       const requiredConfigFiles = [
         'tsconfig.json',
         'next.config.ts',
         'tailwind.config.ts',
-        'app/globals.css'
+        'app/globals.css',
+        'app/loading.tsx'
       ];
 
       const missingFiles = requiredConfigFiles.filter(
