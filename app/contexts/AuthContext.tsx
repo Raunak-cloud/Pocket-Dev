@@ -36,6 +36,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 async function createOrUpdateUser(user: User): Promise<{ data: UserData; isNew: boolean }> {
+  if (!db) {
+    throw new Error("Firebase Firestore is not initialized");
+  }
   const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
 
@@ -89,6 +92,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isNewUser, setIsNewUser] = useState(false);
 
   useEffect(() => {
+    // Check if auth is available (it may be null during SSR)
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       if (user) {
@@ -112,6 +121,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
+    if (!auth) {
+      throw new Error("Firebase auth is not initialized");
+    }
     const result = await signInWithPopup(auth, googleProvider);
     if (result.user) {
       const userResult = await createOrUpdateUser(result.user);
@@ -123,6 +135,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    if (!auth) {
+      throw new Error("Firebase auth is not initialized");
+    }
     await firebaseSignOut(auth);
     setUserData(null);
     setIsNewUser(false);
@@ -133,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUserData = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     try {
       const userRef = doc(db, "users", user.uid);
       const userSnap = await getDoc(userRef);

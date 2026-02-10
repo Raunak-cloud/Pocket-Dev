@@ -12,6 +12,7 @@ import JSZip from "jszip";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
 import GenerationProgress from "./components/GenerationProgress";
+import MaintenanceToggle from "./components/MaintenanceToggle";
 import {
   collection,
   addDoc,
@@ -418,6 +419,7 @@ function ReactGeneratorContent() {
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [pendingGeneration, setPendingGeneration] = useState(false);
   const [activeSection, setActiveSection] = useState("create");
+  const [adminTab, setAdminTab] = useState<'support' | 'maintenance'>('support');
   const [isGenerationMinimized, setIsGenerationMinimized] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
@@ -5403,8 +5405,39 @@ next-env.d.ts
   // Admin Content (visible only to admin)
   const AdminContent = () => (
     <div className="max-w-3xl mx-auto w-full p-4 h-full flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between mb-4 flex-shrink-0">
-        <h2 className="text-xl font-semibold text-white">Admin - Support Tickets</h2>
+      {/* Tab Navigation */}
+      <div className="flex gap-2 mb-4 flex-shrink-0">
+        <button
+          onClick={() => setAdminTab('support')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            adminTab === 'support'
+              ? 'bg-blue-600 text-white'
+              : 'bg-slate-800 text-slate-400 hover:text-white'
+          }`}
+        >
+          Support Tickets
+        </button>
+        <button
+          onClick={() => setAdminTab('maintenance')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            adminTab === 'maintenance'
+              ? 'bg-orange-600 text-white'
+              : 'bg-slate-800 text-slate-400 hover:text-white'
+          }`}
+        >
+          Maintenance Mode
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      {adminTab === 'maintenance' ? (
+        <div className="flex-1 overflow-y-auto">
+          <MaintenanceToggle />
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-4 flex-shrink-0">
+            <h2 className="text-xl font-semibold text-white">Support Tickets</h2>
         <button
           onClick={loadAdminTickets}
           className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition"
@@ -5557,6 +5590,8 @@ next-env.d.ts
             </div>
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   );
