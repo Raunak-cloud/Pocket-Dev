@@ -28,6 +28,7 @@ import {
 } from "firebase/firestore";
 import { db, storage } from "@/lib/firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { persistPollinationsImages } from "@/lib/persist-images";
 
 interface GeneratedFile {
   path: string;
@@ -1621,10 +1622,12 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         }
       });
 
-      // Images are now hosted on Firebase Storage with URLs embedded in code
+      // Persist Pollinations AI images to Firebase Storage so they don't change on reload
+      setEditProgressMessages((prev) => [...prev, "Persisting images..."]);
+      const persistedMergedFiles = await persistPollinationsImages(mergedFiles, user?.uid ?? "anonymous");
       const mergedProject = {
         ...result,
-        files: mergedFiles,
+        files: persistedMergedFiles,
       };
 
       setProject(mergedProject);
@@ -1775,7 +1778,7 @@ ${pdfUrlList}
         (f) => f.type.startsWith("image/") || f.type === "application/pdf",
       );
 
-      const result = await generateReact(fullPrompt, mediaFiles);
+      let result = await generateReact(fullPrompt, mediaFiles);
       clearInterval(progressInterval);
       progressIntervalRef.current = null;
 
@@ -1898,8 +1901,10 @@ ${pdfUrlList}
         }
       }
 
-      // Images are now hosted on Firebase Storage with URLs embedded in code
-      // No need for data URL injection - AI uses the Firebase URLs directly
+      // Persist Pollinations AI images to Firebase Storage so they don't change on reload
+      setProgressMessages((prev) => [...prev, "Persisting images..."]);
+      const persistedFiles = await persistPollinationsImages(result.files, user?.uid ?? "anonymous");
+      result = { ...result, files: persistedFiles };
       setProject(result);
 
       // Save project to Firestore
