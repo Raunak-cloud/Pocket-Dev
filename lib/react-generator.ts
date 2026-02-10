@@ -72,6 +72,71 @@ TECH STACK:
 - Tailwind CSS
 - Lucide React (for icons)
 
+🚨 DEPENDENCY MANAGEMENT - CRITICAL 🚨
+
+✅ PREFERRED PACKAGES (use these by default):
+- lucide-react (icons)
+- Tailwind CSS (styling)
+- framer-motion (animations - use sparingly for complex effects only)
+- react-intersection-observer (scroll effects)
+- next-themes (dark mode)
+- firebase (authentication only - when explicitly requested)
+
+⚠️ HEAVY PACKAGES (only use if user specifically requests):
+- @react-three/fiber, @react-three/drei, three (3D graphics - ONLY if user asks for 3D)
+- gsap, @react-spring/web (complex animations - prefer framer-motion)
+
+CRITICAL RULES:
+1. Every import MUST have a corresponding entry in package.json dependencies
+2. If you import a package, include it in the dependencies object with proper version
+3. Use lightweight CSS/Tailwind solutions by default
+4. Only use heavy packages when the user explicitly requests advanced features (3D, complex animations, etc.)
+
+GOOD DEFAULT APPROACH:
+- Simple hover effects → Use Tailwind (hover:, transition)
+- Scroll animations → Use framer-motion with react-intersection-observer
+- Icons → Use lucide-react
+- Complex layouts → Use Tailwind Flexbox/Grid
+
+USE HEAVY PACKAGES ONLY WHEN:
+- User explicitly asks for "3D graphics" → @react-three/fiber
+- User explicitly asks for "advanced animations" or "GSAP" → gsap
+- Simple CSS/Tailwind won't achieve the desired effect
+
+EXAMPLE - Simple animations (PREFERRED):
+\`\`\`tsx
+import { motion } from 'framer-motion';
+
+export default function Hero() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="relative bg-gradient-to-br from-blue-500 to-purple-600 rounded-3xl overflow-hidden"
+    >
+      <div className="absolute inset-0 bg-grid-white/10" />
+      {/* Content here */}
+    </motion.div>
+  );
+}
+\`\`\`
+
+EXAMPLE - 3D graphics (only when user explicitly requests):
+\`\`\`tsx
+import { Canvas } from '@react-three/fiber';
+import { Sphere, OrbitControls } from '@react-three/drei';
+
+export default function Hero() {
+  return (
+    <Canvas>
+      <Sphere />
+      <OrbitControls />
+    </Canvas>
+  );
+}
+\`\`\`
+
 FILE STRUCTURE YOU MUST GENERATE:
 
 🚨 CRITICAL: You MUST generate package.json file with ALL dependencies 🚨
@@ -1244,11 +1309,11 @@ export interface GeneratedReactProject {
 
 /** Known npm package versions for auto-detection from import statements */
 const KNOWN_PACKAGES: Record<string, string> = {
-  // Animation
+  // Animation (use framer-motion sparingly)
   'framer-motion': '^10.16.4',
-  'gsap': '^3.12.2',
-  'animejs': '^3.2.2',
-  '@react-spring/web': '^9.7.3',
+  'gsap': '^3.12.2', // AVOID - use framer-motion instead
+  'animejs': '^3.2.2', // AVOID - use framer-motion instead
+  '@react-spring/web': '^9.7.3', // AVOID - use framer-motion instead
 
   // UI Libraries
   'lucide-react': '^0.294.0',
@@ -1407,6 +1472,55 @@ function detectAndAddMissingDependencies(
   }
 
   return dependencies;
+}
+
+/**
+ * Validate that all imports in generated files have corresponding dependencies
+ * Returns an array of package names that are imported but missing from dependencies
+ */
+function validateAllImportsHaveDependencies(
+  files: GeneratedFile[],
+  dependencies: Record<string, string>
+): string[] {
+  const missing = new Set<string>();
+  const corePackages = ['react', 'react-dom', 'next'];
+
+  for (const file of files) {
+    if (!file.path.match(/\.(tsx?|jsx?)$/)) continue;
+
+    const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'".\/][^'"]*)['"]/g;
+    let match;
+
+    while ((match = importRegex.exec(file.content)) !== null) {
+      let pkg = match[1];
+
+      // Extract base package name
+      if (pkg.startsWith('@')) {
+        const parts = pkg.split('/');
+        pkg = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : pkg;
+      } else {
+        pkg = pkg.split('/')[0];
+      }
+
+      // Skip path aliases and core packages
+      if (pkg.startsWith('@/') || pkg.startsWith('~') || corePackages.includes(pkg)) {
+        continue;
+      }
+
+      // Skip Node.js builtins
+      if (['fs', 'path', 'os', 'crypto', 'stream', 'util', 'events',
+           'http', 'https', 'url', 'querystring', 'buffer', 'child_process'].includes(pkg)) {
+        continue;
+      }
+
+      // Check if package is in dependencies
+      if (!dependencies[pkg]) {
+        missing.add(pkg);
+      }
+    }
+  }
+
+  return Array.from(missing);
 }
 
 /** Extract JSON from various formats */
@@ -1911,11 +2025,33 @@ async function generateWithLinting(
       // Auto-detect all dependencies from import statements in generated files
       dependencies = detectAndAddMissingDependencies(files, dependencies);
 
+      // Validate: Check that all imports have corresponding dependencies
+      const missingDeps = validateAllImportsHaveDependencies(files, dependencies);
+      if (missingDeps.length > 0) {
+        console.error('❌ Missing dependencies detected:', missingDeps);
+        throw new Error(`Missing dependencies: ${missingDeps.join(', ')}. These packages are imported but not in package.json.`);
+      }
+
+      // Warn user when heavy packages are detected
+      const heavyPackages = {
+        '@react-three/fiber': 'Consider using CSS animations or framer-motion instead for better performance',
+        '@react-three/drei': 'Consider using CSS animations or framer-motion instead for better performance',
+        'three': 'Consider using CSS animations or framer-motion instead for better performance',
+        'gsap': 'Consider using framer-motion instead - it\'s lighter and more React-friendly',
+      };
+
+      for (const [pkg, suggestion] of Object.entries(heavyPackages)) {
+        if (dependencies[pkg]) {
+          console.warn(`⚠️ Heavy package included: ${pkg}. ${suggestion}`);
+        }
+      }
+
       // CRITICAL FIX: Always generate package.json file with all dependencies
       const hasPackageJson = files.some((f: any) => f.path === 'package.json');
 
       if (!hasPackageJson) {
-        console.log('📦 Generating package.json file with dependencies');
+        console.log(`✅ Generated package.json with ${Object.keys(dependencies).length} dependencies:`,
+                    Object.keys(dependencies).join(', '));
 
         const packageJson = {
           name: "generated-nextjs-app",
@@ -1946,10 +2082,12 @@ async function generateWithLinting(
         if (pkgIndex !== -1) {
           try {
             const pkg = JSON.parse(files[pkgIndex].content);
+            const oldCount = Object.keys(pkg.dependencies || {}).length;
             // Merge dependencies from both sources
             pkg.dependencies = { ...pkg.dependencies, ...dependencies };
+            const newCount = Object.keys(pkg.dependencies).length;
             files[pkgIndex].content = JSON.stringify(pkg, null, 2);
-            console.log('✅ Updated package.json with dependencies:', Object.keys(pkg.dependencies).join(', '));
+            console.log(`✅ Updated package.json: ${oldCount} → ${newCount} dependencies`);
           } catch (e) {
             console.error('Failed to update package.json:', e);
           }

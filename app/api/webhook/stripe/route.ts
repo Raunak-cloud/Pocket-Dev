@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
 
           if (txDoc.exists) {
             alreadyCredited = true;
+            console.log(`[webhook] Transaction already exists for session ${session.id}, skipping credit`);
             return;
           }
 
@@ -84,6 +85,8 @@ export async function POST(request: NextRequest) {
 
           const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
           const newBalance = currentBalance + tokensAmount;
+
+          console.log(`[webhook] Crediting ${tokensAmount} ${tokenType} tokens to user ${userId}. Balance: ${currentBalance} -> ${newBalance}`);
 
           transaction.set(userRef, { [tokenField]: newBalance }, { merge: true });
 
@@ -101,9 +104,9 @@ export async function POST(request: NextRequest) {
         });
 
         if (alreadyCredited) {
-          console.log(`[webhook] Token purchase already processed for session ${session.id}, skipping`);
+          console.log(`[webhook] Token purchase already processed for session ${session.id}, no changes made`);
         } else {
-          console.log(`[webhook] Credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
+          console.log(`[webhook] Successfully credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
         }
       } catch (error) {
         console.error("[webhook] Error crediting tokens:", error);

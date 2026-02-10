@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
 
     // Use session ID as document ID so the idempotency check is inside the transaction
     let alreadyCredited = false;
+    let finalBalances = { appTokens: 0, integrationTokens: 0 };
 
     await adminDb.runTransaction(async (transaction) => {
       const txRef = adminDb.collection("tokenTransactions").doc(session.id);
@@ -69,6 +70,23 @@ export async function POST(request: NextRequest) {
       const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
       const newBalance = currentBalance + tokensAmount;
 
+      // Get current balances for both token types
+      const currentAppTokens = userDoc.exists ? (userDoc.data()?.appTokens || 0) : 0;
+      const currentIntegrationTokens = userDoc.exists ? (userDoc.data()?.integrationTokens || 0) : 0;
+
+      // Calculate final balances
+      if (tokenType === "app") {
+        finalBalances = {
+          appTokens: newBalance,
+          integrationTokens: currentIntegrationTokens,
+        };
+      } else {
+        finalBalances = {
+          appTokens: currentAppTokens,
+          integrationTokens: newBalance,
+        };
+      }
+
       transaction.set(userRef, { [tokenField]: newBalance }, { merge: true });
 
       transaction.set(txRef, {
@@ -84,16 +102,25 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    if (!alreadyCredited) {
-      console.log(`[verify-token-payment] Credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
+    if (alreadyCredited) {
+      console.log(`[verify-token-payment] Tokens already credited for session ${session.id}, fetching current balance`);
+      // If already credited, fetch the actual current balance
+      const userDoc = await adminDb.collection("users").doc(userId).get();
+      if (userDoc.exists) {
+        finalBalances = {
+          appTokens: userDoc.data()?.appTokens || 0,
+          integrationTokens: userDoc.data()?.integrationTokens || 0,
+        };
+      }
+    } else {
+      console.log(`[verify-token-payment] Successfully credited ${tokensAmount} ${tokenType} tokens to user ${userId}. New ${tokenType} balance: ${finalBalances[tokenField]}`);
     }
 
-    const userDoc = await adminDb.collection("users").doc(userId).get();
     return NextResponse.json({
       success: true,
       alreadyCredited,
-      appTokens: userDoc.data()?.appTokens || 0,
-      integrationTokens: userDoc.data()?.integrationTokens || 0,
+      appTokens: finalBalances.appTokens,
+      integrationTokens: finalBalances.integrationTokens,
     });
   } catch (error) {
     console.error("[verify-token-payment] Error:", error);

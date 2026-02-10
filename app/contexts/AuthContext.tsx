@@ -151,9 +151,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user || !db) return;
     try {
       const userRef = doc(db, "users", user.uid);
+      // Force read from server to bypass cache and get latest data
       const userSnap = await getDoc(userRef);
       if (userSnap.exists()) {
         const data = userSnap.data();
+        console.log(`[AuthContext] Refreshing user data for ${user.uid}. AppTokens: ${data.appTokens || 0}, IntegrationTokens: ${data.integrationTokens || 0}`);
         setUserData({
           uid: data.uid,
           email: data.email,
@@ -165,6 +167,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           appTokens: data.appTokens || 0,
           integrationTokens: data.integrationTokens || 0,
         });
+      } else {
+        console.error(`[AuthContext] User document not found for ${user.uid}`);
       }
     } catch (error) {
       console.error("Error refreshing user data:", error);
