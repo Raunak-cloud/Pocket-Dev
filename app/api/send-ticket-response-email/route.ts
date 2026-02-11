@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export async function POST(req: NextRequest) {
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
@@ -29,11 +38,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Sanitize user-supplied values before injecting into HTML
+    const safeName = escapeHtml(String(userName));
+    const safeSubject = escapeHtml(String(ticketSubject));
+    const safeResponse = escapeHtml(String(adminResponse));
+    const safeUrl = encodeURI(String(ticketUrl));
+
     // Send email via Resend
     const { data, error } = await resend.emails.send({
       from: "Pocket Dev Support <onboarding@resend.dev>", // Use Resend's test domain for development
       to: [userEmail],
-      subject: `Re: ${ticketSubject}`,
+      subject: `Re: ${safeSubject}`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -52,22 +67,22 @@ export async function POST(req: NextRequest) {
 
               <!-- Main Content -->
               <div style="background: linear-gradient(to bottom right, #1e293b, #0f172a); border: 1px solid rgba(71, 85, 105, 0.4); border-radius: 16px; padding: 32px; margin-bottom: 24px;">
-                <p style="margin: 0 0 24px; font-size: 16px; color: #e2e8f0;">Hi ${userName},</p>
+                <p style="margin: 0 0 24px; font-size: 16px; color: #e2e8f0;">Hi ${safeName},</p>
 
                 <p style="margin: 0 0 24px; font-size: 14px; color: #cbd5e1;">We've responded to your support ticket:</p>
 
                 <!-- Ticket Info -->
                 <div style="background-color: rgba(15, 23, 42, 0.6); border: 1px solid rgba(71, 85, 105, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
                   <p style="margin: 0 0 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b;">Ticket Subject</p>
-                  <p style="margin: 0 0 16px; font-size: 14px; font-weight: 500; color: #f1f5f9;">${ticketSubject}</p>
+                  <p style="margin: 0 0 16px; font-size: 14px; font-weight: 500; color: #f1f5f9;">${safeSubject}</p>
 
                   <p style="margin: 0 0 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b;">Admin Response</p>
-                  <p style="margin: 0; font-size: 14px; color: #e2e8f0; white-space: pre-wrap;">${adminResponse}</p>
+                  <p style="margin: 0; font-size: 14px; color: #e2e8f0; white-space: pre-wrap;">${safeResponse}</p>
                 </div>
 
                 <!-- CTA Button -->
                 <div style="text-align: center;">
-                  <a href="${ticketUrl}" style="display: inline-block; background: linear-gradient(to right, #2563eb, #7c3aed); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 600; padding: 12px 32px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.1);">
+                  <a href="${safeUrl}" style="display: inline-block; background: linear-gradient(to right, #2563eb, #7c3aed); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 600; padding: 12px 32px; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.1);">
                     View Ticket in Dashboard
                   </a>
                 </div>
@@ -87,7 +102,7 @@ export async function POST(req: NextRequest) {
     if (error) {
       console.error("Resend email error:", error);
       return NextResponse.json(
-        { error: "Failed to send email", details: error },
+        { error: "Failed to send email" },
         { status: 500 }
       );
     }
@@ -97,7 +112,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error("Email API error:", error);
     return NextResponse.json(
-      { error: "Internal server error", details: String(error) },
+      { error: "Internal server error" },
       { status: 500 }
     );
   }

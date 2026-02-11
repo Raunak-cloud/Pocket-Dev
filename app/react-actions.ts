@@ -1,10 +1,19 @@
 "use server";
 
-import { generateReactProject, type GeneratedReactProject, type UploadedImage } from "@/lib/react-generator";
+import { generateProject, editProject } from "@/lib/generation-router";
 
 export async function generateReact(
   prompt: string,
-  images?: UploadedImage[]
-): Promise<GeneratedReactProject> {
-  return generateReactProject(prompt, images);
+  images?: { name: string; type: string; dataUrl: string; downloadUrl?: string }[]
+) {
+  return generateProject(prompt, images);
+}
+
+export async function editReact(
+  editPrompt: string,
+  currentConfig: any,
+  currentFiles: { path: string; content: string }[],
+  imageCache?: Record<string, string>,
+) {
+  return editProject(editPrompt, currentConfig, currentFiles, undefined, imageCache);
 }

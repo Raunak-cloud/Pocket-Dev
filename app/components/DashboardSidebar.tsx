@@ -286,7 +286,7 @@ export default function DashboardSidebar({
         </button>
 
         {/* Admin (only for admin user) */}
-        {user.email === "raunak.vision@gmail.com" && (
+        {user.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL && (
           <button
             onClick={() => onSectionChange("admin")}
             className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${

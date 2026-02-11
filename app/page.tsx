@@ -2,7 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { generateReact } from "./react-actions";
+import { generateReact, editReact } from "./react-actions";
+import type { WebsiteConfig } from "@/lib/templates/types";
 import Logo from "./components/Logo";
 import sdk from "@stackblitz/sdk";
 import type { VM } from "@stackblitz/sdk";
@@ -44,6 +45,8 @@ interface ReactProject {
     errors: number;
     warnings: number;
   };
+  config?: WebsiteConfig;
+  imageCache?: Record<string, string>;
 }
 
 interface UploadedFile {
@@ -73,6 +76,7 @@ interface SavedProject {
   customDomain?: string;
   tier?: "free" | "premium";
   paidAt?: Date;
+  config?: WebsiteConfig;
 }
 
 interface EditHistoryEntry {
@@ -83,7 +87,7 @@ interface EditHistoryEntry {
   timestamp: Date;
 }
 
-const ADMIN_EMAIL = "raunak.vision@gmail.com";
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
 
 interface TicketMessage {
   sender: "user" | "admin";
@@ -309,8 +313,18 @@ function StackBlitzPreview({
     if (Object.keys(create).length > 0 || destroy.length > 0) {
       vmRef.current
         .applyFsDiff({ create, destroy })
-        .then(() => {
+        .then(async () => {
           prevFilesRef.current = newFiles;
+          // Give Next.js dev server time to recompile, then reload preview
+          // to avoid stale chunk references (ChunkLoadError)
+          try {
+            await new Promise((r) => setTimeout(r, 1500));
+            const url = await vmRef.current?.preview.getUrl();
+            if (url && vmRef.current) {
+              // Navigate to same URL to force fresh chunk loading
+              vmRef.current.preview.setUrl(url);
+            }
+          } catch { /* preview reload is best-effort */ }
         })
         .catch((err) => {
           console.error("Error applying file diff, falling back to full reload:", err);
@@ -506,6 +520,24 @@ function ReactGeneratorContent() {
   const generationCancelledRef = useRef(false);
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(null);
+  const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
+
+  // Uses Gemini to detect if a prompt has authentication intent
+  async function detectAuthInPrompt(text: string): Promise<boolean> {
+    try {
+      const res = await fetch("/api/check-auth-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data.hasAuthIntent === true;
+    } catch {
+      return false;
+    }
+  }
 
   // Auto-resize textarea
   useEffect(() => {
@@ -695,6 +727,7 @@ function ReactGeneratorContent() {
       lintReport: projectData.lintReport || { passed: true, errors: 0, warnings: 0 },
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      ...(projectData.config ? { config: projectData.config } : {}),
     };
 
     const docRef = await addDoc(collection(db, "projects"), projectDoc);
@@ -729,6 +762,7 @@ function ReactGeneratorContent() {
       dependencies: projectData.dependencies || {},
       lintReport: projectData.lintReport || { passed: true, errors: 0, warnings: 0 },
       updatedAt: serverTimestamp(),
+      ...(projectData.config ? { config: projectData.config } : {}),
     });
   };
 
@@ -1021,6 +1055,7 @@ function ReactGeneratorContent() {
       files: savedProject.files,
       dependencies: savedProject.dependencies || {},
       lintReport: savedProject.lintReport || { passed: true, errors: 0, warnings: 0 },
+      config: savedProject.config,
     });
     setCurrentProjectId(savedProject.id);
     setGenerationPrompt(savedProject.prompt);
@@ -1359,7 +1394,21 @@ function ReactGeneratorContent() {
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!editPrompt.trim() && editAppAuth.length === 0) || isEditing || !project) return;
+    if ((!editPrompt.trim() && editAppAuth.length === 0) || isEditing || !project || checkingAuthIntent) return;
+
+    // Use Gemini to detect auth intent in edit prompt
+    if (editPrompt.trim() && editAppAuth.length === 0) {
+      setCheckingAuthIntent(true);
+      const hasAuth = await detectAuthInPrompt(editPrompt);
+      setCheckingAuthIntent(false);
+      if (hasAuth) {
+        setAuthPromptWarning(
+          "Authentication detected in your prompt! To add login/signup, click the 🔒 lock icon below the edit box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts."
+        );
+        return;
+      }
+    }
+    setAuthPromptWarning(null);
 
     // Check integration token balance based on auth selection
     const editCost = getEditIntegrationCost();
@@ -1433,7 +1482,7 @@ function ReactGeneratorContent() {
         ]);
         stepIndex++;
       }
-    }, 10000); // 10 seconds per step
+    }, 2000); // 2 seconds per step
 
     // Build context from current project
     const currentFiles = project.files
@@ -1442,6 +1491,27 @@ function ReactGeneratorContent() {
 
     // List all existing file paths
     const existingFilePaths = project.files.map((f) => f.path).join(", ");
+
+    // Extract currently-used npm packages from existing code
+    const existingPackages = new Set<string>();
+    for (const f of project.files) {
+      if (!f.path.match(/\.(tsx?|jsx?)$/)) continue;
+      const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'".\/][^'"]*)['"]/g;
+      let m;
+      while ((m = importRegex.exec(f.content)) !== null) {
+        let pkg = m[1];
+        if (pkg.startsWith('@')) {
+          const parts = pkg.split('/');
+          pkg = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : pkg;
+        } else {
+          pkg = pkg.split('/')[0];
+        }
+        if (!pkg.startsWith('@/') && !pkg.startsWith('~')) {
+          existingPackages.add(pkg);
+        }
+      }
+    }
+    const allowedPackagesList = Array.from(existingPackages).join(", ");
 
     // Build the user request text, including auth if selected
     const authLabels: string[] = [];
@@ -1468,7 +1538,22 @@ ${userRequest}
 5. DO NOT add comments, documentation, or explanations unless asked
 6. DO NOT remove or modify content/features the user didn't mention
 7. Only modify the specific parts needed to fulfill the user's exact request
-8. Keep everything else EXACTLY as it was before`;
+8. Keep everything else EXACTLY as it was before
+
+📦 PACKAGE CONSTRAINT (CRITICAL - DO NOT VIOLATE):
+The app currently uses ONLY these packages: ${allowedPackagesList}
+- DO NOT import any npm package that is not in the list above
+- DO NOT add framer-motion, gsap, three, @react-three/fiber, or any other new package
+- Use Tailwind CSS classes for animations (animate-*, transition, hover:, etc.)
+- Use inline SVGs or existing lucide-react icons for icons
+- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, firebase
+- Any import of a package NOT listed above will cause a build error
+
+🎨 TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
+- NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent — these WILL crash the build
+- ONLY use @apply with built-in Tailwind utilities: @apply px-4 py-2 bg-blue-600 text-white rounded-lg
+- Use standard Tailwind color classes (blue-600, gray-900, emerald-500, etc.) instead of custom names
+- Keep globals.css simple — just @tailwind base/components/utilities. Put styles in className attributes.`;
 
     // Add reference to uploaded files if any
     if (editFiles.length > 0) {
@@ -1585,7 +1670,10 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         (f) => f.type.startsWith("image/") || f.type === "application/pdf",
       );
 
-      const result = await generateReact(editFullPrompt, mediaFiles);
+      // Use config-level edit if project has a config (much faster/cheaper)
+      const result = project.config
+        ? await editReact(editPrompt.trim(), project.config, project.files, project.imageCache)
+        : await generateReact(editFullPrompt, mediaFiles);
 
       clearInterval(editProgressInterval);
 
@@ -1598,39 +1686,41 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         for (let i = currentStepCount; i < editProgressSteps.length; i++) {
           setEditProgressMessages((prev) => [...prev, editProgressSteps[i]]);
           if (i < editProgressSteps.length - 1) {
-            // Wait 10 seconds between steps (except for the last one)
-            await new Promise((resolve) => setTimeout(resolve, 10000));
+            // Wait 2 seconds between steps (except for the last one)
+            await new Promise((resolve) => setTimeout(resolve, 2000));
           }
         }
       }
 
       setEditProgressMessages((prev) => [...prev, "Merging changes..."]);
 
-      // Validate and merge: ensure no files are lost
-      const existingFileMap = new Map(project.files.map((f) => [f.path, f]));
-      const newFileMap = new Map(result.files.map((f) => [f.path, f]));
+      let mergedProject: typeof result;
 
-      // Merge: keep all existing files, update with new versions if provided
-      const mergedFiles = Array.from(existingFileMap.entries()).map(
-        ([path, oldFile]) => {
-          return newFileMap.get(path) || oldFile; // Use new version if exists, otherwise keep old
-        },
-      );
+      if (result.config) {
+        // Config-based edit: template generates all files from scratch, no merge needed
+        const persistedFiles = await persistPollinationsImages(result.files, user?.uid ?? "anonymous");
+        mergedProject = { ...result, files: persistedFiles };
+      } else {
+        // Code-level edit: merge to ensure no files are lost
+        const existingFileMap = new Map(project.files.map((f) => [f.path, f]));
+        const newFileMap = new Map(result.files.map((f) => [f.path, f]));
 
-      // Add any completely new files from the result
-      result.files.forEach((newFile) => {
-        if (!existingFileMap.has(newFile.path)) {
-          mergedFiles.push(newFile);
-        }
-      });
+        const mergedFiles = Array.from(existingFileMap.entries()).map(
+          ([path, oldFile]) => {
+            return newFileMap.get(path) || oldFile;
+          },
+        );
 
-      // Persist Pollinations AI images to Firebase Storage so they don't change on reload
-      setEditProgressMessages((prev) => [...prev, "Persisting images..."]);
-      const persistedMergedFiles = await persistPollinationsImages(mergedFiles, user?.uid ?? "anonymous");
-      const mergedProject = {
-        ...result,
-        files: persistedMergedFiles,
-      };
+        result.files.forEach((newFile) => {
+          if (!existingFileMap.has(newFile.path)) {
+            mergedFiles.push(newFile);
+          }
+        });
+
+        setEditProgressMessages((prev) => [...prev, "Persisting images..."]);
+        const persistedMergedFiles = await persistPollinationsImages(mergedFiles, user?.uid ?? "anonymous");
+        mergedProject = { ...result, files: persistedMergedFiles };
+      }
 
       setProject(mergedProject);
       setEditPrompt("");
@@ -1771,7 +1861,7 @@ ${pdfUrlList}
         setProgressMessages((prev) => [...prev, progressSteps[stepIndex]]);
         stepIndex++;
       }
-    }, 10000); // 10 seconds per step
+    }, 2000); // 2 seconds per step
     const progressInterval = progressIntervalRef.current;
 
     try {
@@ -1798,8 +1888,8 @@ ${pdfUrlList}
         for (let i = currentStepCount; i < progressSteps.length; i++) {
           setProgressMessages((prev) => [...prev, progressSteps[i]]);
           if (i < progressSteps.length - 1) {
-            // Wait 10 seconds between steps (except for the last one)
-            await new Promise((resolve) => setTimeout(resolve, 10000));
+            // Wait 2 seconds between steps (except for the last one)
+            await new Promise((resolve) => setTimeout(resolve, 2000));
           }
         }
       }
@@ -1953,7 +2043,21 @@ ${pdfUrlList}
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!prompt.trim() || status === "loading") return;
+    if (!prompt.trim() || status === "loading" || checkingAuthIntent) return;
+
+    // Use Gemini to detect auth intent — auth must be added via the integration toggle (lock icon)
+    if (currentAppAuth.length === 0) {
+      setCheckingAuthIntent(true);
+      const hasAuth = await detectAuthInPrompt(prompt);
+      setCheckingAuthIntent(false);
+      if (hasAuth) {
+        setAuthPromptWarning(
+          "Authentication detected in your prompt! To add login/signup, click the 🔒 lock icon below the prompt box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts."
+        );
+        return;
+      }
+    }
+    setAuthPromptWarning(null);
 
     // Check if user is logged in
     if (!user) {
@@ -3173,6 +3277,23 @@ next-env.d.ts
                 </div>
               )}
 
+              {/* Auth prompt warning for edit */}
+              {authPromptWarning && (
+                <div className="mx-4 mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
+                  <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                  </svg>
+                  <div className="flex-1">
+                    <p className="text-xs text-amber-300 font-medium">{authPromptWarning}</p>
+                  </div>
+                  <button type="button" onClick={() => setAuthPromptWarning(null)} className="text-amber-400 hover:text-amber-300 transition">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+
               {/* Edit Form */}
               <form onSubmit={handleEdit} className="flex-1 flex flex-col p-4">
                 {/* Desktop: Vertical layout with taller textarea */}
@@ -3307,13 +3428,18 @@ next-env.d.ts
                     </button>
                     <button
                       type="submit"
-                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing}
+                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing || checkingAuthIntent}
                       className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {isEditing ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           Updating...
+                        </>
+                      ) : checkingAuthIntent ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Checking...
                         </>
                       ) : (
                         <>
@@ -3449,13 +3575,18 @@ next-env.d.ts
                     </div>
                     <button
                       type="submit"
-                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing}
+                      disabled={(!editPrompt.trim() && editAppAuth.length === 0) || isEditing || checkingAuthIntent}
                       className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                     {isEditing ? (
                       <>
                         <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                         <span className="hidden sm:inline">Updating...</span>
+                      </>
+                    ) : checkingAuthIntent ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span className="hidden sm:inline">Checking...</span>
                       </>
                     ) : (
                       <>
@@ -4738,6 +4869,23 @@ next-env.d.ts
             </div>
           )}
 
+          {/* Auth prompt warning */}
+          {authPromptWarning && (
+            <div className="mb-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 duration-300">
+              <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm text-amber-300 font-medium">{authPromptWarning}</p>
+              </div>
+              <button onClick={() => setAuthPromptWarning(null)} className="text-amber-400 hover:text-amber-300 transition">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
           <form onSubmit={handleGenerate}>
             <div className="relative bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl shadow-slate-950/50 overflow-hidden focus-within:border-slate-700 transition-colors">
               {/* Animated typing placeholder */}
@@ -4865,23 +5013,30 @@ next-env.d.ts
 
                 <button
                   type="submit"
-                  disabled={!prompt.trim()}
+                  disabled={!prompt.trim() || checkingAuthIntent}
                   className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-blue-600 disabled:hover:to-violet-600"
                 >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M13 10V3L4 14h7v7l9-11h-7z"
-                    />
-                  </svg>
-                  Generate
+                  {checkingAuthIntent ? (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M13 10V3L4 14h7v7l9-11h-7z"
+                      />
+                    </svg>
+                  )}
+                  {checkingAuthIntent ? "Checking..." : "Generate"}
                 </button>
               </div>
             </div>
@@ -5784,6 +5939,54 @@ next-env.d.ts
                 className="flex-1 px-4 py-2.5 text-white bg-red-600 hover:bg-red-500 rounded-xl text-sm font-medium transition"
               >
                 Yes, Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (projects list) */}
+      {showDeleteModal && projectToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="relative px-6 pt-8 pb-4 text-center">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setProjectToDelete(null);
+                }}
+                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-red-500/20 rounded-2xl">
+                <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Delete Project?</h3>
+              <p className="text-slate-400 text-sm">This action cannot be undone. The project will be permanently deleted.</p>
+            </div>
+            <div className="px-6 pb-6 space-y-3">
+              <button
+                onClick={() => deleteProject(projectToDelete)}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete Project
+              </button>
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setProjectToDelete(null);
+                }}
+                className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+              >
+                Cancel
               </button>
             </div>
           </div>

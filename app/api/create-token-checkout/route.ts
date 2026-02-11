@@ -2,26 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
 export async function POST(request: NextRequest) {
-  console.log("[create-token-checkout] Starting checkout session creation");
-
   try {
     const stripeKey = process.env.STRIPE_SECRET_KEY;
-    console.log("[create-token-checkout] Stripe key exists:", !!stripeKey);
 
     if (!stripeKey) {
-      console.log("[create-token-checkout] No Stripe key found");
       return NextResponse.json(
         { error: "Stripe is not configured" },
         { status: 500 }
       );
     }
 
-    console.log("[create-token-checkout] Initializing Stripe");
     const stripe = new Stripe(stripeKey);
-
-    console.log("[create-token-checkout] Parsing request body");
     const body = await request.json();
-    console.log("[create-token-checkout] Request body:", JSON.stringify(body));
     const { userId, userEmail, tokenType, quantity } = body;
 
     if (!userId || !tokenType || !quantity) {
@@ -38,9 +30,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (quantity < 1) {
+    if (typeof quantity !== "number" || quantity < 1 || quantity > 1000) {
       return NextResponse.json(
-        { error: "Quantity must be at least 1" },
+        { error: "Quantity must be between 1 and 1000" },
         { status: 400 }
       );
     }
@@ -58,8 +50,6 @@ export async function POST(request: NextRequest) {
     const productDescription = tokenType === "app"
       ? "App tokens for creating new projects (2 tokens per project)"
       : "Integration tokens for AI edits and backend/API calls (1 token per action)";
-
-    console.log("[create-token-checkout] Creating Stripe session for user:", userId, "tokenType:", tokenType, "quantity:", quantity, "tokensToCredit:", tokensToCredit);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -88,7 +78,6 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    console.log("[create-token-checkout] Session created successfully:", session.id);
     return NextResponse.json({
       success: true,
       url: session.url,
@@ -96,12 +85,8 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[create-token-checkout] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Failed to create checkout session";
-    const errorStack = error instanceof Error ? error.stack : undefined;
-    console.error("[create-token-checkout] Error message:", errorMessage);
-    console.error("[create-token-checkout] Error stack:", errorStack);
     return NextResponse.json(
-      { error: errorMessage, details: errorStack },
+      { error: "Failed to create checkout session" },
       { status: 500 }
     );
   }

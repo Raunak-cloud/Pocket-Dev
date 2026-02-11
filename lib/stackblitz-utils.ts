@@ -32,12 +32,35 @@ export function hasAuthentication(project: ReactProject): boolean {
 export function prepareStackBlitzFiles(project: ReactProject): StackBlitzFiles {
   const files: StackBlitzFiles = {};
 
-  // Add all generated files from AI
+  // Config files that will be generated below — skip AI-generated duplicates
+  const managedConfigFiles = new Set([
+    "package.json",
+    "tsconfig.json",
+    "next.config.js",
+    "next.config.ts",
+    "tailwind.config.js",
+    "tailwind.config.ts",
+    "postcss.config.js",
+    "postcss.config.mjs",
+  ]);
+
+  // Add all generated files from AI, excluding config files we manage ourselves
+  // But first, extract any extra dependencies from AI-generated package.json
+  let aiDeps: Record<string, string> = {};
+  const aiPkgFile = project.files.find((f) => f.path === "package.json");
+  if (aiPkgFile) {
+    try {
+      const aiPkg = JSON.parse(aiPkgFile.content);
+      aiDeps = aiPkg.dependencies || {};
+    } catch { /* ignore parse errors */ }
+  }
+
   project.files.forEach((f) => {
+    if (managedConfigFiles.has(f.path)) return;
     files[f.path] = f.content;
   });
 
-  // Add package.json with Next.js scripts
+  // Add package.json with Next.js scripts — merge AI deps + project deps
   files["package.json"] = JSON.stringify({
     name: "generated-nextjs-app",
     version: "0.1.0",
@@ -49,6 +72,7 @@ export function prepareStackBlitzFiles(project: ReactProject): StackBlitzFiles {
       lint: "next lint"
     },
     dependencies: {
+      ...aiDeps,
       ...project.dependencies,
       "next": "^14.0.0",
       "react": "^18.2.0",
@@ -74,15 +98,15 @@ const nextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'images.unsplash.com',
-      },
-      {
-        protocol: 'https',
-        hostname: 'via.placeholder.com',
+        hostname: 'replicate.delivery',
       },
       {
         protocol: 'https',
         hostname: 'firebasestorage.googleapis.com',
+      },
+      {
+        protocol: 'https',
+        hostname: 'images.unsplash.com',
       },
       {
         protocol: 'https',
@@ -93,7 +117,8 @@ const nextConfig = {
 };
 module.exports = nextConfig;`;
 
-  // Add tailwind.config.js
+  // Add tailwind.config.js with common custom color fallbacks
+  // (Gemini sometimes generates bg-primary/bg-secondary — these prevent build errors)
   files["tailwind.config.js"] = `/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -101,7 +126,13 @@ module.exports = {
     './components/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        primary: { DEFAULT: '#2563eb', 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a' },
+        secondary: { DEFAULT: '#7c3aed', 50: '#f5f3ff', 100: '#ede9fe', 200: '#ddd6fe', 300: '#c4b5fd', 400: '#a78bfa', 500: '#8b5cf6', 600: '#7c3aed', 700: '#6d28d9', 800: '#5b21b6', 900: '#4c1d95' },
+        accent: { DEFAULT: '#f59e0b', 50: '#fffbeb', 100: '#fef3c7', 200: '#fde68a', 300: '#fcd34d', 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706', 700: '#b45309', 800: '#92400e', 900: '#78350f' },
+      },
+    },
   },
   plugins: [],
 }`;

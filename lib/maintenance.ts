@@ -77,7 +77,8 @@ export async function isUserAdmin(user: any): Promise<boolean> {
 
   try {
     // First check: Email-based admin (matches DashboardSidebar logic)
-    if (user.email === 'raunak.vision@gmail.com') {
+    const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+    if (adminEmail && user.email === adminEmail) {
       return true;
     }
 
