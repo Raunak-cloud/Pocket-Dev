@@ -1,5 +1,5 @@
 import { generateReactProject } from "./lib/react-generator";
-import { prepareStackBlitzFiles } from "./lib/stackblitz-utils";
+import { prepareE2BFiles } from "./lib/e2b-utils";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -19,10 +19,10 @@ async function main() {
   console.log(`  -> Dependencies: ${Object.keys(result.dependencies).join(", ")}`);
   console.log(`  -> Lint: ${result.lintReport.passed ? "PASSED" : "FAILED"} (${result.lintReport.errors} errors, ${result.lintReport.warnings} warnings)`);
 
-  // 2. Prepare files using the same logic as StackBlitz (managed configs override AI configs)
+  // 2. Prepare files using the same logic as E2B (managed configs override AI configs)
   console.log("\n[2/4] Preparing project files (applying managed configs)...");
-  const stackblitzFiles = prepareStackBlitzFiles(result);
-  const fileCount = Object.keys(stackblitzFiles).length;
+  const e2bFiles = prepareE2BFiles(result);
+  const fileCount = Object.keys(e2bFiles).length;
   console.log(`  -> ${fileCount} total files after config merge`);
 
   // 3. Write all files to the test directory
@@ -32,7 +32,7 @@ async function main() {
   }
   fs.mkdirSync(TEST_DIR, { recursive: true });
 
-  for (const [filePath, content] of Object.entries(stackblitzFiles)) {
+  for (const [filePath, content] of Object.entries(e2bFiles)) {
     const fullPath = path.join(TEST_DIR, filePath);
     const dir = path.dirname(fullPath);
     if (!fs.existsSync(dir)) {
@@ -44,7 +44,7 @@ async function main() {
 
   // List the generated files
   console.log("\n  Files:");
-  for (const filePath of Object.keys(stackblitzFiles).sort()) {
+  for (const filePath of Object.keys(e2bFiles).sort()) {
     console.log(`    ${filePath}`);
   }
 

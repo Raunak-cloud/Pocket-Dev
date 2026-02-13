@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "@e2b/code-interpreter": "^2.3.3",
     "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@monaco-editor/react": "^4.7.0",
-    "@stackblitz/sdk": "^1.11.0",
     "firebase": "^12.9.0",
     "firebase-admin": "^13.6.1",
     "framer-motion": "^11.11.17",
@@ -41,7 +41,7 @@
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5",
+    "typescript": "5.9.3",
     "wrangler": "^4.64.0"
   }
 }

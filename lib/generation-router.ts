@@ -107,15 +107,27 @@ export async function editProject(
   imageCache?: Record<string, string>,
 ): Promise<TemplateGeneratedProject> {
   let newConfig: WebsiteConfig;
+  let shouldFullRegenerate = false;
 
   if (currentConfig) {
-    // Config-level editing (fast, cheap)
-    onProgress?.("Updating your website...");
-    newConfig = await editConfig(currentConfig, editPrompt, onProgress);
+    // Smart edit: classifies edit type and chooses strategy
+    const { smartEdit } = await import("./smart-edit-router");
+    const result = await smartEdit(currentConfig, editPrompt, onProgress);
+
+    if (result.shouldRegenerate) {
+      // Major changes detected - regenerate from scratch
+      onProgress?.("Major changes detected, regenerating...");
+      newConfig = await generateConfig(editPrompt, undefined, onProgress);
+      shouldFullRegenerate = true;
+    } else {
+      // Surgical edit applied
+      newConfig = result.config;
+    }
   } else {
     // No config (legacy project) — generate a fresh config from the edit prompt
     onProgress?.("Redesigning your website...");
     newConfig = await generateConfig(editPrompt, undefined, onProgress);
+    shouldFullRegenerate = true;
   }
 
   // Validate custom sections (lint AI-generated code)

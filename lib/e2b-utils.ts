@@ -1,5 +1,3 @@
-import type { VM } from '@stackblitz/sdk';
-
 interface GeneratedFile {
   path: string;
   content: string;
@@ -10,7 +8,7 @@ export interface ReactProject {
   dependencies: Record<string, string>;
 }
 
-export interface StackBlitzFiles {
+export interface E2BFiles {
   [path: string]: string;
 }
 
@@ -26,11 +24,11 @@ export function hasAuthentication(project: ReactProject): boolean {
 }
 
 /**
- * Prepares files for StackBlitz with Next.js App Router structure
+ * Prepares files for E2B with Next.js App Router structure
  * Includes all necessary config files for Next.js
  */
-export function prepareStackBlitzFiles(project: ReactProject): StackBlitzFiles {
-  const files: StackBlitzFiles = {};
+export function prepareE2BFiles(project: ReactProject): E2BFiles {
+  const files: E2BFiles = {};
 
   // Config files that will be generated below — skip AI-generated duplicates
   const managedConfigFiles = new Set([
@@ -332,36 +330,32 @@ function useCart() {
 }
 
 /**
- * Waits for the StackBlitz preview to be ready
- * Polls for preview URL availability
- * Note: This is optional - the embed will work even if this times out
+ * Computes the difference between old and new files
+ * Returns arrays of files to write and files to delete
  */
-export async function waitForPreview(vm: VM, timeout: number = 10000): Promise<void> {
-  const startTime = Date.now();
-  const pollInterval = 500;
+export function computeFileDiff(
+  oldFiles: Record<string, string>,
+  newFiles: Record<string, string>
+): {
+  toWrite: Array<{ path: string; data: string }>;
+  toDelete: string[];
+} {
+  const toWrite: Array<{ path: string; data: string }> = [];
+  const toDelete: string[] = [];
 
-  return new Promise((resolve, reject) => {
-    const checkPreview = async () => {
-      try {
-        const url = await vm.preview.getUrl();
-        if (url) {
-          resolve();
-          return;
-        }
-      } catch (e) {
-        // Preview not ready yet - this is normal during startup
-      }
+  // Find files that are new or changed
+  for (const [path, content] of Object.entries(newFiles)) {
+    if (oldFiles[path] !== content) {
+      toWrite.push({ path, data: content });
+    }
+  }
 
-      if (Date.now() - startTime > timeout) {
-        // Don't treat this as a critical error - just log it
-        console.log('Preview URL detection timed out, but embed is running');
-        resolve(); // Resolve instead of reject
-        return;
-      }
+  // Find files that were deleted
+  for (const path of Object.keys(oldFiles)) {
+    if (!(path in newFiles)) {
+      toDelete.push(path);
+    }
+  }
 
-      setTimeout(checkPreview, pollInterval);
-    };
-
-    checkPreview();
-  });
+  return { toWrite, toDelete };
 }
