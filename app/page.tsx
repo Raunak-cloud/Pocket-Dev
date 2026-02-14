@@ -2,15 +2,19 @@
 
 import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { generateReact, editReact } from "./react-actions";
-import type { WebsiteConfig } from "@/lib/templates/types";
+
+import { editReact } from "./react-actions";
+import { generateCodeWithInngest } from "@/lib/inngest-helpers";
 import Logo from "./components/Logo";
-import {
-  createSandboxServer,
-  updateSandboxFiles,
-  closeSandbox,
-} from "./sandbox-actions";
-import { prepareE2BFiles, computeFileDiff } from "@/lib/e2b-utils";
+import CodeViewer from "./components/CodeViewer";
+import E2BPreview from "./components/E2BPreview";
+import LoadingScreen from "./components/LoadingScreen";
+import BackgroundEffects from "./components/BackgroundEffects";
+import SettingsContent from "./components/Settings";
+import ProjectsContent from "./components/Projects";
+import { createSandboxServer } from "./sandbox-actions";
+import { cancelGenerationJob } from "./inngest-actions";
+import { prepareE2BFiles } from "@/lib/e2b-utils";
 import { useAuth } from "./contexts/AuthContext";
 import JSZip from "jszip";
 import SignInModal from "./components/SignInModal";
@@ -34,295 +38,33 @@ import {
 import { db, storage } from "@/lib/firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { persistPollinationsImages } from "@/lib/persist-images";
+import ThemeToggle from "./components/ThemeToggle";
+import {
+  DeleteConfirmModal,
+  CancelConfirmModal,
+  AuthModal,
+  DatabaseModal,
+  TokenPurchaseModal,
+} from "./components/Modals";
+import CreateContentComponent from "./components/Generation/CreateContent";
+import SupportContentComponent from "./components/Support/SupportContent";
+import { usePublishing } from "./hooks/usePublishing";
+import { useGitHubExport } from "./hooks/useGitHubExport";
+import { useEditorExport } from "./hooks/useEditorExport";
 
-interface GeneratedFile {
-  path: string;
-  content: string;
-}
-
-interface ReactProject {
-  files: GeneratedFile[];
-  dependencies: Record<string, string>;
-  lintReport: {
-    passed: boolean;
-    errors: number;
-    warnings: number;
-  };
-  config?: WebsiteConfig;
-  imageCache?: Record<string, string>;
-}
-
-interface UploadedFile {
-  name: string;
-  type: string;
-  dataUrl: string;
-  downloadUrl?: string; // Firebase Storage URL
-}
-
-interface SavedProject {
-  id: string;
-  userId: string;
-  prompt: string;
-  files: GeneratedFile[];
-  dependencies: Record<string, string>;
-  lintReport: {
-    passed: boolean;
-    errors: number;
-    warnings: number;
-  };
-  createdAt: Date;
-  updatedAt: Date;
-  isPublished?: boolean;
-  publishedUrl?: string;
-  deploymentId?: string;
-  publishedAt?: Date;
-  customDomain?: string;
-  tier?: "free" | "premium";
-  paidAt?: Date;
-  config?: WebsiteConfig;
-}
-
-interface EditHistoryEntry {
-  id: string;
-  prompt: string;
-  files: GeneratedFile[];
-  dependencies: Record<string, string>;
-  timestamp: Date;
-}
+// Types
+import type {
+  ReactProject,
+  UploadedFile,
+  SavedProject,
+  EditHistoryEntry,
+  SupportTicket,
+  TicketMessage,
+} from "./types";
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
 
-interface TicketMessage {
-  sender: "user" | "admin";
-  text: string;
-  timestamp: Date;
-}
-
-interface SupportTicket {
-  id: string;
-  userId: string;
-  userEmail: string;
-  userName: string;
-  category: "project-issue" | "billing" | "feature-request" | "general";
-  subject: string;
-  description: string;
-  projectId?: string;
-  projectName?: string;
-  status: "open" | "in-progress" | "resolved";
-  createdAt: Date;
-  updatedAt: Date;
-  adminResponse?: string;
-  respondedAt?: Date;
-  messages?: TicketMessage[];
-  lastReadByUserAt?: Date;
-  unreadAdminMessageCount?: number;
-}
-
-const EXAMPLES = [
-  {
-    icon: "🛍️",
-    name: "E-Commerce",
-    desc: "Product listings, cart & checkout",
-    query:
-      "Create a modern e-commerce Next.js app with product listings, shopping cart, and checkout pages using App Router and server components",
-  },
-  {
-    icon: "🍕",
-    name: "Restaurant",
-    desc: "Menu, reservations & about",
-    query:
-      "Create a restaurant Next.js app with menu, reservations, and about pages using dynamic routes and App Router",
-  },
-  {
-    icon: "🚀",
-    name: "SaaS Landing",
-    desc: "Features, pricing & signup",
-    query:
-      "Create a SaaS landing page Next.js app with features, pricing, and signup sections using App Router and optimized metadata",
-  },
-  {
-    icon: "📸",
-    name: "Portfolio",
-    desc: "Projects gallery & contact",
-    query:
-      "Create a creative portfolio Next.js app with projects gallery, about, and contact pages using App Router and Next.js Image optimization",
-  },
-  {
-    icon: "📝",
-    name: "Blog",
-    desc: "Posts, categories & search",
-    query:
-      "Create a modern blog Next.js app with post listings, categories, and search using App Router and dynamic routes",
-  },
-  {
-    icon: "🏋️",
-    name: "Fitness",
-    desc: "Workouts, plans & progress",
-    query:
-      "Create a fitness tracker Next.js app with workout plans, exercise library, and progress tracking using App Router and client components",
-  },
-];
-
 // E2B preview component with loading state
-function E2BPreview({
-  project,
-  previewKey,
-}: {
-  project: ReactProject | null;
-  previewKey: number;
-}) {
-  const [sandboxId, setSandboxId] = useState<string | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [loadingState, setLoadingState] = useState<
-    "creating" | "installing" | "starting" | "ready" | "error"
-  >("creating");
-  const [error, setError] = useState<string | null>(null);
-  const prevFilesRef = useRef<Record<string, string> | null>(null);
-
-  // Effect 1: Create sandbox
-  useEffect(() => {
-    if (!project) return;
-
-    let mounted = true;
-    let currentSandboxId: string | null = null;
-
-    const init = async () => {
-      try {
-        setLoadingState("creating");
-        setError(null);
-        const files = prepareE2BFiles(project);
-
-        setLoadingState("installing");
-        const { sandboxId, url } = await createSandboxServer(files);
-        currentSandboxId = sandboxId;
-
-        if (!mounted) {
-          await closeSandbox(sandboxId);
-          return;
-        }
-
-        setSandboxId(sandboxId);
-        setPreviewUrl(url);
-        prevFilesRef.current = files;
-        setLoadingState("ready");
-      } catch (err) {
-        console.error("E2B sandbox error:", err);
-        if (mounted) {
-          setLoadingState("error");
-          setError(
-            err instanceof Error ? err.message : "Failed to create sandbox",
-          );
-        }
-      }
-    };
-
-    init();
-
-    return () => {
-      mounted = false;
-      if (currentSandboxId) {
-        closeSandbox(currentSandboxId);
-      }
-    };
-  }, [previewKey]);
-
-  // Effect 2: Update files
-  useEffect(() => {
-    if (!sandboxId || !prevFilesRef.current || !project) return;
-
-    const update = async () => {
-      try {
-        const newFiles = prepareE2BFiles(project);
-        const { toWrite, toDelete } = computeFileDiff(
-          prevFilesRef.current || {},
-          newFiles,
-        );
-
-        if (toWrite.length > 0 || toDelete.length > 0) {
-          await updateSandboxFiles(sandboxId, toWrite, toDelete);
-          prevFilesRef.current = newFiles;
-        }
-      } catch (err) {
-        console.error("Error updating sandbox files:", err);
-      }
-    };
-
-    update();
-  }, [project, sandboxId]);
-
-  return (
-    <div className="relative h-full">
-      {/* Loading overlay */}
-      {loadingState !== "ready" && loadingState !== "error" && (
-        <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-center">
-          <div className="text-center">
-            {/* Modern loading animation */}
-            <div className="relative w-20 h-20 mx-auto mb-4">
-              {/* Outer rotating ring */}
-              <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full"></div>
-              {/* Spinning gradient ring */}
-              <div className="absolute inset-0 border-4 border-transparent border-t-blue-500 border-r-violet-500 rounded-full animate-spin"></div>
-              {/* Inner pulsing dot */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse"></div>
-              </div>
-            </div>
-            <p className="text-sm font-medium text-slate-300 mb-1">
-              {loadingState === "creating" && "Creating sandbox..."}
-              {loadingState === "installing" && "Installing dependencies..."}
-              {loadingState === "starting" && "Starting dev server..."}
-            </p>
-            <p className="text-xs text-slate-500">
-              {loadingState === "creating" && "Setting up cloud environment"}
-              {loadingState === "installing" && "Running npm install"}
-              {loadingState === "starting" && "Waiting for Next.js to start"}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Error overlay */}
-      {loadingState === "error" && (
-        <div className="absolute inset-0 bg-slate-900 z-10 flex items-center justify-center p-4">
-          <div className="text-center max-w-md">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 flex items-center justify-center">
-              <svg
-                className="w-8 h-8 text-red-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                />
-              </svg>
-            </div>
-            <h3 className="text-lg font-semibold text-white mb-2">
-              Preview Error
-            </h3>
-            <p className="text-sm text-slate-400 mb-4">
-              {error ||
-                "There was an issue loading the preview. Try refreshing the page or regenerating the project."}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Iframe preview */}
-      {previewUrl && (
-        <iframe
-          src={previewUrl}
-          className="w-full h-full border-0"
-          title="Next.js Preview"
-        />
-      )}
-    </div>
-  );
-}
-
 function ReactGeneratorContent() {
   const {
     user,
@@ -349,6 +91,9 @@ function ReactGeneratorContent() {
   );
   const [isGenerationMinimized, setIsGenerationMinimized] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState("");
+  const [currentGenerationProjectId, setCurrentGenerationProjectId] = useState<
+    string | null
+  >(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [previewMode, setPreviewMode] = useState<
@@ -357,18 +102,13 @@ function ReactGeneratorContent() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
-  const [deploymentId, setDeploymentId] = useState<string | null>(null);
-  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+  const [showCodeViewer, setShowCodeViewer] = useState(false);
   const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
     [],
   );
   const [isEditMinimized, setIsEditMinimized] = useState(false);
-  const [showDomainModal, setShowDomainModal] = useState(false);
-  const [customDomain, setCustomDomain] = useState("");
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
   const [showTokenPurchaseModal, setShowTokenPurchaseModal] = useState(false);
   const [purchaseTokenType, setPurchaseTokenType] = useState<
@@ -393,8 +133,6 @@ function ReactGeneratorContent() {
   const [showCancelConfirm, setShowCancelConfirm] = useState<
     "generation" | "edit" | null
   >(null);
-  const [showExportDropdown, setShowExportDropdown] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
   const [currentAppAuth, setCurrentAppAuth] = useState<string[]>([]);
   const [insufficientTokenMessage, setInsufficientTokenMessage] = useState<
     string | null
@@ -403,16 +141,7 @@ function ReactGeneratorContent() {
   const [editHistory, setEditHistory] = useState<EditHistoryEntry[]>([]);
   const [showEditHistory, setShowEditHistory] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
-  const [showGitHubModal, setShowGitHubModal] = useState(false);
-  const [githubToken, setGithubToken] = useState("");
-  const [githubRepoName, setGithubRepoName] = useState("");
-  const [githubPrivate, setGithubPrivate] = useState(false);
-  const [githubExportStatus, setGithubExportStatus] = useState<
-    "idle" | "exporting" | "success" | "error"
-  >("idle");
-  const [githubExportMessage, setGithubExportMessage] = useState("");
-  const [githubRepoUrl, setGithubRepoUrl] = useState("");
-  const [exportSuccessMessage, setExportSuccessMessage] = useState("");
+  const [tokenToast, setTokenToast] = useState("");
   // Support ticket state
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [adminTickets, setAdminTickets] = useState<SupportTicket[]>([]);
@@ -449,6 +178,75 @@ function ReactGeneratorContent() {
     null,
   );
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
+
+  // Initialize custom hooks for publishing, GitHub export, and editor export
+  const publishingHook = usePublishing({
+    user,
+    currentProjectId,
+    project,
+    generationPrompt,
+    setError,
+    loadSavedProjects: () => loadSavedProjects(), // Will be defined below
+  });
+
+  const githubExportHook = useGitHubExport({
+    project,
+    setError,
+  });
+
+  const editorExportHook = useEditorExport({
+    project,
+    setError,
+  });
+
+  // Destructure hook values for easier access
+  const {
+    isPublishing,
+    publishedUrl,
+    deploymentId,
+    hasUnpublishedChanges,
+    showDomainModal,
+    customDomain,
+    setIsPublishing,
+    setPublishedUrl,
+    setDeploymentId,
+    setHasUnpublishedChanges,
+    setShowDomainModal,
+    setCustomDomain,
+    publishProject,
+    unpublishProject,
+    connectDomain,
+  } = publishingHook;
+
+  const {
+    showGitHubModal,
+    githubToken,
+    githubRepoName,
+    githubPrivate,
+    githubExportStatus,
+    githubExportMessage,
+    githubRepoUrl,
+    setShowGitHubModal,
+    setGithubToken,
+    setGithubRepoName,
+    setGithubPrivate,
+    setGithubExportStatus,
+    setGithubExportMessage,
+    setGithubRepoUrl,
+    exportToGitHub,
+    pushToGitHub,
+  } = githubExportHook;
+
+  const {
+    showExportDropdown,
+    isExporting,
+    exportSuccessMessage,
+    setShowExportDropdown,
+    setIsExporting,
+    setExportSuccessMessage,
+    exportToVSCode,
+    exportToCursor,
+  } = editorExportHook;
 
   // Uses Gemini to detect if a prompt has authentication intent
   async function detectAuthInPrompt(text: string): Promise<boolean> {
@@ -623,11 +421,12 @@ function ReactGeneratorContent() {
               // Restore edit prompt and auth
               setEditPrompt(pendingEdit.editPrompt || "");
               setEditAppAuth(pendingEdit.editAppAuth || []);
-              // Auto-trigger the edit after a short delay for UI to settle
+              // Show toast after a short delay for UI to settle
               setTimeout(() => {
-                alert(
+                setTokenToast(
                   `Payment successful! ${amount} ${tokenType} tokens added. Your edit will now continue.`,
                 );
+                setTimeout(() => setTokenToast(""), 8000);
               }, 500);
               return;
             }
@@ -636,9 +435,10 @@ function ReactGeneratorContent() {
           }
         }
 
-        alert(
+        setTokenToast(
           `Payment successful! ${amount} ${tokenType} tokens have been added to your account.`,
         );
+        setTimeout(() => setTokenToast(""), 8000);
       };
       handleTokenSuccess();
     } else if (tokenPayment === "cancelled") {
@@ -1141,117 +941,6 @@ function ReactGeneratorContent() {
     }
   };
 
-  // Publish the project to Vercel
-  const publishProject = async () => {
-    if (!project || !currentProjectId || !user) return;
-
-    setIsPublishing(true);
-    setError("");
-    try {
-      // Call our publish API with the original Next.js project files
-      const response = await fetch("/api/publish", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          files: project.files,
-          dependencies: project.dependencies,
-          projectId: currentProjectId,
-          title: generationPrompt || "Pocket Dev App",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to publish");
-      }
-
-      const publishUrl = data.url;
-      const newDeploymentId = data.deploymentId;
-
-      // Update project in Firestore with publish info
-      const projectRef = doc(db, "projects", currentProjectId);
-      await updateDoc(projectRef, {
-        isPublished: true,
-        publishedUrl: publishUrl,
-        deploymentId: newDeploymentId,
-        publishedAt: serverTimestamp(),
-      });
-
-      setPublishedUrl(publishUrl);
-      setDeploymentId(newDeploymentId);
-      setHasUnpublishedChanges(false);
-      loadSavedProjects();
-    } catch (error) {
-      console.error("Error publishing project:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Failed to publish project. Please try again.",
-      );
-    } finally {
-      setIsPublishing(false);
-    }
-  };
-
-  // Connect custom domain
-  const connectDomain = async (domain: string) => {
-    if (!currentProjectId || !user) return;
-
-    try {
-      const projectRef = doc(db, "projects", currentProjectId);
-      await updateDoc(projectRef, {
-        customDomain: domain,
-      });
-      setCustomDomain(domain);
-      setShowDomainModal(false);
-      loadSavedProjects();
-    } catch (error) {
-      console.error("Error connecting domain:", error);
-      setError("Failed to connect domain. Please try again.");
-    }
-  };
-
-  // Unpublish the project
-  const unpublishProject = async () => {
-    if (!currentProjectId || !user) return;
-
-    try {
-      // Delete the Vercel deployment if we have a deployment ID
-      if (deploymentId) {
-        try {
-          await fetch("/api/publish", {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ deploymentId }),
-          });
-        } catch (deleteError) {
-          console.error("Error deleting Vercel deployment:", deleteError);
-          // Continue with unpublishing even if Vercel delete fails
-        }
-      }
-
-      const projectRef = doc(db, "projects", currentProjectId);
-      await updateDoc(projectRef, {
-        isPublished: false,
-        publishedUrl: null,
-        deploymentId: null,
-        publishedAt: null,
-        customDomain: null,
-      });
-      setPublishedUrl(null);
-      setDeploymentId(null);
-      setCustomDomain("");
-      setShowDomainModal(false);
-      setHasUnpublishedChanges(false);
-      loadSavedProjects();
-    } catch (error) {
-      console.error("Error unpublishing project:", error);
-      setError("Failed to unpublish project. Please try again.");
-    }
-  };
 
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1343,12 +1032,22 @@ function ReactGeneratorContent() {
     setShowCancelConfirm("generation");
   };
 
-  const confirmCancelGeneration = () => {
+  const confirmCancelGeneration = async () => {
     generationCancelledRef.current = true;
     if (progressIntervalRef.current) {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
     }
+
+    // Cancel the Inngest job if it's running
+    if (currentGenerationProjectId) {
+      console.log(
+        `[App] Cancelling generation job: ${currentGenerationProjectId}`,
+      );
+      await cancelGenerationJob(currentGenerationProjectId);
+      setCurrentGenerationProjectId(null);
+    }
+
     setStatus("idle");
     setProgressMessages([]);
     setGenerationPrompt("");
@@ -1454,27 +1153,6 @@ function ReactGeneratorContent() {
     }
 
     // Start progress simulation
-    const editProgressSteps = [
-      "Analyzing current code structure...",
-      "Understanding your edit request...",
-      "Planning code modifications...",
-      "Applying changes to components...",
-      "Updating styles and layout...",
-      "Validating code integrity...",
-      "Finalizing changes...",
-    ];
-
-    let stepIndex = 0;
-    const editProgressInterval = setInterval(() => {
-      if (stepIndex < editProgressSteps.length) {
-        setEditProgressMessages((prev) => [
-          ...prev,
-          editProgressSteps[stepIndex],
-        ]);
-        stepIndex++;
-      }
-    }, 2000); // 2 seconds per step
-
     // Build context from current project
     const currentFiles = project.files
       .map((f) => `// ${f.path}\n${f.content}`)
@@ -1666,11 +1344,6 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     }
 
     try {
-      // Filter for images and PDFs (Anthropic API supports both)
-      const mediaFiles = editFiles.filter(
-        (f) => f.type.startsWith("image/") || f.type === "application/pdf",
-      );
-
       // Use config-level edit if project has a config (much faster/cheaper)
       const result = project.config
         ? await editReact(
@@ -1679,60 +1352,27 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
             project.files,
             project.imageCache,
           )
-        : await generateReact(editFullPrompt, mediaFiles);
+        : await generateCodeWithInngest(
+            editFullPrompt,
+            user?.uid || "anonymous",
+            (message) => {
+              setEditProgressMessages((prev) => [...prev, message]);
+            },
+          );
 
-      clearInterval(editProgressInterval);
-
-      // Wait for all progress steps to complete before showing the updated website
-      const currentStepCount = stepIndex;
-      const remainingSteps = editProgressSteps.length - currentStepCount;
-
-      if (remainingSteps > 0) {
-        // Show remaining steps immediately one by one
-        for (let i = currentStepCount; i < editProgressSteps.length; i++) {
-          setEditProgressMessages((prev) => [...prev, editProgressSteps[i]]);
-          if (i < editProgressSteps.length - 1) {
-            // Wait 2 seconds between steps (except for the last one)
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-          }
-        }
+      // Store projectId for cancellation tracking (if using Inngest)
+      if (!project.config && "projectId" in result && result.projectId) {
+        setCurrentGenerationProjectId(result.projectId);
       }
 
-      setEditProgressMessages((prev) => [...prev, "Merging changes..."]);
+      setEditProgressMessages((prev) => [...prev, "💾 Merging changes..."]);
 
-      let mergedProject: typeof result;
-
-      if (result.config) {
-        // Config-based edit: template generates all files from scratch, no merge needed
-        const persistedFiles = await persistPollinationsImages(
-          result.files,
-          user?.uid ?? "anonymous",
-        );
-        mergedProject = { ...result, files: persistedFiles };
-      } else {
-        // Code-level edit: merge to ensure no files are lost
-        const existingFileMap = new Map(project.files.map((f) => [f.path, f]));
-        const newFileMap = new Map(result.files.map((f) => [f.path, f]));
-
-        const mergedFiles = Array.from(existingFileMap.entries()).map(
-          ([path, oldFile]) => {
-            return newFileMap.get(path) || oldFile;
-          },
-        );
-
-        result.files.forEach((newFile) => {
-          if (!existingFileMap.has(newFile.path)) {
-            mergedFiles.push(newFile);
-          }
-        });
-
-        setEditProgressMessages((prev) => [...prev, "Persisting images..."]);
-        const persistedMergedFiles = await persistPollinationsImages(
-          mergedFiles,
-          user?.uid ?? "anonymous",
-        );
-        mergedProject = { ...result, files: persistedMergedFiles };
-      }
+      // AI code generation: persist images and use generated files
+      const persistedFiles = await persistPollinationsImages(
+        result.files,
+        user?.uid ?? "anonymous",
+      );
+      const mergedProject = { ...result, files: persistedFiles };
 
       setProject(mergedProject);
       setEditPrompt("");
@@ -1755,10 +1395,11 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         }
       }
     } catch (err) {
-      clearInterval(editProgressInterval);
       setError(err instanceof Error ? err.message : "Edit failed");
+      setCurrentGenerationProjectId(null); // Clear projectId on error
     } finally {
       setIsEditing(false);
+      setCurrentGenerationProjectId(null); // Clear projectId after edit completes
       setTimeout(() => {
         setEditProgressMessages([]);
       }, 1000);
@@ -1774,6 +1415,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     setProgressMessages([]);
     setGenerationPrompt(generationPrompt);
     setIsGenerationMinimized(false);
+    setCurrentGenerationProjectId(null); // Clear any previous projectId
 
     let fullPrompt = generationPrompt;
 
@@ -1857,56 +1499,28 @@ ${pdfUrlList}
       }
     }
 
-    const progressSteps = [
-      "Analyzing requirements...",
-      "Designing architecture...",
-      "Creating components...",
-      "Building pages...",
-      "Styling with Tailwind...",
-      "Setting up routing...",
-      "Running checks...",
-    ];
-
-    let stepIndex = 0;
-    progressIntervalRef.current = setInterval(() => {
-      if (stepIndex < progressSteps.length) {
-        setProgressMessages((prev) => [...prev, progressSteps[stepIndex]]);
-        stepIndex++;
-      }
-    }, 2000); // 2 seconds per step
-    const progressInterval = progressIntervalRef.current;
-
     try {
-      // Filter for images and PDFs (Anthropic API supports both)
-      const mediaFiles = uploadedFiles.filter(
-        (f) => f.type.startsWith("image/") || f.type === "application/pdf",
+      // Real-time progress from Inngest
+      let result = await generateCodeWithInngest(
+        fullPrompt,
+        user?.uid || "anonymous",
+        (message) => {
+          setProgressMessages((prev) => [...prev, message]);
+        },
       );
 
-      let result = await generateReact(fullPrompt, mediaFiles);
-      clearInterval(progressInterval);
-      progressIntervalRef.current = null;
+      // Store projectId for cancellation tracking
+      if (result.projectId) {
+        setCurrentGenerationProjectId(result.projectId);
+      }
 
       // If user cancelled while awaiting, discard the result
       if (generationCancelledRef.current) {
+        setCurrentGenerationProjectId(null);
         return;
       }
 
-      // Wait for all progress steps to complete before showing the website
-      const currentStepCount = stepIndex;
-      const remainingSteps = progressSteps.length - currentStepCount;
-
-      if (remainingSteps > 0) {
-        // Show remaining steps immediately one by one
-        for (let i = currentStepCount; i < progressSteps.length; i++) {
-          setProgressMessages((prev) => [...prev, progressSteps[i]]);
-          if (i < progressSteps.length - 1) {
-            // Wait 2 seconds between steps (except for the last one)
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-          }
-        }
-      }
-
-      setProgressMessages((prev) => [...prev, "Saving project..."]);
+      setProgressMessages((prev) => [...prev, "💾 Saving project..."]);
 
       // Check if authentication was generated
       const hasAuth = result.files.some(
@@ -2034,9 +1648,13 @@ ${pdfUrlList}
 
       setStatus("success");
       setCurrentAppAuth([]); // Reset auth selection for next app
+      setCurrentGenerationProjectId(null); // Clear projectId after successful completion
     } catch (err) {
-      clearInterval(progressInterval);
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
       progressIntervalRef.current = null;
+      setCurrentGenerationProjectId(null); // Clear projectId on error
       // Don't show error if user cancelled
       if (generationCancelledRef.current) {
         return;
@@ -2200,472 +1818,7 @@ ${pdfUrlList}
     }
   };
 
-  const exportToGitHub = () => {
-    if (!project) return;
-    setGithubRepoName("my-nextjs-app");
-    setGithubExportStatus("idle");
-    setGithubExportMessage("");
-    setGithubRepoUrl("");
-    // Restore saved token if available
-    const savedToken = localStorage.getItem("github_token");
-    if (savedToken) setGithubToken(savedToken);
-    setShowGitHubModal(true);
-  };
 
-  const pushToGitHub = async () => {
-    if (!project || !githubToken || !githubRepoName) return;
-
-    setGithubExportStatus("exporting");
-    setGithubExportMessage("Creating repository...");
-
-    const headers = {
-      Authorization: `token ${githubToken}`,
-      Accept: "application/vnd.github.v3+json",
-      "Content-Type": "application/json",
-    };
-
-    try {
-      // Save token for future use
-      localStorage.setItem("github_token", githubToken);
-
-      // 1. Create the repository
-      const createRepoRes = await fetch("https://api.github.com/user/repos", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          name: githubRepoName,
-          description: "Next.js app generated by Pocket Dev",
-          private: githubPrivate,
-          auto_init: false,
-        }),
-      });
-
-      if (!createRepoRes.ok) {
-        const errData = await createRepoRes.json();
-        if (
-          createRepoRes.status === 422 &&
-          errData.errors?.some((e: any) =>
-            e.message?.includes("already exists"),
-          )
-        ) {
-          throw new Error(
-            `Repository "${githubRepoName}" already exists. Choose a different name.`,
-          );
-        }
-        if (createRepoRes.status === 401) {
-          throw new Error(
-            "Invalid GitHub token. Please check your personal access token.",
-          );
-        }
-        throw new Error(
-          errData.message ||
-            `Failed to create repository (${createRepoRes.status})`,
-        );
-      }
-
-      const repo = await createRepoRes.json();
-      const owner = repo.owner.login;
-      const repoName = repo.name;
-
-      setGithubExportMessage("Preparing files...");
-
-      // Build all project files
-      const allFiles = prepareE2BFiles(project);
-
-      allFiles[".gitignore"] =
-        `node_modules\n.next\nout\nbuild\n.DS_Store\n*.pem\nnpm-debug.log*\n.env*.local\n.vercel\n*.tsbuildinfo\nnext-env.d.ts\n`;
-
-      allFiles["README.md"] =
-        `# ${githubRepoName}\n\nNext.js app generated by [Pocket Dev](https://pocketdev.app).\n\n## Getting Started\n\n\`\`\`bash\nnpm install\nnpm run dev\n\`\`\`\n\nOpen [http://localhost:3000](http://localhost:3000).\n\n## Deploy\n\nDeploy with [Vercel](https://vercel.com/new).\n`;
-
-      // 2. Create blobs for each file
-      setGithubExportMessage("Uploading files...");
-      const blobs: Array<{ path: string; sha: string }> = [];
-
-      for (const [path, content] of Object.entries(allFiles)) {
-        const blobRes = await fetch(
-          `https://api.github.com/repos/${owner}/${repoName}/git/blobs`,
-          {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              content: btoa(unescape(encodeURIComponent(content))),
-              encoding: "base64",
-            }),
-          },
-        );
-
-        if (!blobRes.ok) throw new Error(`Failed to create blob for ${path}`);
-        const blob = await blobRes.json();
-        blobs.push({ path, sha: blob.sha });
-      }
-
-      // 3. Create tree
-      setGithubExportMessage("Creating commit...");
-      const treeRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repoName}/git/trees`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            tree: blobs.map((b) => ({
-              path: b.path,
-              mode: "100644",
-              type: "blob",
-              sha: b.sha,
-            })),
-          }),
-        },
-      );
-
-      if (!treeRes.ok) throw new Error("Failed to create tree");
-      const tree = await treeRes.json();
-
-      // 4. Create commit
-      const commitRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repoName}/git/commits`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            message: "Initial commit from Pocket Dev",
-            tree: tree.sha,
-          }),
-        },
-      );
-
-      if (!commitRes.ok) throw new Error("Failed to create commit");
-      const commit = await commitRes.json();
-
-      // 5. Create main branch ref
-      const refRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repoName}/git/refs`,
-        {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            ref: "refs/heads/main",
-            sha: commit.sha,
-          }),
-        },
-      );
-
-      if (!refRes.ok) throw new Error("Failed to create branch ref");
-
-      setGithubRepoUrl(repo.html_url);
-      setGithubExportStatus("success");
-      setGithubExportMessage("Successfully pushed to GitHub!");
-    } catch (error: any) {
-      console.error("GitHub export error:", error);
-      setGithubExportStatus("error");
-      setGithubExportMessage(error.message || "Failed to export to GitHub");
-    }
-  };
-
-  const downloadProject = async () => {
-    if (!project) return;
-
-    setIsExporting(true);
-
-    try {
-      const zip = new JSZip();
-      const files = prepareE2BFiles(project);
-
-      Object.entries(files).forEach(([path, content]) => {
-        zip.file(path, content);
-      });
-
-      zip.file(
-        ".gitignore",
-        `# dependencies
-/node_modules
-/.pnp
-.pnp.js
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# local env files
-.env*.local
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-`,
-      );
-
-      zip.file(
-        "README.md",
-        `# Generated Next.js App
-
-This Next.js application was generated by [Pocket Dev](https://pocketdev.app).
-
-## Getting Started
-
-\`\`\`bash
-npm install
-npm run dev
-\`\`\`
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-## Deploy on Vercel
-
-The easiest way to deploy is with [Vercel](https://vercel.com/new).
-`,
-      );
-
-      const blob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "nextjs-app.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Download error:", error);
-      setError("Failed to download project");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const exportToVSCode = async () => {
-    if (!project) return;
-
-    setIsExporting(true);
-    setShowExportDropdown(false);
-
-    try {
-      const files = prepareE2BFiles(project);
-      files[".gitignore"] = `# dependencies
-/node_modules
-/.pnp
-.pnp.js
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# local env files
-.env*.local
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-`;
-
-      // Try File System Access API to write files directly to a folder
-      if ("showDirectoryPicker" in window) {
-        try {
-          const dirHandle = await (window as any).showDirectoryPicker({
-            mode: "readwrite",
-          });
-
-          for (const [filePath, content] of Object.entries(files)) {
-            const parts = filePath.split("/");
-            let currentDir = dirHandle;
-
-            for (let i = 0; i < parts.length - 1; i++) {
-              currentDir = await currentDir.getDirectoryHandle(parts[i], {
-                create: true,
-              });
-            }
-
-            const fileHandle = await currentDir.getFileHandle(
-              parts[parts.length - 1],
-              { create: true },
-            );
-            const writable = await fileHandle.createWritable();
-            await writable.write(content);
-            await writable.close();
-          }
-
-          setExportSuccessMessage(
-            "Project exported! Open the folder in VS Code to start coding.",
-          );
-          setTimeout(() => setExportSuccessMessage(""), 5000);
-          return;
-        } catch (fsError: any) {
-          if (fsError.name === "AbortError") return;
-          // Fall through to ZIP download
-        }
-      }
-
-      // Fallback: ZIP download
-      const zip = new JSZip();
-      Object.entries(files).forEach(([path, content]) => {
-        zip.file(path, content);
-      });
-
-      const blob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "nextjs-app.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setExportSuccessMessage(
-        "Project downloaded! Extract the ZIP and open the folder in VS Code.",
-      );
-      setTimeout(() => setExportSuccessMessage(""), 5000);
-    } catch (error) {
-      console.error("VS Code export error:", error);
-      setError("Failed to export to VS Code");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const exportToCursor = async () => {
-    if (!project) return;
-
-    setIsExporting(true);
-    setShowExportDropdown(false);
-
-    try {
-      const files = prepareE2BFiles(project);
-      files[".gitignore"] = `# dependencies
-/node_modules
-/.pnp
-.pnp.js
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# local env files
-.env*.local
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-`;
-
-      // Try File System Access API to write files directly to a folder
-      if ("showDirectoryPicker" in window) {
-        try {
-          const dirHandle = await (window as any).showDirectoryPicker({
-            mode: "readwrite",
-          });
-
-          for (const [filePath, content] of Object.entries(files)) {
-            const parts = filePath.split("/");
-            let currentDir = dirHandle;
-
-            for (let i = 0; i < parts.length - 1; i++) {
-              currentDir = await currentDir.getDirectoryHandle(parts[i], {
-                create: true,
-              });
-            }
-
-            const fileHandle = await currentDir.getFileHandle(
-              parts[parts.length - 1],
-              { create: true },
-            );
-            const writable = await fileHandle.createWritable();
-            await writable.write(content);
-            await writable.close();
-          }
-
-          setExportSuccessMessage(
-            "Project exported! Open the folder in Cursor to start coding.",
-          );
-          setTimeout(() => setExportSuccessMessage(""), 5000);
-          return;
-        } catch (fsError: any) {
-          if (fsError.name === "AbortError") return;
-          // Fall through to ZIP download
-        }
-      }
-
-      // Fallback: ZIP download
-      const zip = new JSZip();
-      Object.entries(files).forEach(([path, content]) => {
-        zip.file(path, content);
-      });
-
-      const blob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "nextjs-app.zip";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setExportSuccessMessage(
-        "Project downloaded! Extract the ZIP and open the folder in Cursor.",
-      );
-      setTimeout(() => setExportSuccessMessage(""), 5000);
-    } catch (error) {
-      console.error("Cursor export error:", error);
-      setError("Failed to export to Cursor");
-    } finally {
-      setIsExporting(false);
-    }
-  };
 
   // Calculate total unread ticket count
   const unreadTicketCount = supportTickets.reduce(
@@ -2676,7 +1829,7 @@ next-env.d.ts
   // SUCCESS STATE
   if (status === "success" && project) {
     return (
-      <div className="h-screen bg-slate-950 flex">
+      <div className="h-screen bg-bg-primary flex">
         {/* Sidebar - only show when logged in */}
         {user && (
           <DashboardSidebar
@@ -2705,10 +1858,10 @@ next-env.d.ts
         {/* Main Content */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Header */}
-          <header className="flex-shrink-0 border-b border-slate-800 bg-slate-900/50 backdrop-blur-lg z-10">
+          <header className="flex-shrink-0 border-b border-border-primary bg-bg-secondary/50 backdrop-blur-lg z-10">
             <div className="px-4 h-14 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="h-4 w-px bg-slate-700" />
+                <div className="h-4 w-px bg-border-secondary" />
                 <span className="inline-flex items-center gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 py-1 rounded-full group relative cursor-help">
                   <svg
                     className="w-3 h-3 text-violet-500"
@@ -2724,7 +1877,7 @@ next-env.d.ts
                     />
                   </svg>
                   Edit Tokens: {userData?.integrationTokens || 0}
-                  <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-slate-700 text-slate-200 text-xs rounded-lg shadow-xl z-50">
+                  <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
                     Each AI edit costs 3 integration tokens. Buy more in the
                     Tokens section.
                   </span>
@@ -2752,13 +1905,13 @@ next-env.d.ts
               </div>
 
               {/* Device Preview Toggle */}
-              <div className="hidden sm:flex items-center gap-1 bg-slate-800/50 rounded-lg p-1">
+              <div className="hidden sm:flex items-center gap-1 bg-bg-tertiary/50 rounded-lg p-1">
                 <button
                   onClick={() => setPreviewMode("mobile")}
                   className={`p-1.5 rounded-md transition ${
                     previewMode === "mobile"
-                      ? "bg-slate-700 text-white"
-                      : "text-slate-400 hover:text-slate-300"
+                      ? "bg-blue-600 text-white"
+                      : "text-text-tertiary hover:text-text-secondary"
                   }`}
                   title="Mobile view (375px)"
                 >
@@ -2780,8 +1933,8 @@ next-env.d.ts
                   onClick={() => setPreviewMode("tablet")}
                   className={`p-1.5 rounded-md transition ${
                     previewMode === "tablet"
-                      ? "bg-slate-700 text-white"
-                      : "text-slate-400 hover:text-slate-300"
+                      ? "bg-blue-600 text-white"
+                      : "text-text-tertiary hover:text-text-secondary"
                   }`}
                   title="Tablet view (768px)"
                 >
@@ -2803,8 +1956,8 @@ next-env.d.ts
                   onClick={() => setPreviewMode("desktop")}
                   className={`p-1.5 rounded-md transition ${
                     previewMode === "desktop"
-                      ? "bg-slate-700 text-white"
-                      : "text-slate-400 hover:text-slate-300"
+                      ? "bg-blue-600 text-white"
+                      : "text-text-tertiary hover:text-text-secondary"
                   }`}
                   title="Desktop view (full width)"
                 >
@@ -2825,6 +1978,28 @@ next-env.d.ts
               </div>
 
               <div className="flex items-center gap-2">
+                {/* View Code Button */}
+                <button
+                  onClick={() => setShowCodeViewer(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                  title="View project code"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+                    />
+                  </svg>
+                  Code
+                </button>
+
                 {/* Open in E2B Sandbox Button */}
                 <button
                   onClick={openInE2BSandbox}
@@ -2839,7 +2014,7 @@ next-env.d.ts
                   <button
                     onClick={() => setShowExportDropdown(!showExportDropdown)}
                     disabled={isExporting}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Export project"
                   >
                     <svg
@@ -2873,11 +2048,11 @@ next-env.d.ts
 
                   {/* Dropdown Menu */}
                   {showExportDropdown && (
-                    <div className="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
+                    <div className="absolute right-0 mt-2 w-48 bg-bg-tertiary border border-border-secondary rounded-lg shadow-xl z-50">
                       <button
                         onClick={exportToGitHub}
                         disabled={isExporting}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed rounded-t-lg"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-t-lg"
                       >
                         <svg
                           className="w-4 h-4"
@@ -2891,7 +2066,7 @@ next-env.d.ts
                       <button
                         onClick={exportToVSCode}
                         disabled={isExporting}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <svg
                           className="w-4 h-4"
@@ -2905,7 +2080,7 @@ next-env.d.ts
                       <button
                         onClick={exportToCursor}
                         disabled={isExporting}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed rounded-b-lg"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-b-lg"
                       >
                         <svg
                           className="w-4 h-4"
@@ -3012,7 +2187,7 @@ next-env.d.ts
                     setHasUnpublishedChanges(false);
                     setEditHistory([]);
                   }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -3036,10 +2211,10 @@ next-env.d.ts
           {/* Main Content Area - Preview + Edit Panel */}
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
             {/* Preview Area */}
-            <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-900/30">
+            <div className="flex-1 overflow-hidden relative min-h-0 bg-bg-secondary/30">
               {/* Editing overlay */}
               {isEditing && !isEditMinimized && (
-                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-50">
+                <div className="absolute inset-0 bg-bg-primary/95 backdrop-blur-sm z-50">
                   <GenerationProgress
                     prompt={`Editing: ${editPrompt}`}
                     progressMessages={editProgressMessages}
@@ -3060,7 +2235,7 @@ next-env.d.ts
                     className="flex items-center gap-3 px-4 py-2 bg-blue-900/40 border-2 border-dashed border-blue-500/40 rounded-lg hover:bg-blue-900/60 transition backdrop-blur-sm"
                   >
                     <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-                    <span className="text-sm text-white font-medium">
+                    <span className="text-sm text-text-primary font-medium">
                       Editing in progress...
                     </span>
                     <span className="text-xs text-blue-300">
@@ -3075,22 +2250,22 @@ next-env.d.ts
                 className={`h-full flex items-center justify-center p-4 ${
                   previewMode === "desktop"
                     ? ""
-                    : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-800/20 to-transparent"
+                    : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-bg-tertiary/20 to-transparent"
                 }`}
               >
                 <div
                   className={`h-full transition-all duration-300 ${
                     previewMode === "mobile"
-                      ? "w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/50 overflow-hidden"
+                      ? "w-[375px] rounded-[2rem] border-[8px] border-border-secondary shadow-2xl shadow-black/50 overflow-hidden"
                       : previewMode === "tablet"
-                        ? "w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/50 overflow-hidden"
+                        ? "w-[768px] rounded-[1.5rem] border-[6px] border-border-secondary shadow-2xl shadow-black/50 overflow-hidden"
                         : "w-full"
                   }`}
                 >
                   {/* Device Notch for Mobile */}
                   {previewMode === "mobile" && (
-                    <div className="bg-slate-700 h-6 flex items-center justify-center">
-                      <div className="w-20 h-4 bg-slate-800 rounded-full" />
+                    <div className="bg-border-secondary h-6 flex items-center justify-center">
+                      <div className="w-20 h-4 bg-bg-tertiary rounded-full" />
                     </div>
                   )}
 
@@ -3109,11 +2284,11 @@ next-env.d.ts
             </div>
 
             {/* Edit Panel - Right on desktop, Bottom on mobile/tablet */}
-            <div className="flex-shrink-0 lg:w-56 xl:w-64 border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-900/80 backdrop-blur-lg flex flex-col">
+            <div className="flex-shrink-0 lg:w-56 xl:w-64 border-t lg:border-t-0 lg:border-l border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col">
               {/* Panel Header - Desktop only */}
-              <div className="hidden lg:flex items-center gap-2 px-4 py-3 border-b border-slate-800">
+              <div className="hidden lg:flex items-center gap-2 px-4 py-3 border-b border-border-primary">
                 <svg
-                  className="w-4 h-4 text-slate-400"
+                  className="w-4 h-4 text-text-tertiary"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -3125,7 +2300,7 @@ next-env.d.ts
                     d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
                   />
                 </svg>
-                <span className="text-sm font-medium text-slate-300">
+                <span className="text-sm font-medium text-text-secondary">
                   Edit App
                 </span>
               </div>
@@ -3151,7 +2326,7 @@ next-env.d.ts
                       Low Integration Tokens
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mb-2">
+                  <p className="text-xs text-text-tertiary mb-2">
                     {userData?.integrationTokens || 0} token
                     {(userData?.integrationTokens || 0) !== 1 ? "s" : ""}{" "}
                     remaining. Each edit costs 3 tokens.
@@ -3171,14 +2346,14 @@ next-env.d.ts
 
               {/* Edit History */}
               {editHistory.length > 0 && (
-                <div className="border-b border-slate-800">
+                <div className="border-b border-border-primary">
                   <button
                     onClick={() => setShowEditHistory(!showEditHistory)}
-                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/50 transition"
+                    className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-bg-tertiary/50 transition"
                   >
                     <div className="flex items-center gap-2">
                       <svg
-                        className="w-3.5 h-3.5 text-slate-400"
+                        className="w-3.5 h-3.5 text-text-tertiary"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -3190,12 +2365,12 @@ next-env.d.ts
                           d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
                         />
                       </svg>
-                      <span className="text-xs font-medium text-slate-300">
+                      <span className="text-xs font-medium text-text-secondary">
                         Edit History ({editHistory.length})
                       </span>
                     </div>
                     <svg
-                      className={`w-3.5 h-3.5 text-slate-500 transition-transform ${showEditHistory ? "rotate-180" : ""}`}
+                      className={`w-3.5 h-3.5 text-text-muted transition-transform ${showEditHistory ? "rotate-180" : ""}`}
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -3213,17 +2388,17 @@ next-env.d.ts
                       {[...editHistory].reverse().map((entry, idx) => (
                         <div
                           key={entry.id}
-                          className="px-4 py-2 border-t border-slate-800/50 hover:bg-slate-800/30 group"
+                          className="px-4 py-2 border-t border-border-primary/50 hover:bg-bg-tertiary/30 group"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <p
-                                className="text-xs text-slate-300 truncate"
+                                className="text-xs text-text-secondary truncate"
                                 title={entry.prompt}
                               >
                                 {entry.prompt}
                               </p>
-                              <p className="text-[10px] text-slate-500 mt-0.5">
+                              <p className="text-[10px] text-text-muted mt-0.5">
                                 {entry.timestamp.toLocaleString(undefined, {
                                   month: "short",
                                   day: "numeric",
@@ -3285,12 +2460,12 @@ next-env.d.ts
 
               {/* Uploaded edit files */}
               {editFiles.length > 0 && (
-                <div className="px-4 py-2 border-b border-slate-800">
+                <div className="px-4 py-2 border-b border-border-primary">
                   <div className="flex flex-wrap gap-2">
                     {editFiles.map((file, idx) => (
                       <div
                         key={idx}
-                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-800/50 border border-slate-700 rounded-lg text-xs"
+                        className="inline-flex items-center gap-1.5 px-2 py-1 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-xs"
                       >
                         {file.type.startsWith("image/") ? (
                           <svg
@@ -3321,13 +2496,13 @@ next-env.d.ts
                             />
                           </svg>
                         )}
-                        <span className="text-slate-300 max-w-[80px] truncate">
+                        <span className="text-text-secondary max-w-[80px] truncate">
                           {file.name}
                         </span>
                         <button
                           type="button"
                           onClick={() => removeEditFile(idx)}
-                          className="text-slate-500 hover:text-red-400 transition"
+                          className="text-text-muted hover:text-red-400 transition"
                         >
                           <svg
                             className="w-3 h-3"
@@ -3397,7 +2572,7 @@ next-env.d.ts
                 {/* Desktop: Vertical layout with taller textarea */}
                 <div className="hidden lg:flex flex-col gap-3 flex-1">
                   {/* Prompt area with auth tags */}
-                  <div className="flex-1 flex flex-col bg-slate-800/50 border border-slate-700 rounded-xl focus-within:border-blue-500/50 overflow-hidden">
+                  <div className="flex-1 flex flex-col bg-bg-tertiary/50 border border-border-secondary rounded-xl focus-within:border-blue-500/50 overflow-hidden">
                     {/* Auth prefill tags (non-editable) */}
                     {editAppAuth.length > 0 && (
                       <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
@@ -3504,12 +2679,12 @@ next-env.d.ts
                           : "Describe changes you want to make...\n\nExamples:\n• Change the color scheme to blue\n• Add a contact form\n• Make the header sticky\n• Add dark mode toggle"
                       }
                       disabled={isEditing}
-                      className="flex-1 min-h-[120px] px-4 py-3 bg-transparent text-white placeholder-slate-500 focus:outline-none resize-none text-sm disabled:opacity-50"
+                      className="flex-1 min-h-[120px] px-4 py-3 bg-transparent text-text-primary placeholder-text-muted focus:outline-none resize-none text-sm disabled:opacity-50"
                     />
                   </div>
                   {/* Auth selector for edit */}
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">Add Auth:</span>
+                    <span className="text-xs text-text-muted">Add Auth:</span>
                     <button
                       type="button"
                       onClick={() =>
@@ -3525,7 +2700,7 @@ next-env.d.ts
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                         editAppAuth.includes("username-password")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600 hover:text-slate-300"
+                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
                       } disabled:opacity-50`}
                     >
                       <svg
@@ -3556,7 +2731,7 @@ next-env.d.ts
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                         editAppAuth.includes("google")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600 hover:text-slate-300"
+                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
                       } disabled:opacity-50`}
                     >
                       <svg
@@ -3577,7 +2752,7 @@ next-env.d.ts
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-3 bg-bg-tertiary hover:bg-border-secondary text-text-secondary text-sm font-medium rounded-xl transition disabled:opacity-50"
                       title="Attach image or PDF"
                     >
                       <svg
@@ -3633,7 +2808,7 @@ next-env.d.ts
                       )}
                     </button>
                   </div>
-                  <p className="text-xs text-slate-500 text-center">
+                  <p className="text-xs text-text-muted text-center">
                     Press Enter to apply or Shift+Enter for new line
                   </p>
                 </div>
@@ -3642,7 +2817,7 @@ next-env.d.ts
                 <div className="flex lg:hidden flex-col gap-2">
                   {/* Auth selector for mobile edit */}
                   <div className="flex items-center gap-2 px-1">
-                    <span className="text-xs text-slate-500">Add Auth:</span>
+                    <span className="text-xs text-text-muted">Add Auth:</span>
                     <button
                       type="button"
                       onClick={() =>
@@ -3658,7 +2833,7 @@ next-env.d.ts
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
                         editAppAuth.includes("username-password")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600"
+                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                       } disabled:opacity-50`}
                     >
                       <svg
@@ -3689,7 +2864,7 @@ next-env.d.ts
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
                         editAppAuth.includes("google")
                           ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-slate-800/50 text-slate-400 border border-slate-700 hover:border-slate-600"
+                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                       } disabled:opacity-50`}
                     >
                       <svg
@@ -3773,7 +2948,7 @@ next-env.d.ts
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="p-3 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl transition disabled:opacity-50"
+                      className="p-3 bg-bg-tertiary hover:bg-border-secondary text-text-tertiary rounded-xl transition disabled:opacity-50"
                       title="Attach file"
                     >
                       <svg
@@ -3811,7 +2986,7 @@ next-env.d.ts
                         }
                         rows={1}
                         disabled={isEditing}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500/50 resize-none text-sm disabled:opacity-50"
+                        className="w-full px-4 py-3 bg-bg-tertiary/50 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/50 resize-none text-sm disabled:opacity-50"
                         style={{ minHeight: "46px", maxHeight: "120px" }}
                       />
                     </div>
@@ -3863,15 +3038,15 @@ next-env.d.ts
         {/* Domain Modal */}
         {showDomainModal && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
               {/* Modal Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
-                <h3 className="text-lg font-semibold text-white">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
+                <h3 className="text-lg font-semibold text-text-primary">
                   Domain Settings
                 </h3>
                 <button
                   onClick={() => setShowDomainModal(false)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                  className="p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                 >
                   <svg
                     className="w-5 h-5"
@@ -3894,18 +3069,18 @@ next-env.d.ts
                 {/* Published URL */}
                 {publishedUrl && (
                   <div className="space-y-2">
-                    <label className="block text-sm font-medium text-slate-300">
+                    <label className="block text-sm font-medium text-text-secondary">
                       Published URL
                     </label>
                     <div className="flex items-center gap-2">
-                      <div className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-300 font-mono truncate">
+                      <div className="flex-1 px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-sm text-text-secondary font-mono truncate">
                         {publishedUrl}
                       </div>
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(publishedUrl);
                         }}
-                        className="px-3 py-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition"
+                        className="px-3 py-2 text-text-tertiary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition"
                         title="Copy URL"
                       >
                         <svg
@@ -3926,7 +3101,7 @@ next-env.d.ts
                         href={publishedUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="px-3 py-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition"
+                        className="px-3 py-2 text-text-tertiary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition"
                         title="Open in new tab"
                       >
                         <svg
@@ -3949,7 +3124,7 @@ next-env.d.ts
 
                 {/* Connect Custom Domain */}
                 <div className="space-y-3">
-                  <label className="block text-sm font-medium text-slate-300">
+                  <label className="block text-sm font-medium text-text-secondary">
                     Connect Custom Domain
                   </label>
                   <div className="flex items-center gap-2">
@@ -3958,7 +3133,7 @@ next-env.d.ts
                       value={customDomain}
                       onChange={(e) => setCustomDomain(e.target.value)}
                       placeholder="yourdomain.com"
-                      className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 text-sm"
+                      className="flex-1 px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm"
                     />
                     <button
                       onClick={() => connectDomain(customDomain)}
@@ -3968,9 +3143,9 @@ next-env.d.ts
                       Connect
                     </button>
                   </div>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-text-muted">
                     Point your domain&apos;s CNAME record to{" "}
-                    <span className="font-mono text-slate-400">
+                    <span className="font-mono text-text-tertiary">
                       cname.pocketdev.app
                     </span>
                   </p>
@@ -3979,16 +3154,18 @@ next-env.d.ts
                 {/* Divider */}
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-slate-700"></div>
+                    <div className="w-full border-t border-border-secondary"></div>
                   </div>
                   <div className="relative flex justify-center text-xs">
-                    <span className="px-2 bg-slate-900 text-slate-500">or</span>
+                    <span className="px-2 bg-bg-secondary text-text-muted">
+                      or
+                    </span>
                   </div>
                 </div>
 
                 {/* Buy Domain */}
                 <div className="space-y-3">
-                  <label className="block text-sm font-medium text-slate-300">
+                  <label className="block text-sm font-medium text-text-secondary">
                     Buy a New Domain
                   </label>
                   <div className="p-4 bg-gradient-to-br from-violet-500/10 to-blue-500/10 border border-violet-500/20 rounded-xl">
@@ -4009,10 +3186,10 @@ next-env.d.ts
                         </svg>
                       </div>
                       <div className="flex-1">
-                        <h4 className="text-sm font-medium text-white mb-1">
+                        <h4 className="text-sm font-medium text-text-primary mb-1">
                           Get a custom domain
                         </h4>
-                        <p className="text-xs text-slate-400 mb-3">
+                        <p className="text-xs text-text-tertiary mb-3">
                           Search for available domains and purchase them
                           directly. Prices start from $9.99/year.
                         </p>
@@ -4047,10 +3224,10 @@ next-env.d.ts
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 bg-slate-800/50 border-t border-slate-800 flex gap-3">
+              <div className="px-6 py-4 bg-bg-tertiary/50 border-t border-border-primary flex gap-3">
                 <button
                   onClick={() => setShowDomainModal(false)}
-                  className="flex-1 px-4 py-2 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition text-sm font-medium"
+                  className="flex-1 px-4 py-2 text-text-secondary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition text-sm font-medium"
                 >
                   Close
                 </button>
@@ -4082,24 +3259,24 @@ next-env.d.ts
         {/* GitHub Export Modal */}
         {showGitHubModal && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
               {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
                 <div className="flex items-center gap-3">
                   <svg
-                    className="w-6 h-6 text-white"
+                    className="w-6 h-6 text-text-primary"
                     fill="currentColor"
                     viewBox="0 0 24 24"
                   >
                     <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
                   </svg>
-                  <h3 className="text-lg font-semibold text-white">
+                  <h3 className="text-lg font-semibold text-text-primary">
                     Export to GitHub
                   </h3>
                 </div>
                 <button
                   onClick={() => setShowGitHubModal(false)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                  className="p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                 >
                   <svg
                     className="w-5 h-5"
@@ -4135,17 +3312,17 @@ next-env.d.ts
                       />
                     </svg>
                   </div>
-                  <h4 className="text-lg font-bold text-white mb-2">
+                  <h4 className="text-lg font-bold text-text-primary mb-2">
                     Pushed to GitHub!
                   </h4>
-                  <p className="text-slate-400 text-sm mb-4">
+                  <p className="text-text-tertiary text-sm mb-4">
                     {githubExportMessage}
                   </p>
                   <a
                     href={githubRepoUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-black font-medium rounded-xl hover:bg-slate-200 transition text-sm"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-black font-medium rounded-xl hover:bg-gray-200 transition text-sm"
                   >
                     <svg
                       className="w-4 h-4"
@@ -4158,7 +3335,7 @@ next-env.d.ts
                   </a>
                   <button
                     onClick={() => setShowGitHubModal(false)}
-                    className="block w-full mt-3 text-sm text-slate-400 hover:text-white transition"
+                    className="block w-full mt-3 text-sm text-text-tertiary hover:text-text-primary transition"
                   >
                     Close
                   </button>
@@ -4169,7 +3346,7 @@ next-env.d.ts
                   <div className="px-6 py-5 space-y-4">
                     {/* Token */}
                     <div>
-                      <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">
                         Personal Access Token
                       </label>
                       <input
@@ -4178,11 +3355,13 @@ next-env.d.ts
                         onChange={(e) => setGithubToken(e.target.value)}
                         placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
                         disabled={githubExportStatus === "exporting"}
-                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
+                        className="w-full px-3 py-2.5 bg-bg-tertiary border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
                       />
-                      <p className="mt-1 text-xs text-slate-500">
+                      <p className="mt-1 text-xs text-text-muted">
                         Needs{" "}
-                        <span className="text-slate-400 font-mono">repo</span>{" "}
+                        <span className="text-text-tertiary font-mono">
+                          repo
+                        </span>{" "}
                         scope.{" "}
                         <a
                           href="https://github.com/settings/tokens/new?scopes=repo&description=Pocket+Dev+Export"
@@ -4197,7 +3376,7 @@ next-env.d.ts
 
                     {/* Repo Name */}
                     <div>
-                      <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                      <label className="block text-sm font-medium text-text-secondary mb-1.5">
                         Repository Name
                       </label>
                       <input
@@ -4210,7 +3389,7 @@ next-env.d.ts
                         }
                         placeholder="my-nextjs-app"
                         disabled={githubExportStatus === "exporting"}
-                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
+                        className="w-full px-3 py-2.5 bg-bg-tertiary border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
                       />
                     </div>
 
@@ -4222,8 +3401,8 @@ next-env.d.ts
                         disabled={githubExportStatus === "exporting"}
                         className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
                           !githubPrivate
-                            ? "bg-slate-700 text-white border border-slate-600"
-                            : "bg-slate-800/50 text-slate-400 border border-slate-800 hover:border-slate-700"
+                            ? "bg-blue-600 text-white border border-blue-500"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-primary hover:border-border-secondary"
                         }`}
                       >
                         <svg
@@ -4247,8 +3426,8 @@ next-env.d.ts
                         disabled={githubExportStatus === "exporting"}
                         className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
                           githubPrivate
-                            ? "bg-slate-700 text-white border border-slate-600"
-                            : "bg-slate-800/50 text-slate-400 border border-slate-800 hover:border-slate-700"
+                            ? "bg-blue-600 text-white border border-blue-500"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-primary hover:border-border-secondary"
                         }`}
                       >
                         <svg
@@ -4293,7 +3472,7 @@ next-env.d.ts
                     <button
                       onClick={() => setShowGitHubModal(false)}
                       disabled={githubExportStatus === "exporting"}
-                      className="flex-1 px-4 py-2.5 text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-medium transition disabled:opacity-50"
+                      className="flex-1 px-4 py-2.5 text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-xl text-sm font-medium transition disabled:opacity-50"
                     >
                       Cancel
                     </button>
@@ -4377,91 +3556,66 @@ next-env.d.ts
           </div>
         )}
 
-        {/* Delete Confirmation Modal */}
-        {showDeleteModal && projectToDelete && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-              {/* Modal Header */}
-              <div className="relative px-6 pt-8 pb-4 text-center">
-                <button
-                  onClick={() => {
-                    setShowDeleteModal(false);
-                    setProjectToDelete(null);
-                  }}
-                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+        {/* Token Payment Toast */}
+        {tokenToast && (
+          <div className="fixed top-6 right-6 z-50 anim-fade-up max-w-sm">
+            <div className="flex items-start gap-3 px-5 py-4 bg-bg-secondary border border-border-primary rounded-xl shadow-2xl shadow-black/20">
+              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/15 flex items-center justify-center mt-0.5">
+                <svg
+                  className="w-4.5 h-4.5 text-emerald-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2.5}
                 >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-                <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-red-500/20 rounded-2xl">
-                  <svg
-                    className="w-8 h-8 text-red-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-bold text-white mb-2">
-                  Delete Project?
-                </h3>
-                <p className="text-slate-400 text-sm">
-                  This action cannot be undone. The project will be permanently
-                  deleted.
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-text-primary mb-0.5">
+                  Tokens Added
+                </p>
+                <p className="text-xs text-text-secondary leading-relaxed">
+                  {tokenToast}
                 </p>
               </div>
-
-              {/* Actions */}
-              <div className="px-6 pb-6 space-y-3">
-                <button
-                  onClick={() => deleteProject(projectToDelete)}
-                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+              <button
+                onClick={() => setTokenToast("")}
+                className="flex-shrink-0 p-1 text-text-muted hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
                 >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                  Delete Project
-                </button>
-                <button
-                  onClick={() => {
-                    setShowDeleteModal(false);
-                    setProjectToDelete(null);
-                  }}
-                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
-                >
-                  Cancel
-                </button>
-              </div>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
             </div>
           </div>
         )}
+
+        {/* Delete Confirmation Modal */}
+        <DeleteConfirmModal
+          isOpen={showDeleteModal && !!projectToDelete}
+          onClose={() => {
+            setShowDeleteModal(false);
+            setProjectToDelete(null);
+          }}
+          onConfirm={() => {
+            if (projectToDelete) deleteProject(projectToDelete);
+          }}
+        />
 
         {/* Token Deduction Confirmation Modal (success view) */}
         {showTokenConfirmModal &&
@@ -4478,11 +3632,11 @@ next-env.d.ts
 
             return (
               <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+                <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
                   <div className="relative px-6 pt-8 pb-4 text-center">
                     <button
                       onClick={() => setShowTokenConfirmModal(null)}
-                      className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                      className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                     >
                       <svg
                         className="w-5 h-5"
@@ -4519,10 +3673,10 @@ next-env.d.ts
                         />
                       </svg>
                     </div>
-                    <h3 className="text-lg font-bold text-white mb-1">
+                    <h3 className="text-lg font-bold text-text-primary mb-1">
                       {isGeneration ? "Create New Project" : "Edit Project"}
                     </h3>
-                    <p className="text-slate-400 text-sm">
+                    <p className="text-text-tertiary text-sm">
                       {isGeneration
                         ? "This action will deduct tokens from your balance."
                         : "This edit will deduct tokens from your balance."}
@@ -4537,14 +3691,14 @@ next-env.d.ts
                           </span>
                         </div>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-slate-300">
+                          <span className="text-sm text-text-secondary">
                             Project creation
                           </span>
                           <span className="text-sm font-bold text-blue-400">
                             -{appCost}
                           </span>
                         </div>
-                        <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
                           <span>Balance: {appBalance}</span>
                           <span>After: {appBalance - appCost}</span>
                         </div>
@@ -4561,7 +3715,7 @@ next-env.d.ts
                           <>
                             {editAppAuth.includes("username-password") && (
                               <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-slate-300">
+                                <span className="text-sm text-text-secondary">
                                   Username & Password auth
                                 </span>
                                 <span className="text-sm font-bold text-violet-400">
@@ -4571,7 +3725,7 @@ next-env.d.ts
                             )}
                             {editAppAuth.includes("google") && (
                               <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-slate-300">
+                                <span className="text-sm text-text-secondary">
                                   Google OAuth auth
                                 </span>
                                 <span className="text-sm font-bold text-violet-400">
@@ -4581,7 +3735,7 @@ next-env.d.ts
                             )}
                             {editAppAuth.length === 0 && (
                               <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-slate-300">
+                                <span className="text-sm text-text-secondary">
                                   Edit changes
                                 </span>
                                 <span className="text-sm font-bold text-violet-400">
@@ -4591,7 +3745,7 @@ next-env.d.ts
                             )}
                           </>
                         )}
-                        <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
                           <span>Balance: {integrationBalance}</span>
                           <span>
                             After: {integrationBalance - integrationCost}
@@ -4630,9 +3784,9 @@ next-env.d.ts
                               String(e.target.checked),
                             );
                           }}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
+                          className="w-4 h-4 rounded border-text-faint bg-bg-tertiary text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
                         />
-                        <span className="text-xs text-slate-400 group-hover:text-slate-300 transition">
+                        <span className="text-xs text-text-tertiary group-hover:text-text-secondary transition">
                           Don&apos;t show this again for edits
                         </span>
                       </label>
@@ -4658,7 +3812,7 @@ next-env.d.ts
                     </button>
                     <button
                       onClick={() => setShowTokenConfirmModal(null)}
-                      className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                      className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
                     >
                       Cancel
                     </button>
@@ -4671,14 +3825,14 @@ next-env.d.ts
         {/* Token Purchase Modal (success view) */}
         {showTokenPurchaseModal && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
+            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
               <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
                 <button
                   onClick={() => {
                     setShowTokenPurchaseModal(false);
                     setInsufficientTokenMessage(null);
                   }}
-                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                  className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                 >
                   <svg
                     className="w-5 h-5"
@@ -4715,7 +3869,7 @@ next-env.d.ts
                     />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">
+                <h3 className="text-xl font-bold text-text-primary mb-2">
                   Buy {purchaseTokenType === "app" ? "App" : "Integration"}{" "}
                   Tokens
                 </h3>
@@ -4741,13 +3895,13 @@ next-env.d.ts
                     </div>
                   </div>
                 ) : (
-                  <p className="text-slate-400 text-sm">
+                  <p className="text-text-tertiary text-sm">
                     {purchaseTokenType === "app"
                       ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
                       : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
                   </p>
                 )}
-                <p className="text-slate-500 text-xs mt-2">
+                <p className="text-text-muted text-xs mt-2">
                   Current balance:{" "}
                   {purchaseTokenType === "app"
                     ? userData?.appTokens || 0
@@ -4756,7 +3910,7 @@ next-env.d.ts
                 </p>
               </div>
               <div className="px-6 pb-3 flex-shrink-0">
-                <div className="flex bg-slate-800 rounded-lg p-1">
+                <div className="flex bg-bg-tertiary rounded-lg p-1">
                   <button
                     onClick={() => {
                       setPurchaseTokenType("app");
@@ -4765,7 +3919,7 @@ next-env.d.ts
                     className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
                       purchaseTokenType === "app"
                         ? "bg-blue-600 text-white"
-                        : "text-slate-400 hover:text-white"
+                        : "text-text-tertiary hover:text-text-primary"
                     }`}
                   >
                     App Tokens
@@ -4778,7 +3932,7 @@ next-env.d.ts
                     className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
                       purchaseTokenType === "integration"
                         ? "bg-violet-600 text-white"
-                        : "text-slate-400 hover:text-white"
+                        : "text-text-tertiary hover:text-text-primary"
                     }`}
                   >
                     Integration Tokens
@@ -4786,7 +3940,7 @@ next-env.d.ts
                 </div>
               </div>
               <div className="px-6 py-4 overflow-y-auto flex-1">
-                <p className="text-xs text-slate-400 mb-3">
+                <p className="text-xs text-text-tertiary mb-3">
                   {purchaseTokenType === "app"
                     ? "1 AUD = 1 app token"
                     : "1 AUD = 10 integration tokens"}
@@ -4814,10 +3968,10 @@ next-env.d.ts
                           ? purchaseTokenType === "app"
                             ? "border-blue-500 bg-blue-500/10"
                             : "border-violet-500 bg-violet-500/10"
-                          : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                          : "border-border-secondary bg-bg-tertiary/50 hover:border-text-faint"
                       }`}
                     >
-                      <div className="text-lg font-bold text-white">
+                      <div className="text-lg font-bold text-text-primary">
                         ${option.aud} AUD
                       </div>
                       <div
@@ -4829,7 +3983,7 @@ next-env.d.ts
                   ))}
                 </div>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary text-sm font-medium">
                     $
                   </span>
                   <input
@@ -4842,13 +3996,13 @@ next-env.d.ts
                         Math.max(0, parseInt(e.target.value) || 0),
                       )
                     }
-                    className={`w-full pl-7 pr-16 py-2.5 bg-slate-800/50 border rounded-xl text-white text-sm font-medium focus:outline-none transition placeholder-slate-500 ${
+                    className={`w-full pl-7 pr-16 py-2.5 bg-bg-tertiary/50 border rounded-xl text-text-primary text-sm font-medium focus:outline-none transition placeholder-text-muted ${
                       purchaseTokenType === "app"
                         ? "border-blue-500/30 focus:border-blue-500"
                         : "border-violet-500/30 focus:border-violet-500"
                     }`}
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-xs">
                     AUD
                   </span>
                 </div>
@@ -4861,7 +4015,7 @@ next-env.d.ts
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-slate-300">
+                      <span className="text-sm text-text-secondary">
                         You&apos;ll receive
                       </span>
                       <span
@@ -4921,12 +4075,12 @@ next-env.d.ts
                     setShowTokenPurchaseModal(false);
                     setInsufficientTokenMessage(null);
                   }}
-                  className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                  className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
                 >
                   Cancel
                 </button>
                 {tokenPurchaseAmount > 0 && (
-                  <p className="text-xs text-slate-500 text-center">
+                  <p className="text-xs text-text-muted text-center">
                     Secure payment powered by Stripe
                   </p>
                 )}
@@ -4938,11 +4092,11 @@ next-env.d.ts
         {/* Cancel Confirmation Modal (success view) */}
         {showCancelConfirm && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
               <div className="relative px-6 pt-8 pb-4 text-center">
                 <button
                   onClick={() => setShowCancelConfirm(null)}
-                  className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                  className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                 >
                   <svg
                     className="w-5 h-5"
@@ -4973,12 +4127,12 @@ next-env.d.ts
                     />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">
+                <h3 className="text-xl font-bold text-text-primary mb-2">
                   {showCancelConfirm === "generation"
                     ? "Cancel Generation?"
                     : "Cancel Editing?"}
                 </h3>
-                <p className="text-slate-400 text-sm">
+                <p className="text-text-tertiary text-sm">
                   {showCancelConfirm === "generation"
                     ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost."
                     : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost."}
@@ -5004,7 +4158,7 @@ next-env.d.ts
               <div className="px-6 pb-6 flex gap-3">
                 <button
                   onClick={() => setShowCancelConfirm(null)}
-                  className="flex-1 px-4 py-2.5 text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-medium transition"
+                  className="flex-1 px-4 py-2.5 text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-xl text-sm font-medium transition"
                 >
                   Keep Going
                 </button>
@@ -5046,1206 +4200,74 @@ next-env.d.ts
 
   // Content for Create section (main generation UI)
   const CreateContent = () => {
-    // Show generation progress if loading and not minimized
-    if (status === "loading" && !isGenerationMinimized) {
-      return (
-        <GenerationProgress
-          prompt={generationPrompt}
-          progressMessages={progressMessages}
-          onCancel={cancelGeneration}
-          isMinimized={false}
-          onToggleMinimize={() => setIsGenerationMinimized(true)}
-        />
-      );
-    }
-
     return (
-      <>
-        {/* Generation in progress banner (when minimized) */}
-        {status === "loading" && isGenerationMinimized && (
-          <div className="w-full max-w-2xl mb-6">
-            <button
-              onClick={() => setIsGenerationMinimized(false)}
-              className="w-full flex items-center justify-between p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/15 transition group"
-            >
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                    <Logo size={24} animate />
-                  </div>
-                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse" />
-                </div>
-                <div className="text-left">
-                  <p className="text-sm font-medium text-blue-300">
-                    Building your app...
-                  </p>
-                  <p className="text-xs text-blue-400/70">
-                    Click to view progress
-                  </p>
-                </div>
-              </div>
-              <svg
-                className="w-5 h-5 text-blue-400 group-hover:translate-x-1 transition-transform"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* Hero - only show when not logged in */}
-        {!user && (
-          <div className="text-center mb-10 max-w-2xl">
-            <div className="inline-flex items-center justify-center mb-6">
-              <Logo size={56} animate />
-            </div>
-            <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3 tracking-tight">
-              Pocket Dev
-            </h1>
-            <p className="text-lg text-slate-400 max-w-md mx-auto mb-6">
-              Describe your app and watch it come to life
-            </p>
-            <button
-              onClick={() => setShowSignInModal(true)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all"
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M18 12l-3-3m0 0l3-3m-3 3h8.25"
-                />
-              </svg>
-              Sign In to Get Started
-            </button>
-          </div>
-        )}
-
-        {/* Welcome for logged in users */}
-        {user && !isGenerationMinimized && (
-          <div className="text-center mb-8 max-w-2xl">
-            <h2 className="text-2xl font-semibold text-white mb-2">
-              Create a New App
-            </h2>
-            <p className="text-slate-400">
-              Describe your app and we&apos;ll build it for you
-            </p>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="w-full max-w-2xl mb-6">
-            <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400">
-              <svg
-                className="w-5 h-5 flex-shrink-0 mt-0.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <div>
-                <p className="text-sm font-medium">Generation failed</p>
-                <p className="text-sm text-red-400/80 mt-1">{error}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Examples */}
-        <div className="w-full max-w-3xl mb-8">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3 text-center">
-            Quick start
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {EXAMPLES.map((ex) => (
-              <button
-                key={ex.name}
-                onClick={() => setPrompt(ex.query)}
-                className="group p-3 bg-slate-900/50 hover:bg-slate-800/70 border border-slate-800 hover:border-slate-700 rounded-xl text-left transition-all duration-200"
-              >
-                <div className="flex items-center gap-2.5 mb-1">
-                  <span className="text-xl">{ex.icon}</span>
-                  <span className="text-sm font-medium text-white group-hover:text-blue-400 transition-colors">
-                    {ex.name}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 pl-8">{ex.desc}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Uploaded files */}
-        {uploadedFiles.length > 0 && (
-          <div className="w-full max-w-2xl mb-4">
-            <div className="flex flex-wrap gap-2 justify-center">
-              {uploadedFiles.map((file, idx) => (
-                <div
-                  key={idx}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-800/50 border border-slate-700 rounded-lg text-sm"
-                >
-                  {file.type.startsWith("image/") ? (
-                    <svg
-                      className="w-4 h-4 text-blue-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                      />
-                    </svg>
-                  ) : (
-                    <svg
-                      className="w-4 h-4 text-red-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                      />
-                    </svg>
-                  )}
-                  <span className="text-slate-300 max-w-[120px] truncate">
-                    {file.name}
-                  </span>
-                  <button
-                    onClick={() => removeFile(idx)}
-                    className="text-slate-500 hover:text-red-400 transition"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Input */}
-        <div className="w-full max-w-2xl">
-          {/* Voice error notification */}
-          {voiceError && (
-            <div className="mb-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 duration-300">
-              <svg
-                className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                />
-              </svg>
-              <div className="flex-1">
-                <p className="text-sm text-red-300 font-medium">{voiceError}</p>
-              </div>
-              <button
-                onClick={() => setVoiceError(null)}
-                className="text-red-400 hover:text-red-300 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {/* Auth prompt warning */}
-          {authPromptWarning && (
-            <div className="mb-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 duration-300">
-              <svg
-                className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                />
-              </svg>
-              <div className="flex-1">
-                <p className="text-sm text-amber-300 font-medium">
-                  {authPromptWarning}
-                </p>
-              </div>
-              <button
-                onClick={() => setAuthPromptWarning(null)}
-                className="text-amber-400 hover:text-amber-300 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-          )}
-
-          <form onSubmit={handleGenerate}>
-            <div className="relative bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl shadow-slate-950/50 overflow-hidden focus-within:border-slate-700 transition-colors">
-              {/* Animated typing placeholder */}
-              {!prompt && (
-                <div className="absolute top-0 left-0 right-0 px-4 pt-4 pb-14 pointer-events-none z-0">
-                  <span className="text-slate-500 text-base">
-                    {typingPlaceholder}
-                  </span>
-                  <span className="inline-block w-[1.5px] h-[18px] bg-slate-400/80 ml-[1px] align-middle rounded-full animate-blink" />
-                </div>
-              )}
-              <textarea
-                ref={textareaRef}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    if (prompt.trim()) handleGenerate(e);
-                  }
-                }}
-                rows={1}
-                className="w-full px-4 pt-4 pb-14 bg-transparent text-white focus:outline-none resize-none text-base relative z-[1]"
-                style={{ minHeight: "52px", maxHeight: "150px" }}
-              />
-
-              {/* Bottom bar */}
-              <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2.5 bg-slate-900/50 z-[2]">
-                <div className="flex items-center gap-1">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,.pdf"
-                    multiple
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition"
-                    title="Attach files"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
-                      />
-                    </svg>
-                  </button>
-
-                  {/* Voice input button */}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      isRecording ? stopRecording() : startRecording()
-                    }
-                    className={`p-2 rounded-lg transition ${
-                      isRecording
-                        ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse"
-                        : "text-slate-500 hover:text-slate-300 hover:bg-slate-800"
-                    }`}
-                    title={isRecording ? "Stop recording" : "Voice input"}
-                  >
-                    {isRecording ? (
-                      <svg
-                        className="w-5 h-5"
-                        fill="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <rect x="6" y="6" width="12" height="12" rx="2" />
-                      </svg>
-                    ) : (
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
-                        />
-                      </svg>
-                    )}
-                  </button>
-
-                  <div className="w-px h-5 bg-slate-700 mx-0.5" />
-
-                  {/* Authentication button */}
-                  <button
-                    type="button"
-                    onClick={() => setShowAuthModal(true)}
-                    className={`p-2 rounded-lg transition ${
-                      currentAppAuth.length > 0
-                        ? "text-blue-400 bg-blue-500/10 hover:bg-blue-500/20"
-                        : "text-slate-500 hover:text-slate-300 hover:bg-slate-800"
-                    }`}
-                    title={
-                      currentAppAuth.length > 0
-                        ? `Auth: ${currentAppAuth.map((a) => (a === "username-password" ? "Username/Password" : "Google OAuth")).join(" + ")}`
-                        : "Add authentication"
-                    }
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                      />
-                    </svg>
-                  </button>
-
-                  {/* Database button */}
-                  <button
-                    type="button"
-                    onClick={() => setShowDbModal(true)}
-                    className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition"
-                    title="Database options"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!prompt.trim() || checkingAuthIntent}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-blue-600 disabled:hover:to-violet-600"
-                >
-                  {checkingAuthIntent ? (
-                    <svg
-                      className="w-4 h-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
-                    </svg>
-                  ) : (
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M13 10V3L4 14h7v7l9-11h-7z"
-                      />
-                    </svg>
-                  )}
-                  {checkingAuthIntent ? "Checking..." : "Generate"}
-                </button>
-              </div>
-            </div>
-
-            {/* Auth selection indicator */}
-            {currentAppAuth.length > 0 && (
-              <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap">
-                {currentAppAuth.map((auth) => (
-                  <div
-                    key={auth}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5 text-blue-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                      />
-                    </svg>
-                    <span className="text-xs text-blue-300 font-medium">
-                      {auth === "username-password"
-                        ? "Username/Password"
-                        : "Google OAuth"}
-                    </span>
-                    <span className="text-xs text-violet-400">(30 tokens)</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCurrentAppAuth(
-                          currentAppAuth.filter((a) => a !== auth),
-                        )
-                      }
-                      className="ml-0.5 text-slate-400 hover:text-white transition"
-                    >
-                      <svg
-                        className="w-3.5 h-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <p className="text-center text-xs text-slate-600 mt-2">
-              Press Enter to generate or Shift+Enter for new line
-            </p>
-          </form>
-        </div>
-      </>
+      <CreateContentComponent
+        user={user}
+        status={status}
+        isGenerationMinimized={isGenerationMinimized}
+        generationPrompt={generationPrompt}
+        progressMessages={progressMessages}
+        error={error}
+        prompt={prompt}
+        uploadedFiles={uploadedFiles}
+        fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
+        currentAppAuth={currentAppAuth}
+        isRecording={isRecording}
+        voiceError={voiceError}
+        authPromptWarning={authPromptWarning}
+        checkingAuthIntent={checkingAuthIntent}
+        setIsGenerationMinimized={setIsGenerationMinimized}
+        cancelGeneration={cancelGeneration}
+        setShowSignInModal={setShowSignInModal}
+        setPrompt={setPrompt}
+        handleFileUpload={handleFileUpload}
+        removeFile={removeFile}
+        startRecording={startRecording}
+        stopRecording={stopRecording}
+        setVoiceError={setVoiceError}
+        setShowAuthModal={setShowAuthModal}
+        setCurrentAppAuth={setCurrentAppAuth}
+        handleGenerate={handleGenerate}
+        setShowDbModal={setShowDbModal}
+        setAuthPromptWarning={setAuthPromptWarning}
+        setError={setError}
+        textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
+      />
     );
   };
 
   // Projects content showing saved projects
-  const ProjectsContent = () => {
-    if (loadingProjects) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full">
-          <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
-          <p className="text-slate-400">Loading projects...</p>
-        </div>
-      );
-    }
+  // ProjectsContent component is now extracted
 
-    if (savedProjects.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full text-center">
-          <div className="w-16 h-16 mb-4 bg-slate-800 rounded-2xl flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-slate-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"
-              />
-            </svg>
-          </div>
-          <h2 className="text-xl font-semibold text-white mb-2">My Projects</h2>
-          <p className="text-slate-400 mb-6 max-w-sm">
-            Your generated projects will appear here. Create your first app to
-            get started!
-          </p>
-          <button
-            onClick={() => setActiveSection("create")}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition"
-          >
-            Create Your First App
-          </button>
-        </div>
-      );
-    }
+  // SettingsContent component is now extracted
 
-    return (
-      <div className="w-full max-w-4xl mx-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-semibold text-white">My Projects</h2>
-          <button
-            onClick={() => setActiveSection("create")}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            New App
-          </button>
-        </div>
-        <div className="grid gap-4">
-          {savedProjects.map((savedProject) => (
-            <div
-              key={savedProject.id}
-              className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 hover:border-slate-600 transition cursor-pointer group"
-              onClick={() => openSavedProject(savedProject)}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-white font-medium truncate mb-1 group-hover:text-blue-400 transition">
-                    {savedProject.prompt.length > 60
-                      ? savedProject.prompt.substring(0, 60) + "..."
-                      : savedProject.prompt}
-                  </h3>
-                  <div className="flex items-center gap-3 text-xs text-slate-500">
-                    <span>{savedProject.files.length} files</span>
-                    <span>•</span>
-                    <span>
-                      {savedProject.createdAt.toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </span>
-                    {savedProject.lintReport.passed ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-400">
-                        <svg
-                          className="w-3 h-3"
-                          fill="currentColor"
-                          viewBox="0 0 20 20"
-                        >
-                          <path
-                            fillRule="evenodd"
-                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                        Ready
-                      </span>
-                    ) : (
-                      <span className="text-amber-400">
-                        {savedProject.lintReport.errors} issues
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                  {savedProject.isPublished && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-teal-400 bg-teal-500/10 rounded-full">
-                      <svg
-                        className="w-3 h-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                        />
-                      </svg>
-                      Live
-                    </span>
-                  )}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setProjectToDelete(savedProject.id);
-                      setShowDeleteModal(true);
-                    }}
-                    className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
-                    title="Delete project"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                      />
-                    </svg>
-                  </button>
-                  <svg
-                    className="w-5 h-5 text-slate-500 group-hover:text-blue-400 transition"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const SettingsContent = () => (
-    <div className="max-w-2xl mx-auto w-full p-6">
-      <h2 className="text-2xl font-semibold text-white mb-6">Settings</h2>
-
-      <div className="space-y-6">
-        {/* Profile Section */}
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
-          <h3 className="text-lg font-medium text-white mb-4">Profile</h3>
-          <div className="flex items-center gap-4">
-            {user?.photoURL ? (
-              <img
-                src={user.photoURL}
-                alt="Profile"
-                className="w-16 h-16 rounded-full"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center">
-                <span className="text-2xl font-semibold text-white">
-                  {user?.displayName?.charAt(0) ||
-                    user?.email?.charAt(0) ||
-                    "U"}
-                </span>
-              </div>
-            )}
-            <div>
-              <p className="text-white font-medium">
-                {user?.displayName || "User"}
-              </p>
-              <p className="text-slate-400 text-sm">{user?.email}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Account Section */}
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-6">
-          <h3 className="text-lg font-medium text-white mb-4">Account</h3>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between py-2">
-              <span className="text-slate-400">Plan</span>
-              <span className="text-white">Free</span>
-            </div>
-            <div className="flex items-center justify-between py-2">
-              <span className="text-slate-400">Projects Created</span>
-              <span className="text-white">{savedProjects.length}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Support Content
+  // SupportContent component is now extracted
   const SupportContent = () => {
-    const selectedTicket = supportTickets.find(
-      (t) => t.id === selectedTicketId,
-    );
     return (
-      <div className="h-full flex flex-col overflow-hidden">
-        {/* 12-hour notice banner */}
-        {ticketSubmittedNotice && (
-          <div className="flex-shrink-0 mx-4 mt-3 px-4 py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-center gap-2">
-            <svg
-              className="w-4 h-4 text-blue-400 flex-shrink-0"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <p className="text-xs text-blue-300">
-              Sent! Expect a reply within{" "}
-              <span className="font-semibold">12 hours</span>.
-            </p>
-          </div>
-        )}
-
-        <div className="flex-1 flex gap-4 p-4 min-h-0">
-          {/* Left: Create Ticket + Ticket List */}
-          <div className="w-[60%] flex-shrink-0 flex flex-col gap-3 min-h-0">
-            {/* Create Ticket */}
-            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 flex-shrink-0">
-              <h3 className="text-base font-semibold text-white mb-3">
-                New Ticket
-              </h3>
-              <div className="space-y-3">
-                <div className="grid grid-cols-4 gap-1.5">
-                  {(
-                    [
-                      {
-                        value: "project-issue",
-                        label: "Project",
-                        icon: "M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z",
-                      },
-                      {
-                        value: "billing",
-                        label: "Billing",
-                        icon: "M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z",
-                      },
-                      {
-                        value: "feature-request",
-                        label: "Feature",
-                        icon: "M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18",
-                      },
-                      {
-                        value: "general",
-                        label: "General",
-                        icon: "M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z",
-                      },
-                    ] as const
-                  ).map((cat) => (
-                    <button
-                      key={cat.value}
-                      type="button"
-                      onClick={() => setTicketCategory(cat.value)}
-                      className={`flex flex-col items-center gap-1 px-2 py-2 rounded-lg text-xs font-medium transition border ${
-                        ticketCategory === cat.value
-                          ? "bg-blue-600/20 text-blue-400 border-blue-500/30"
-                          : "bg-slate-800/50 text-slate-500 border-slate-700/50 hover:text-slate-300"
-                      }`}
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d={cat.icon}
-                        />
-                      </svg>
-                      {cat.label}
-                    </button>
-                  ))}
-                </div>
-                {ticketCategory === "project-issue" &&
-                  savedProjects.length > 0 && (
-                    <select
-                      value={ticketProjectId}
-                      onChange={(e) => setTicketProjectId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500/50"
-                    >
-                      <option value="">Select project (optional)</option>
-                      {savedProjects.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.prompt.length > 50
-                            ? p.prompt.substring(0, 50) + "..."
-                            : p.prompt}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                <input
-                  type="text"
-                  value={ticketSubject}
-                  onChange={(e) => setTicketSubject(e.target.value)}
-                  placeholder="Subject"
-                  className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500/50"
-                />
-                <textarea
-                  value={ticketDescription}
-                  onChange={(e) => setTicketDescription(e.target.value)}
-                  placeholder="Describe your issue..."
-                  rows={3}
-                  className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500/50 resize-none"
-                />
-                <button
-                  onClick={submitSupportTicket}
-                  disabled={
-                    isSubmittingTicket ||
-                    !ticketSubject.trim() ||
-                    !ticketDescription.trim()
-                  }
-                  className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {isSubmittingTicket ? "Submitting..." : "Submit Ticket"}
-                </button>
-              </div>
-            </div>
-
-            {/* Ticket List */}
-            <div className="flex-1 bg-slate-900/50 border border-slate-800 rounded-xl flex flex-col min-h-0">
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
-                <h3 className="text-sm font-semibold text-slate-300">
-                  My Tickets
-                </h3>
-                <button
-                  onClick={loadSupportTickets}
-                  className="text-xs text-slate-500 hover:text-white transition"
-                >
-                  Refresh
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                {loadingTickets ? (
-                  <div className="flex items-center justify-center py-6">
-                    <div className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-                  </div>
-                ) : supportTickets.length === 0 ? (
-                  <p className="text-sm text-slate-500 text-center py-6">
-                    No tickets yet
-                  </p>
-                ) : (
-                  <div className="divide-y divide-slate-800/50">
-                    {supportTickets.map((ticket) => (
-                      <button
-                        key={ticket.id}
-                        onClick={() => handleTicketClick(ticket.id)}
-                        className={`w-full text-left px-4 py-3 transition hover:bg-slate-800/40 ${
-                          selectedTicketId === ticket.id
-                            ? "bg-slate-800/60"
-                            : ""
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <h4 className="text-sm font-medium text-white truncate">
-                              {ticket.subject}
-                            </h4>
-                            {ticket.unreadAdminMessageCount &&
-                              ticket.unreadAdminMessageCount > 0 && (
-                                <span className="flex-shrink-0 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                              )}
-                          </div>
-                          <span
-                            className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                              ticket.status === "resolved"
-                                ? "bg-emerald-500/15 text-emerald-400"
-                                : ticket.status === "in-progress"
-                                  ? "bg-amber-500/15 text-amber-400"
-                                  : "bg-blue-500/15 text-blue-400"
-                            }`}
-                          >
-                            {ticket.status === "in-progress"
-                              ? "In Progress"
-                              : ticket.status.charAt(0).toUpperCase() +
-                                ticket.status.slice(1)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-xs text-slate-500">
-                            {ticket.createdAt.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}
-                          </span>
-                          <span className="text-xs text-slate-600">-</span>
-                          <span className="text-xs text-slate-500 capitalize">
-                            {ticket.category.replace("-", " ")}
-                          </span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Selected Ticket Detail / Conversation */}
-          <div className="w-[40%] bg-slate-900/50 border border-slate-800 rounded-xl flex flex-col min-h-0">
-            {selectedTicket ? (
-              <>
-                {/* Ticket Header */}
-                <div className="flex-shrink-0 px-4 py-3 border-b border-slate-800">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-white truncate">
-                        {selectedTicket.subject}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-slate-500">
-                          {selectedTicket.createdAt.toLocaleDateString(
-                            "en-US",
-                            { month: "short", day: "numeric", year: "numeric" },
-                          )}
-                        </span>
-                        <span className="text-xs text-slate-500 capitalize">
-                          {selectedTicket.category.replace("-", " ")}
-                        </span>
-                      </div>
-                    </div>
-                    <span
-                      className={`flex-shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                        selectedTicket.status === "resolved"
-                          ? "bg-emerald-500/15 text-emerald-400"
-                          : selectedTicket.status === "in-progress"
-                            ? "bg-amber-500/15 text-amber-400"
-                            : "bg-blue-500/15 text-blue-400"
-                      }`}
-                    >
-                      {selectedTicket.status === "in-progress"
-                        ? "In Progress"
-                        : selectedTicket.status.charAt(0).toUpperCase() +
-                          selectedTicket.status.slice(1)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Conversation Thread */}
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
-                  {/* Original description as first message */}
-                  {!(
-                    selectedTicket.messages &&
-                    selectedTicket.messages.length > 0
-                  ) ? (
-                    <>
-                      <div className="flex justify-end">
-                        <div className="max-w-[80%] px-3 py-2 bg-blue-600/20 border border-blue-500/20 rounded-xl rounded-tr-sm">
-                          <p className="text-sm text-slate-200 whitespace-pre-wrap">
-                            {selectedTicket.description}
-                          </p>
-                          <p className="text-[11px] text-slate-500 mt-1 text-right">
-                            {selectedTicket.createdAt.toLocaleTimeString(
-                              "en-US",
-                              { hour: "2-digit", minute: "2-digit" },
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      {selectedTicket.adminResponse && (
-                        <div className="flex justify-start">
-                          <div className="max-w-[80%] px-3 py-2 bg-slate-800/80 border border-slate-700 rounded-xl rounded-tl-sm">
-                            <p className="text-xs font-medium text-emerald-400 mb-0.5">
-                              Admin
-                            </p>
-                            <p className="text-sm text-slate-200 whitespace-pre-wrap">
-                              {selectedTicket.adminResponse}
-                            </p>
-                            {selectedTicket.respondedAt && (
-                              <p className="text-[11px] text-slate-500 mt-1">
-                                {selectedTicket.respondedAt.toLocaleTimeString(
-                                  "en-US",
-                                  { hour: "2-digit", minute: "2-digit" },
-                                )}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    selectedTicket.messages.map((msg, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[80%] px-3 py-2 rounded-xl ${
-                            msg.sender === "user"
-                              ? "bg-blue-600/20 border border-blue-500/20 rounded-tr-sm"
-                              : "bg-slate-800/80 border border-slate-700 rounded-tl-sm"
-                          }`}
-                        >
-                          {msg.sender === "admin" && (
-                            <p className="text-xs font-medium text-emerald-400 mb-0.5">
-                              Admin
-                            </p>
-                          )}
-                          <p className="text-sm text-slate-200 whitespace-pre-wrap">
-                            {msg.text}
-                          </p>
-                          <p className="text-[11px] text-slate-500 mt-1 text-right">
-                            {new Date(msg.timestamp).toLocaleString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Reply input (if not resolved) */}
-                {selectedTicket.status !== "resolved" ? (
-                  <div className="flex-shrink-0 px-4 py-3 border-t border-slate-800">
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={
-                          replyingToTicketId === selectedTicket.id
-                            ? userReplyText
-                            : ""
-                        }
-                        onChange={(e) => {
-                          setReplyingToTicketId(selectedTicket.id);
-                          setUserReplyText(e.target.value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (
-                            e.key === "Enter" &&
-                            userReplyText.trim() &&
-                            replyingToTicketId === selectedTicket.id
-                          )
-                            userReplyToTicket(selectedTicket.id);
-                        }}
-                        placeholder="Type a reply..."
-                        className="flex-1 px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500/50"
-                      />
-                      <button
-                        onClick={() => {
-                          if (replyingToTicketId === selectedTicket.id)
-                            userReplyToTicket(selectedTicket.id);
-                        }}
-                        disabled={
-                          !userReplyText.trim() ||
-                          replyingToTicketId !== selectedTicket.id
-                        }
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-40"
-                      >
-                        Send
-                      </button>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1.5">
-                      Expect a reply within 12 hours
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex-shrink-0 px-4 py-2.5 border-t border-slate-800 bg-emerald-500/5">
-                    <p className="text-sm text-emerald-400 text-center">
-                      This ticket has been resolved
-                    </p>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <svg
-                    className="w-10 h-10 text-slate-700 mx-auto mb-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"
-                    />
-                  </svg>
-                  <p className="text-sm text-slate-500">
-                    Select a ticket to view conversation
-                  </p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    or create a new one
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <SupportContentComponent
+        supportTickets={supportTickets}
+        selectedTicketId={selectedTicketId}
+        ticketSubmittedNotice={ticketSubmittedNotice}
+        ticketCategory={ticketCategory}
+        ticketProjectId={ticketProjectId}
+        ticketSubject={ticketSubject}
+        ticketDescription={ticketDescription}
+        savedProjects={savedProjects}
+        isSubmittingTicket={isSubmittingTicket}
+        loadingTickets={loadingTickets}
+        replyingToTicketId={replyingToTicketId}
+        userReplyText={userReplyText}
+        setTicketCategory={setTicketCategory}
+        setTicketProjectId={setTicketProjectId}
+        setTicketSubject={setTicketSubject}
+        setTicketDescription={setTicketDescription}
+        submitSupportTicket={submitSupportTicket}
+        loadSupportTickets={loadSupportTickets}
+        handleTicketClick={handleTicketClick}
+        setReplyingToTicketId={setReplyingToTicketId}
+        setUserReplyText={setUserReplyText}
+        userReplyToTicket={userReplyToTicket}
+      />
     );
   };
 
@@ -6259,7 +4281,7 @@ next-env.d.ts
           className={`px-4 py-2 rounded-lg font-medium transition ${
             adminTab === "support"
               ? "bg-blue-600 text-white"
-              : "bg-slate-800 text-slate-400 hover:text-white"
+              : "bg-bg-tertiary text-text-tertiary hover:text-text-primary"
           }`}
         >
           Support Tickets
@@ -6269,7 +4291,7 @@ next-env.d.ts
           className={`px-4 py-2 rounded-lg font-medium transition ${
             adminTab === "maintenance"
               ? "bg-orange-600 text-white"
-              : "bg-slate-800 text-slate-400 hover:text-white"
+              : "bg-bg-tertiary text-text-tertiary hover:text-text-primary"
           }`}
         >
           Maintenance Mode
@@ -6284,12 +4306,12 @@ next-env.d.ts
       ) : (
         <>
           <div className="flex items-center justify-between mb-4 flex-shrink-0">
-            <h2 className="text-xl font-semibold text-white">
+            <h2 className="text-xl font-semibold text-text-primary">
               Support Tickets
             </h2>
             <button
               onClick={loadAdminTickets}
-              className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition"
+              className="inline-flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary hover:bg-border-secondary text-text-secondary text-xs font-medium rounded-lg transition"
             >
               <svg
                 className="w-3.5 h-3.5"
@@ -6310,23 +4332,23 @@ next-env.d.ts
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-2 mb-3 flex-shrink-0">
-            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-2.5 text-center">
+            <div className="bg-bg-secondary/50 border border-border-primary rounded-xl p-2.5 text-center">
               <p className="text-xl font-bold text-blue-400">
                 {adminTickets.filter((t) => t.status === "open").length}
               </p>
-              <p className="text-[10px] text-slate-400">Open</p>
+              <p className="text-[10px] text-text-tertiary">Open</p>
             </div>
-            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-2.5 text-center">
+            <div className="bg-bg-secondary/50 border border-border-primary rounded-xl p-2.5 text-center">
               <p className="text-xl font-bold text-amber-400">
                 {adminTickets.filter((t) => t.status === "in-progress").length}
               </p>
-              <p className="text-[10px] text-slate-400">In Progress</p>
+              <p className="text-[10px] text-text-tertiary">In Progress</p>
             </div>
-            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-2.5 text-center">
+            <div className="bg-bg-secondary/50 border border-border-primary rounded-xl p-2.5 text-center">
               <p className="text-xl font-bold text-emerald-400">
                 {adminTickets.filter((t) => t.status === "resolved").length}
               </p>
-              <p className="text-[10px] text-slate-400">Resolved</p>
+              <p className="text-[10px] text-text-tertiary">Resolved</p>
             </div>
           </div>
 
@@ -6335,31 +4357,31 @@ next-env.d.ts
               <div className="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
             </div>
           ) : adminTickets.length === 0 ? (
-            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-12 text-center">
-              <p className="text-slate-500">No support tickets yet.</p>
+            <div className="bg-bg-secondary/50 border border-border-primary rounded-xl p-12 text-center">
+              <p className="text-text-muted">No support tickets yet.</p>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto space-y-3 min-h-0">
               {adminTickets.map((ticket) => (
                 <div
                   key={ticket.id}
-                  className="bg-slate-900/50 border border-slate-800 rounded-xl p-5"
+                  className="bg-bg-secondary/50 border border-border-primary rounded-xl p-5"
                 >
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-semibold text-white">
+                      <h4 className="text-sm font-semibold text-text-primary">
                         {ticket.subject}
                       </h4>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-[11px] text-text-tertiary">
                           {ticket.userEmail}
                         </span>
-                        <span className="text-[10px] text-slate-600">|</span>
-                        <span className="text-[10px] text-slate-400 capitalize">
+                        <span className="text-[10px] text-text-faint">|</span>
+                        <span className="text-[10px] text-text-tertiary capitalize">
                           {ticket.category.replace("-", " ")}
                         </span>
-                        <span className="text-[10px] text-slate-600">|</span>
-                        <span className="text-[10px] text-slate-500">
+                        <span className="text-[10px] text-text-faint">|</span>
+                        <span className="text-[10px] text-text-muted">
                           {ticket.createdAt.toLocaleDateString("en-US", {
                             month: "short",
                             day: "numeric",
@@ -6370,7 +4392,7 @@ next-env.d.ts
                         </span>
                       </div>
                       {ticket.projectName && (
-                        <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-400">
+                        <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-bg-tertiary rounded text-[10px] text-text-tertiary">
                           <svg
                             className="w-3 h-3"
                             fill="none"
@@ -6415,15 +4437,15 @@ next-env.d.ts
                           <div
                             className={`max-w-[85%] px-2.5 py-1.5 rounded-lg text-xs ${
                               msg.sender === "admin"
-                                ? "bg-emerald-500/10 border border-emerald-500/20 text-slate-200"
-                                : "bg-blue-600/10 border border-blue-500/20 text-slate-300"
+                                ? "bg-emerald-500/10 border border-emerald-500/20 text-text-secondary"
+                                : "bg-blue-600/10 border border-blue-500/20 text-text-secondary"
                             }`}
                           >
                             <p className="text-[9px] font-medium mb-0.5 ${msg.sender === 'admin' ? 'text-emerald-400' : 'text-blue-400'}">
                               {msg.sender === "admin" ? "You" : ticket.userName}
                             </p>
                             <p className="whitespace-pre-wrap">{msg.text}</p>
-                            <p className="text-[8px] text-slate-500 mt-0.5 text-right">
+                            <p className="text-[8px] text-text-muted mt-0.5 text-right">
                               {new Date(msg.timestamp).toLocaleString("en-US", {
                                 month: "short",
                                 day: "numeric",
@@ -6435,7 +4457,7 @@ next-env.d.ts
                         </div>
                       ))
                     ) : (
-                      <p className="text-sm text-slate-300 whitespace-pre-wrap">
+                      <p className="text-sm text-text-secondary whitespace-pre-wrap">
                         {ticket.description}
                       </p>
                     )}
@@ -6443,13 +4465,13 @@ next-env.d.ts
 
                   {/* Response form */}
                   {respondingToTicketId === ticket.id ? (
-                    <div className="space-y-2 border-t border-slate-800 pt-3">
+                    <div className="space-y-2 border-t border-border-primary pt-3">
                       <textarea
                         value={adminResponse}
                         onChange={(e) => setAdminResponse(e.target.value)}
                         placeholder="Type your response..."
                         rows={2}
-                        className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-white placeholder-slate-500 text-xs focus:outline-none focus:border-blue-500/50 resize-none"
+                        className="w-full px-3 py-2 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-text-primary placeholder-text-muted text-xs focus:outline-none focus:border-blue-500/50 resize-none"
                       />
                       <div className="flex items-center gap-2">
                         <button
@@ -6483,14 +4505,14 @@ next-env.d.ts
                             setRespondingToTicketId(null);
                             setAdminResponse("");
                           }}
-                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium rounded-lg transition"
+                          className="px-3 py-1.5 bg-border-secondary hover:bg-text-faint text-text-secondary text-xs font-medium rounded-lg transition"
                         >
                           Cancel
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 border-t border-slate-800 pt-3">
+                    <div className="flex items-center gap-2 border-t border-border-primary pt-3">
                       <button
                         onClick={() => {
                           setRespondingToTicketId(ticket.id);
@@ -6557,9 +4579,20 @@ next-env.d.ts
       case "create":
         return CreateContent();
       case "projects":
-        return ProjectsContent();
+        return (
+          <ProjectsContent
+            loadingProjects={loadingProjects}
+            savedProjects={savedProjects}
+            onSectionChange={setActiveSection}
+            onOpenProject={openSavedProject}
+            onDeleteProject={(id) => {
+              setProjectToDelete(id);
+              setShowDeleteModal(true);
+            }}
+          />
+        );
       case "settings":
-        return SettingsContent();
+        return <SettingsContent user={user} savedProjects={savedProjects} />;
       case "support":
         return SupportContent();
       case "admin":
@@ -6571,51 +4604,12 @@ next-env.d.ts
 
   // Show loading screen while auth state is being resolved
   if (authLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        {/* Background effects */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-3xl" />
-          <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-violet-500/5 rounded-full blur-3xl" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-500/3 rounded-full blur-3xl" />
-        </div>
-
-        {/* Loading animation */}
-        <div className="text-center relative z-10">
-          <div className="inline-flex items-center justify-center mb-6">
-            <Logo size={64} animate />
-          </div>
-
-          {/* Modern spinner */}
-          <div className="relative w-24 h-24 mx-auto mb-6">
-            {/* Outer rotating ring */}
-            <div className="absolute inset-0 border-4 border-blue-500/10 rounded-full"></div>
-            {/* Spinning gradient ring */}
-            <div className="absolute inset-0 border-4 border-transparent border-t-blue-500 border-r-violet-500 rounded-full animate-spin"></div>
-            {/* Middle ring */}
-            <div
-              className="absolute inset-2 border-4 border-transparent border-b-blue-400 border-l-violet-400 rounded-full animate-spin"
-              style={{
-                animationDirection: "reverse",
-                animationDuration: "1.5s",
-              }}
-            ></div>
-            {/* Inner pulsing dot */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="w-4 h-4 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse"></div>
-            </div>
-          </div>
-
-          <h1 className="text-2xl font-bold text-white mb-2">Pocket Dev</h1>
-          <p className="text-slate-400">Initializing...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   // IDLE/ERROR STATE
   return (
-    <div className="min-h-screen bg-slate-950 flex">
+    <div className="min-h-screen bg-bg-primary flex">
       {/* Sidebar - only show when logged in */}
       {user && (
         <DashboardSidebar
@@ -6636,14 +4630,16 @@ next-env.d.ts
         />
       )}
 
+      {/* Floating theme toggle for non-logged-in users */}
+      {!user && (
+        <div className="fixed top-4 right-4 z-50">
+          <ThemeToggle />
+        </div>
+      )}
+
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-h-screen">
-        {/* Background effects */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-3xl" />
-          <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-violet-500/5 rounded-full blur-3xl" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-500/3 rounded-full blur-3xl" />
-        </div>
+        <BackgroundEffects />
 
         {/* Main content */}
         <main
@@ -6667,123 +4663,18 @@ next-env.d.ts
         onSuccess={handleSignInSuccess}
       />
 
-      {/* Cancel Confirmation Modal */}
-      {showCancelConfirm && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="relative px-6 pt-8 pb-4 text-center">
-              <button
-                onClick={() => setShowCancelConfirm(null)}
-                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-              <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-amber-500/20 rounded-2xl">
-                <svg
-                  className="w-8 h-8 text-amber-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-white mb-2">
-                {showCancelConfirm === "generation"
-                  ? "Cancel Generation?"
-                  : "Cancel Editing?"}
-              </h3>
-              <p className="text-slate-400 text-sm">
-                {showCancelConfirm === "generation"
-                  ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost."
-                  : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost."}
-              </p>
-              {showCancelConfirm === "edit" &&
-                Date.now() - editStartTimeRef.current < 10000 && (
-                  <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-                    <p className="text-xs text-emerald-300">
-                      Cancelling now will refund your integration tokens.
-                    </p>
-                  </div>
-                )}
-              {showCancelConfirm === "edit" &&
-                Date.now() - editStartTimeRef.current >= 10000 && (
-                  <div className="mt-3 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-                    <p className="text-xs text-amber-300">
-                      More than 10 seconds have passed. Tokens cannot be
-                      refunded.
-                    </p>
-                  </div>
-                )}
-            </div>
-            <div className="px-6 pb-6 flex gap-3">
-              <button
-                onClick={() => setShowCancelConfirm(null)}
-                className="flex-1 px-4 py-2.5 text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm font-medium transition"
-              >
-                Keep Going
-              </button>
-              <button
-                onClick={async () => {
-                  if (showCancelConfirm === "generation") {
-                    confirmCancelGeneration();
-                  } else {
-                    const withinRefundWindow =
-                      Date.now() - editStartTimeRef.current < 10000;
-                    setIsEditing(false);
-                    setEditProgressMessages([]);
-                    setShowCancelConfirm(null);
-                    if (withinRefundWindow && user) {
-                      try {
-                        const editCost = getEditIntegrationCost();
-                        const userRef = doc(db, "users", user.uid);
-                        await updateDoc(userRef, {
-                          integrationTokens: increment(editCost),
-                        });
-                        await refreshUserData();
-                      } catch (err) {
-                        console.error("Error refunding tokens:", err);
-                      }
-                    }
-                  }
-                }}
-                className="flex-1 px-4 py-2.5 text-white bg-red-600 hover:bg-red-500 rounded-xl text-sm font-medium transition"
-              >
-                Yes, Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Delete Confirmation Modal (projects list) */}
       {showDeleteModal && projectToDelete && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+          <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="relative px-6 pt-8 pb-4 text-center">
               <button
                 onClick={() => {
                   setShowDeleteModal(false);
                   setProjectToDelete(null);
                 }}
-                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
               >
                 <svg
                   className="w-5 h-5"
@@ -6814,10 +4705,10 @@ next-env.d.ts
                   />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-white mb-2">
+              <h3 className="text-xl font-bold text-text-primary mb-2">
                 Delete Project?
               </h3>
-              <p className="text-slate-400 text-sm">
+              <p className="text-text-tertiary text-sm">
                 This action cannot be undone. The project will be permanently
                 deleted.
               </p>
@@ -6847,7 +4738,7 @@ next-env.d.ts
                   setShowDeleteModal(false);
                   setProjectToDelete(null);
                 }}
-                className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
               >
                 Cancel
               </button>
@@ -6903,7 +4794,7 @@ next-env.d.ts
             }
           `}</style>
           <div
-            className="bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            className="bg-bg-secondary border border-border-secondary/80 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
             style={{
               animation:
                 "welcome-modal-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
@@ -7060,13 +4951,13 @@ next-env.d.ts
               </div>
 
               <h3
-                className="text-2xl font-bold text-white mb-2"
+                className="text-2xl font-bold text-text-primary mb-2"
                 style={{ animation: "welcome-text-in 0.5s ease-out 0.3s both" }}
               >
                 Welcome to Pocket Dev!
               </h3>
               <p
-                className="text-slate-400 text-sm"
+                className="text-text-tertiary text-sm"
                 style={{ animation: "welcome-text-in 0.5s ease-out 0.5s both" }}
               >
                 We&apos;ve given you free tokens to get started. Here&apos;s how
@@ -7098,7 +4989,7 @@ next-env.d.ts
                     </svg>
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-white">
+                    <h4 className="text-sm font-semibold text-text-primary">
                       App Tokens
                     </h4>
                     <p className="text-xs text-blue-400 font-medium">
@@ -7106,12 +4997,16 @@ next-env.d.ts
                     </p>
                   </div>
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-text-secondary leading-relaxed">
                   App tokens let you create new projects. Each new project costs{" "}
-                  <span className="text-white font-medium">2 app tokens</span>,
-                  so you can create{" "}
-                  <span className="text-white font-medium">2 projects</span> for
-                  free.
+                  <span className="text-text-primary font-medium">
+                    2 app tokens
+                  </span>
+                  , so you can create{" "}
+                  <span className="text-text-primary font-medium">
+                    2 projects
+                  </span>{" "}
+                  for free.
                 </p>
               </div>
 
@@ -7139,7 +5034,7 @@ next-env.d.ts
                     </svg>
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-white">
+                    <h4 className="text-sm font-semibold text-text-primary">
                       Integration Tokens
                     </h4>
                     <p className="text-xs text-violet-400 font-medium">
@@ -7147,21 +5042,23 @@ next-env.d.ts
                     </p>
                   </div>
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-text-secondary leading-relaxed">
                   Integration tokens let you make AI-powered edits to your
                   projects. Each edit costs{" "}
-                  <span className="text-white font-medium">
+                  <span className="text-text-primary font-medium">
                     1 integration token
                   </span>
                   , so you get{" "}
-                  <span className="text-white font-medium">10 edits</span> for
-                  free.
+                  <span className="text-text-primary font-medium">
+                    10 edits
+                  </span>{" "}
+                  for free.
                 </p>
               </div>
 
               {/* Buy More Note */}
               <p
-                className="text-xs text-slate-500 text-center"
+                className="text-xs text-text-muted text-center"
                 style={{ animation: "welcome-text-in 0.5s ease-out 0.9s both" }}
               >
                 Need more? You can buy additional tokens anytime from the
@@ -7200,12 +5097,12 @@ next-env.d.ts
 
           return (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
                 {/* Header */}
                 <div className="relative px-6 pt-8 pb-4 text-center">
                   <button
                     onClick={() => setShowTokenConfirmModal(null)}
-                    className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                    className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
                   >
                     <svg
                       className="w-5 h-5"
@@ -7242,10 +5139,10 @@ next-env.d.ts
                       />
                     </svg>
                   </div>
-                  <h3 className="text-lg font-bold text-white mb-1">
+                  <h3 className="text-lg font-bold text-text-primary mb-1">
                     {isGeneration ? "Create New Project" : "Edit Project"}
                   </h3>
-                  <p className="text-slate-400 text-sm">
+                  <p className="text-text-tertiary text-sm">
                     {isGeneration
                       ? "This action will deduct tokens from your balance."
                       : "This edit will deduct tokens from your balance."}
@@ -7263,14 +5160,14 @@ next-env.d.ts
                         </span>
                       </div>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-slate-300">
+                        <span className="text-sm text-text-secondary">
                           Project creation
                         </span>
                         <span className="text-sm font-bold text-blue-400">
                           -{appCost}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                      <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
                         <span>Balance: {appBalance}</span>
                         <span>After: {appBalance - appCost}</span>
                       </div>
@@ -7289,7 +5186,7 @@ next-env.d.ts
                         <>
                           {currentAppAuth.includes("username-password") && (
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-slate-300">
+                              <span className="text-sm text-text-secondary">
                                 Username & Password auth
                               </span>
                               <span className="text-sm font-bold text-violet-400">
@@ -7299,7 +5196,7 @@ next-env.d.ts
                           )}
                           {currentAppAuth.includes("google") && (
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-slate-300">
+                              <span className="text-sm text-text-secondary">
                                 Google OAuth auth
                               </span>
                               <span className="text-sm font-bold text-violet-400">
@@ -7312,7 +5209,7 @@ next-env.d.ts
                         <>
                           {editAppAuth.includes("username-password") && (
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-slate-300">
+                              <span className="text-sm text-text-secondary">
                                 Username & Password auth
                               </span>
                               <span className="text-sm font-bold text-violet-400">
@@ -7322,7 +5219,7 @@ next-env.d.ts
                           )}
                           {editAppAuth.includes("google") && (
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-slate-300">
+                              <span className="text-sm text-text-secondary">
                                 Google OAuth auth
                               </span>
                               <span className="text-sm font-bold text-violet-400">
@@ -7332,7 +5229,7 @@ next-env.d.ts
                           )}
                           {editAppAuth.length === 0 && (
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-slate-300">
+                              <span className="text-sm text-text-secondary">
                                 Edit changes
                               </span>
                               <span className="text-sm font-bold text-violet-400">
@@ -7342,7 +5239,7 @@ next-env.d.ts
                           )}
                         </>
                       )}
-                      <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-700/50">
+                      <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
                         <span>Balance: {integrationBalance}</span>
                         <span>
                           After: {integrationBalance - integrationCost}
@@ -7382,9 +5279,9 @@ next-env.d.ts
                             String(e.target.checked),
                           );
                         }}
-                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
+                        className="w-4 h-4 rounded border-text-faint bg-bg-tertiary text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
                       />
-                      <span className="text-xs text-slate-400 group-hover:text-slate-300 transition">
+                      <span className="text-xs text-text-tertiary group-hover:text-text-secondary transition">
                         Don&apos;t show this again for edits
                       </span>
                     </label>
@@ -7412,7 +5309,7 @@ next-env.d.ts
                   </button>
                   <button
                     onClick={() => setShowTokenConfirmModal(null)}
-                    className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
+                    className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
                   >
                     Cancel
                   </button>
@@ -7423,608 +5320,73 @@ next-env.d.ts
         })()}
 
       {/* Authentication Modal */}
-      {showAuthModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            {/* Header */}
-            <div className="relative px-6 pt-6 pb-3 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30 flex items-center justify-center">
-                  <svg
-                    className="w-5 h-5 text-blue-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                    />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    Authentication
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Select auth for your next app
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {/* Options */}
-            <div className="p-4 space-y-2.5">
-              {/* Username/Password */}
-              <button
-                onClick={() =>
-                  setCurrentAppAuth(
-                    currentAppAuth.includes("username-password")
-                      ? currentAppAuth.filter((a) => a !== "username-password")
-                      : [...currentAppAuth, "username-password"],
-                  )
-                }
-                className={`w-full text-left p-4 rounded-xl border transition-all ${
-                  currentAppAuth.includes("username-password")
-                    ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
-                    : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center ${currentAppAuth.includes("username-password") ? "bg-blue-500/20" : "bg-slate-800"}`}
-                  >
-                    <svg
-                      className={`w-5 h-5 ${currentAppAuth.includes("username-password") ? "text-blue-400" : "text-slate-400"}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
-                      />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`font-medium text-sm ${currentAppAuth.includes("username-password") ? "text-blue-300" : "text-white"}`}
-                    >
-                      Username & Password
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Email/password sign up, login & protected routes
-                    </p>
-                  </div>
-                  <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">
-                    30 tokens
-                  </span>
-                  {currentAppAuth.includes("username-password") && (
-                    <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg
-                        className="w-3 h-3 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={3}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              </button>
-
-              {/* Google OAuth */}
-              <button
-                onClick={() =>
-                  setCurrentAppAuth(
-                    currentAppAuth.includes("google")
-                      ? currentAppAuth.filter((a) => a !== "google")
-                      : [...currentAppAuth, "google"],
-                  )
-                }
-                className={`w-full text-left p-4 rounded-xl border transition-all ${
-                  currentAppAuth.includes("google")
-                    ? "bg-blue-600/15 border-blue-500/40 ring-1 ring-blue-500/20"
-                    : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center ${currentAppAuth.includes("google") ? "bg-blue-500/20" : "bg-slate-800"}`}
-                  >
-                    <svg
-                      className={`w-5 h-5 ${currentAppAuth.includes("google") ? "text-blue-400" : "text-slate-400"}`}
-                      viewBox="0 0 24 24"
-                      fill="currentColor"
-                    >
-                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`font-medium text-sm ${currentAppAuth.includes("google") ? "text-blue-300" : "text-white"}`}
-                    >
-                      Google OAuth
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Sign in with Google, profile & protected routes
-                    </p>
-                  </div>
-                  <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">
-                    30 tokens
-                  </span>
-                  {currentAppAuth.includes("google") && (
-                    <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
-                      <svg
-                        className="w-3 h-3 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={3}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              </button>
-            </div>
-
-            {/* Info footer */}
-            {currentAppAuth.length > 0 && (
-              <div className="mx-4 mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                <div className="flex items-start gap-2">
-                  <svg
-                    className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <p className="text-xs text-blue-300">
-                    <span className="font-medium">
-                      {currentAppAuth
-                        .map((a) =>
-                          a === "username-password"
-                            ? "Username & Password"
-                            : "Google OAuth",
-                        )
-                        .join(" + ")}
-                    </span>{" "}
-                    auth will be included in your next app. Costs{" "}
-                    <span className="font-medium text-violet-400">
-                      {currentAppAuth.length * 30} integration tokens
-                    </span>{" "}
-                    + 2 app tokens.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Done button */}
-            <div className="px-4 pb-4">
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="w-full px-4 py-2.5 text-sm font-medium bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white rounded-xl transition"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Database Modal */}
-      {showDbModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-            {/* Header */}
-            <div className="relative px-6 pt-6 pb-3 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center">
-                  <svg
-                    className="w-5 h-5 text-emerald-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                    />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">Database</h3>
-                  <p className="text-xs text-slate-400">
-                    Configure database for your app
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowDbModal(false)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {/* Coming Soon */}
-            <div className="p-6 text-center">
-              <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
-                <svg
-                  className="w-7 h-7 text-slate-500"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-base font-medium text-white mb-2">
-                Coming Soon
-              </h3>
-              <p className="text-slate-400 text-sm mb-1">
-                Database integration will cost{" "}
-                <span className="text-violet-400 font-medium">
-                  50 integration tokens
-                </span>
-                .
-              </p>
-              <p className="text-slate-500 text-xs">
-                Choose database providers and schema settings for your generated
-                apps.
-              </p>
-            </div>
-
-            <div className="px-6 pb-5">
-              <button
-                onClick={() => setShowDbModal(false)}
-                className="w-full px-4 py-2.5 text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Token Purchase Modal */}
-      {showTokenPurchaseModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
-            {/* Modal Header */}
-            <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
-              <button
-                onClick={() => {
-                  setShowTokenPurchaseModal(false);
-                  setInsufficientTokenMessage(null);
-                }}
-                className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-              <div
-                className={`inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl ${
-                  purchaseTokenType === "app"
-                    ? "bg-gradient-to-br from-blue-500 to-violet-500"
-                    : "bg-gradient-to-br from-violet-500 to-purple-500"
-                }`}
-              >
-                <svg
-                  className="w-8 h-8 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-white mb-2">
-                Buy {purchaseTokenType === "app" ? "App" : "Integration"} Tokens
-              </h3>
-              {insufficientTokenMessage ? (
-                <div className="mt-1 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-left">
-                  <div className="flex items-start gap-2">
-                    <svg
-                      className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                      />
-                    </svg>
-                    <p className="text-sm text-red-300">
-                      {insufficientTokenMessage}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-slate-400 text-sm">
-                  {purchaseTokenType === "app"
-                    ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
-                    : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
-                </p>
-              )}
-              <p className="text-slate-500 text-xs mt-2">
-                Current balance:{" "}
-                {purchaseTokenType === "app"
-                  ? userData?.appTokens || 0
-                  : userData?.integrationTokens || 0}{" "}
-                tokens
-              </p>
-            </div>
 
-            {/* Token Type Tabs */}
-            <div className="px-6 pb-3 flex-shrink-0">
-              <div className="flex bg-slate-800 rounded-lg p-1">
-                <button
-                  onClick={() => {
-                    setPurchaseTokenType("app");
-                    setTokenPurchaseAmount(0);
-                  }}
-                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                    purchaseTokenType === "app"
-                      ? "bg-blue-600 text-white"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  App Tokens
-                </button>
-                <button
-                  onClick={() => {
-                    setPurchaseTokenType("integration");
-                    setTokenPurchaseAmount(0);
-                  }}
-                  className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                    purchaseTokenType === "integration"
-                      ? "bg-violet-600 text-white"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  Integration Tokens
-                </button>
-              </div>
-            </div>
+      {/* Extracted Modals */}
+      <CancelConfirmModal
+        isOpen={showCancelConfirm}
+        onClose={() => setShowCancelConfirm(null)}
+        onConfirm={async () => {
+          if (showCancelConfirm === "generation") {
+            confirmCancelGeneration();
+          } else {
+            const withinRefundWindow =
+              Date.now() - editStartTimeRef.current < 10000;
+            setIsEditing(false);
+            setEditProgressMessages([]);
+            setShowCancelConfirm(null);
+            if (withinRefundWindow && user) {
+              try {
+                const editCost = getEditIntegrationCost();
+                const userRef = doc(db, "users", user.uid);
+                await updateDoc(userRef, {
+                  integrationTokens: increment(editCost),
+                });
+                await refreshUserData();
+              } catch (err) {
+                console.error("Error refunding tokens:", err);
+              }
+            }
+          }
+        }}
+        editStartTime={editStartTimeRef.current}
+        isEditing={isEditing}
+      />
 
-            {/* Amount Selection */}
-            <div className="px-6 py-4 overflow-y-auto flex-1">
-              <p className="text-xs text-slate-400 mb-3">
-                {purchaseTokenType === "app"
-                  ? "1 AUD = 1 app token"
-                  : "1 AUD = 10 integration tokens"}
-              </p>
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                {(purchaseTokenType === "app"
-                  ? [
-                      { aud: 2, tokens: 2, label: "2 tokens" },
-                      { aud: 5, tokens: 5, label: "5 tokens" },
-                      { aud: 10, tokens: 10, label: "10 tokens" },
-                      { aud: 20, tokens: 20, label: "20 tokens" },
-                    ]
-                  : [
-                      { aud: 1, tokens: 10, label: "10 tokens" },
-                      { aud: 5, tokens: 50, label: "50 tokens" },
-                      { aud: 10, tokens: 100, label: "100 tokens" },
-                      { aud: 20, tokens: 200, label: "200 tokens" },
-                    ]
-                ).map((option) => (
-                  <button
-                    key={option.aud}
-                    onClick={() => setTokenPurchaseAmount(option.aud)}
-                    className={`p-3 rounded-xl border-2 transition-all text-left ${
-                      tokenPurchaseAmount === option.aud
-                        ? purchaseTokenType === "app"
-                          ? "border-blue-500 bg-blue-500/10"
-                          : "border-violet-500 bg-violet-500/10"
-                        : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
-                    }`}
-                  >
-                    <div className="text-lg font-bold text-white">
-                      ${option.aud} AUD
-                    </div>
-                    <div
-                      className={`text-xs ${
-                        purchaseTokenType === "app"
-                          ? "text-blue-400"
-                          : "text-violet-400"
-                      }`}
-                    >
-                      {option.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">
-                  $
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="Custom amount"
-                  value={tokenPurchaseAmount || ""}
-                  onChange={(e) =>
-                    setTokenPurchaseAmount(
-                      Math.max(0, parseInt(e.target.value) || 0),
-                    )
-                  }
-                  className={`w-full pl-7 pr-16 py-2.5 bg-slate-800/50 border rounded-xl text-white text-sm font-medium focus:outline-none transition placeholder-slate-500 ${
-                    purchaseTokenType === "app"
-                      ? "border-blue-500/30 focus:border-blue-500"
-                      : "border-violet-500/30 focus:border-violet-500"
-                  }`}
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">
-                  AUD
-                </span>
-              </div>
-              {tokenPurchaseAmount > 0 && (
-                <div
-                  className={`mt-3 p-3 rounded-xl border ${
-                    purchaseTokenType === "app"
-                      ? "bg-blue-500/5 border-blue-500/20"
-                      : "bg-violet-500/5 border-violet-500/20"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-slate-300">
-                      You&apos;ll receive
-                    </span>
-                    <span
-                      className={`text-lg font-bold ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}
-                    >
-                      {purchaseTokenType === "app"
-                        ? tokenPurchaseAmount
-                        : tokenPurchaseAmount * 10}{" "}
-                      tokens
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        selectedAuth={currentAppAuth}
+        onAuthChange={(auth) =>
+          setCurrentAppAuth(
+            currentAppAuth.includes(auth)
+              ? currentAppAuth.filter((a) => a !== auth)
+              : [...currentAppAuth, auth],
+          )
+        }
+      />
 
-            {/* Footer */}
-            <div className="px-6 pb-6 space-y-3 flex-shrink-0">
-              {tokenPurchaseAmount > 0 && (
-                <button
-                  onClick={purchaseTokens}
-                  disabled={isProcessingTokenPurchase}
-                  className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                    purchaseTokenType === "app"
-                      ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                      : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
-                  }`}
-                >
-                  {isProcessingTokenPurchase ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                        />
-                      </svg>
-                      Pay ${tokenPurchaseAmount} AUD -{" "}
-                      {purchaseTokenType === "app"
-                        ? tokenPurchaseAmount
-                        : tokenPurchaseAmount * 10}{" "}
-                      tokens
-                    </>
-                  )}
-                </button>
-              )}
-              <button
-                onClick={() => {
-                  setShowTokenPurchaseModal(false);
-                  setInsufficientTokenMessage(null);
-                }}
-                className="w-full px-5 py-2.5 text-slate-400 hover:text-white text-sm font-medium transition"
-              >
-                Cancel
-              </button>
-              {tokenPurchaseAmount > 0 && (
-                <p className="text-xs text-slate-500 text-center">
-                  Secure payment powered by Stripe
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <DatabaseModal
+        isOpen={showDbModal}
+        onClose={() => setShowDbModal(false)}
+      />
+
+      <TokenPurchaseModal
+        isOpen={showTokenPurchaseModal}
+        onClose={() => setShowTokenPurchaseModal(false)}
+        tokenType={purchaseTokenType}
+        onTokenTypeChange={setPurchaseTokenType}
+        amount={tokenPurchaseAmount}
+        onAmountChange={setTokenPurchaseAmount}
+        appTokens={userData?.appTokens || 0}
+        integrationTokens={userData?.integrationTokens || 0}
+        insufficientMessage={insufficientTokenMessage}
+        isProcessing={isProcessingTokenPurchase}
+        onPurchase={purchaseTokens}
+      />
 
       {/* Floating generation progress indicator (when on other sections or minimized) */}
       {status === "loading" &&
@@ -8058,6 +5420,14 @@ next-env.d.ts
           }}
         />
       )}
+
+      {/* Code Viewer Modal */}
+      {showCodeViewer && project && (
+        <CodeViewer
+          files={project.files}
+          onClose={() => setShowCodeViewer(false)}
+        />
+      )}
     </div>
   );
 }
@@ -8066,7 +5436,7 @@ export default function ReactGenerator() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="min-h-screen bg-bg-primary flex items-center justify-center">
           <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
         </div>
       }
