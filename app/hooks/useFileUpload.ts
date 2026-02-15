@@ -1,9 +1,9 @@
-import { useState, useCallback, useRef } from "react";
-import { useUploadThing } from "@/lib/uploadthing";
+﻿import { useState, useCallback, useRef } from "react";
+import { useSupabaseUploads } from "@/lib/supabase-uploads";
 import type { UploadedFile } from "@/app/types";
 
 interface UseFileUploadProps {
-  user: any; // Clerk user object
+  user: any; // auth user object
   setError: (error: string) => void;
 }
 
@@ -13,7 +13,7 @@ export function useFileUpload({ user, setError }: UseFileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
-  const { startUpload, isUploading } = useUploadThing("imageUploader");
+  const { startUpload, isUploading } = useSupabaseUploads();
 
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,7 +37,7 @@ export function useFileUpload({ user, setError }: UseFileUploadProps) {
 
         const filesWithDataUrls = await Promise.all(filePromises);
 
-        // Upload to UploadThing
+        // Upload to Supabase Storage
         const uploadedResults = await startUpload(fileArray);
 
         if (!uploadedResults) {
@@ -85,7 +85,7 @@ export function useFileUpload({ user, setError }: UseFileUploadProps) {
 
         const filesWithDataUrls = await Promise.all(filePromises);
 
-        // Upload to UploadThing
+        // Upload to Supabase Storage
         const uploadedResults = await startUpload(fileArray);
 
         if (!uploadedResults) {
@@ -133,3 +133,4 @@ export function useFileUpload({ user, setError }: UseFileUploadProps) {
     isUploading, // Expose upload state
   };
 }
+

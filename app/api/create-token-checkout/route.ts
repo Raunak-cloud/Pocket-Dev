@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/supabase-auth/server";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(request: NextRequest) {
@@ -15,8 +15,8 @@ export async function POST(request: NextRequest) {
     }
 
     const stripe = new Stripe(stripeKey);
-    const { userId: clerkUserId } = await auth();
-    if (!clerkUserId) {
+    const { userId: authUserId } = await auth();
+    if (!authUserId) {
       return NextResponse.json(
         { error: "Unauthorized" },
         { status: 401 }
@@ -24,18 +24,11 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { userEmail, tokenType, quantity } = body;
+    const { userEmail, quantity } = body;
 
-    if (!tokenType || !quantity) {
+    if (!quantity) {
       return NextResponse.json(
-        { error: "Missing required fields: tokenType, quantity" },
-        { status: 400 }
-      );
-    }
-
-    if (tokenType !== "app" && tokenType !== "integration") {
-      return NextResponse.json(
-        { error: "Invalid tokenType. Must be 'app' or 'integration'" },
+        { error: "Missing required field: quantity" },
         { status: 400 }
       );
     }
@@ -48,7 +41,7 @@ export async function POST(request: NextRequest) {
     }
 
     const user = await prisma.user.findUnique({
-      where: { clerkUserId },
+      where: { authUserId },
       select: { id: true, email: true },
     });
 
@@ -59,19 +52,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Calculate tokens to credit
     // App tokens: 1 AUD = 1 token
-    // Integration tokens: 1 AUD = 10 tokens
-    const tokensToCredit = tokenType === "app" ? quantity : quantity * 10;
+    const tokensToCredit = quantity;
     const unitAmountCents = quantity * 100; // AUD in cents
 
-    const productName = tokenType === "app"
-      ? `${tokensToCredit} App Token${tokensToCredit > 1 ? "s" : ""}`
-      : `${tokensToCredit} Integration Token${tokensToCredit > 1 ? "s" : ""}`;
-
-    const productDescription = tokenType === "app"
-      ? "App tokens for creating new projects (2 tokens per project)"
-      : "Integration tokens for AI edits and backend/API calls (1 token per action)";
+    const productName = `${tokensToCredit} App Token${tokensToCredit > 1 ? "s" : ""}`;
+    const productDescription =
+      "App tokens for project generation, editing, authentication, and database setup";
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -89,15 +76,15 @@ export async function POST(request: NextRequest) {
         },
       ],
       mode: "payment",
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=success&session_id={CHECKOUT_SESSION_ID}&tokenType=${tokenType}&amount=${tokensToCredit}`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=success&session_id={CHECKOUT_SESSION_ID}&tokenType=app&amount=${tokensToCredit}`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=cancelled`,
       client_reference_id: user.id,
       customer_email: user.email || userEmail || undefined,
       metadata: {
         type: "token_purchase",
         userId: user.id,
-        clerkUserId,
-        tokenType,
+        authUserId,
+        tokenType: "app",
         tokensToCredit: String(tokensToCredit),
       },
     });
@@ -115,3 +102,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+

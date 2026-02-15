@@ -1,4 +1,4 @@
-'use server';
+﻿'use server';
 
 import { Sandbox } from '@e2b/code-interpreter';
 import {
@@ -10,6 +10,7 @@ import {
 } from "@/lib/sandbox-startup-status";
 import { ensureProviderGuardsForFileMap } from "@/lib/provider-guards";
 import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
+import { getSupabaseEnvBundle } from "@/lib/supabase/env";
 
 export async function createSandboxServer(
   files: Record<string, string>,
@@ -95,19 +96,11 @@ export async function createSandboxServer(
   };
 
   const patchedFiles: Record<string, string> = { ...files };
-  const clerkPreviewEnvs: Record<string, string> = {};
-  if (process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
-    clerkPreviewEnvs.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY =
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-  }
-  if (process.env.CLERK_PUBLISHABLE_KEY) {
-    clerkPreviewEnvs.CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY;
-  }
-  if (process.env.CLERK_SECRET_KEY) {
-    clerkPreviewEnvs.CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY;
-  }
+  const authPreviewEnvs: Record<string, string> = {
+    ...getSupabaseEnvBundle(),
+  };
   if (options?.projectId) {
-    clerkPreviewEnvs.NEXT_PUBLIC_POCKET_APP_SLUG = getProjectAuthTenantSlug(
+    authPreviewEnvs.NEXT_PUBLIC_POCKET_APP_SLUG = getProjectAuthTenantSlug(
       options.projectId,
     );
   }
@@ -302,7 +295,7 @@ export default function PocketTextEditBridge() {
 
 import { useEffect } from "react";
 
-const CLERK_HOST_FRAGMENT = ".accounts.dev";
+const SUPABASE_AUTH_HOST_FRAGMENT = ".accounts.dev";
 
 export default function PocketAuthPreviewBridge() {
   useEffect(() => {
@@ -323,14 +316,14 @@ export default function PocketAuthPreviewBridge() {
       const anchor = target.closest("a[href]") as HTMLAnchorElement | null;
       if (!anchor) return;
       const href = anchor.getAttribute("href") || "";
-      if (!href.includes(CLERK_HOST_FRAGMENT)) return;
+      if (!href.includes(SUPABASE_AUTH_HOST_FRAGMENT)) return;
       event.preventDefault();
       event.stopPropagation();
       openOutsideFrame(anchor.href);
     };
 
-    // If app already redirected into a Clerk hosted URL inside iframe, break out.
-    if (window.location.hostname.includes(CLERK_HOST_FRAGMENT)) {
+    // If app already redirected into a Supabase Auth hosted URL inside iframe, break out.
+    if (window.location.hostname.includes(SUPABASE_AUTH_HOST_FRAGMENT)) {
       openOutsideFrame(window.location.href);
     }
 
@@ -484,7 +477,7 @@ export default function PocketAuthPreviewBridge() {
       NEXT_TELEMETRY_DISABLED: "1",
       PORT: "3000",
       HOSTNAME: "0.0.0.0",
-      ...clerkPreviewEnvs,
+      ...authPreviewEnvs,
     },
     onStdout: (data: string) => appendSandboxStartupLog(jobId, data),
     onStderr: (data: string) => appendSandboxStartupLog(jobId, `[dev] ${data}`),
@@ -691,18 +684,7 @@ export async function ensureSandboxHealthy(
         NEXT_TELEMETRY_DISABLED: "1",
         PORT: "3000",
         HOSTNAME: "0.0.0.0",
-        ...(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-          ? {
-              NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
-                process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-            }
-          : {}),
-        ...(process.env.CLERK_PUBLISHABLE_KEY
-          ? { CLERK_PUBLISHABLE_KEY: process.env.CLERK_PUBLISHABLE_KEY }
-          : {}),
-        ...(process.env.CLERK_SECRET_KEY
-          ? { CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY }
-          : {}),
+        ...getSupabaseEnvBundle(),
         ...(options?.projectId
           ? {
               NEXT_PUBLIC_POCKET_APP_SLUG: getProjectAuthTenantSlug(
@@ -738,3 +720,4 @@ export async function closeSandbox(sandboxId: string) {
     console.error('Error closing sandbox:', err);
   }
 }
+

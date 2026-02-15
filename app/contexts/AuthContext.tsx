@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { useUser, useClerk } from "@clerk/nextjs";
+import { useSupabaseUser, useSupabaseAuth } from "@/lib/supabase-auth/client";
 
 export interface UserData {
   uid: string;
@@ -12,7 +12,6 @@ export interface UserData {
   lastLoginAt: Date | null;
   projectCount: number;
   appTokens: number;
-  integrationTokens: number;
 }
 
 export interface CompatibleUser {
@@ -36,8 +35,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { user: clerkUser, isLoaded: clerkLoaded, isSignedIn } = useUser();
-  const { openSignIn, signOut: clerkSignOut } = useClerk();
+  const { user: authUser, isLoaded: authLoaded, isSignedIn } = useSupabaseUser();
+  const { openSignIn, signOut: authSignOut } = useSupabaseAuth();
 
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Fetch user data from Prisma via API
   const fetchUserData = useCallback(async () => {
-    if (!clerkUser || !isSignedIn) {
+    if (!authUser || !isSignedIn) {
       setUserData(null);
       setLoading(false);
       return;
@@ -66,7 +65,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsNewUser(true);
         }
       } else {
-        console.error('Failed to fetch user data');
+        const data = await response.json().catch(() => ({}));
+        console.error('Failed to fetch user data', data?.error || response.status);
         setUserData(null);
       }
     } catch (error) {
@@ -75,22 +75,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [clerkUser, isSignedIn]);
+  }, [authUser, isSignedIn]);
 
-  // Fetch user data when Clerk user changes
+  // Fetch user data when auth user changes
   useEffect(() => {
-    if (!clerkLoaded) {
+    if (!authLoaded) {
       return;
     }
 
-    if (isSignedIn && clerkUser) {
+    if (isSignedIn && authUser) {
       fetchUserData();
     } else {
       setUserData(null);
       setIsNewUser(false);
       setLoading(false);
     }
-  }, [clerkLoaded, isSignedIn, clerkUser, fetchUserData]);
+  }, [authLoaded, isSignedIn, authUser, fetchUserData]);
 
   const signInWithGoogle = async () => {
     await openSignIn({
@@ -99,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await clerkSignOut();
+    await authSignOut();
     setUserData(null);
     setIsNewUser(false);
   };
@@ -109,13 +109,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUserData = useCallback(async () => {
-    if (!clerkUser || !isSignedIn) return;
+    if (!authUser || !isSignedIn) return;
 
     try {
       const response = await fetch('/api/user/me');
       if (response.ok) {
         const data = await response.json();
-        console.log(`[AuthContext] Refreshing user data. AppTokens: ${data.appTokens || 0}, IntegrationTokens: ${data.integrationTokens || 0}`);
+        console.log(`[AuthContext] Refreshing user data. AppTokens: ${data.appTokens || 0}`);
         setUserData(data);
       } else {
         console.error('[AuthContext] Failed to refresh user data');
@@ -123,14 +123,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Error refreshing user data:", error);
     }
-  }, [clerkUser, isSignedIn]);
+  }, [authUser, isSignedIn]);
 
   // Create a compatible user object for components expecting Firebase user
-  const compatibleUser: CompatibleUser | null = clerkUser ? {
-    uid: clerkUser.id,
-    email: clerkUser.emailAddresses[0]?.emailAddress || null,
-    displayName: clerkUser.fullName || clerkUser.username || null,
-    photoURL: clerkUser.imageUrl || null,
+  const compatibleUser: CompatibleUser | null = authUser ? {
+    uid: authUser.id,
+    email: authUser.email || null,
+    displayName: authUser.fullName || authUser.username || null,
+    photoURL: authUser.imageUrl || null,
   } : null;
 
   return (
@@ -156,3 +156,4 @@ export function useAuth() {
   }
   return context;
 }
+

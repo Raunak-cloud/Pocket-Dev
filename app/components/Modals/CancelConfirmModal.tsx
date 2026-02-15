@@ -67,7 +67,7 @@ export function CancelConfirmModal({
           {isOpen === "edit" && withinRefundWindow && (
             <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
               <p className="text-xs text-emerald-300">
-                Cancelling now will refund your integration tokens.
+                Cancelling now will refund your app tokens.
               </p>
             </div>
           )}

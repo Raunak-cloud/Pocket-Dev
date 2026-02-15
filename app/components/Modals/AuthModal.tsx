@@ -107,7 +107,7 @@ export function AuthModal({
                 </p>
               </div>
               <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">
-                30 tokens
+                2 tokens
               </span>
               {selectedAuth.includes("username-password") && (
                 <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
@@ -164,7 +164,7 @@ export function AuthModal({
                 </p>
               </div>
               <span className="text-xs font-medium text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex-shrink-0">
-                30 tokens
+                2 tokens
               </span>
               {selectedAuth.includes("google") && (
                 <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
@@ -216,9 +216,9 @@ export function AuthModal({
                 </span>{" "}
                 auth will be included in your next app. Costs{" "}
                 <span className="font-medium text-violet-400">
-                  {selectedAuth.length * 30} integration tokens
-                </span>{" "}
-                + 2 app tokens.
+                  {selectedAuth.length * 2} app tokens
+                </span>
+                .
               </p>
             </div>
           </div>

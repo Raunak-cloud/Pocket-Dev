@@ -1,15 +1,15 @@
-import { auth } from "@clerk/nextjs/server";
+﻿import { auth } from "@/lib/supabase-auth/server";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function PUT(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
-    if (!clerkUserId) {
+    const { userId: authUserId } = await auth();
+    if (!authUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({ where: { clerkUserId } });
+    const user = await prisma.user.findUnique({ where: { authUserId } });
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
@@ -51,3 +51,5 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+

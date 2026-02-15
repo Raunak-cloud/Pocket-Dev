@@ -1,8 +1,8 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import type { ReactProject, SavedProject } from "@/app/types";
 
 interface UseProjectManagementProps {
-  user: any; // Clerk user object
+  user: any; // auth user object
   userData: any; // UserData from Prisma
   refreshUserData: () => Promise<void>;
   currentProjectId: string | null;
@@ -176,3 +176,4 @@ export function useProjectManagement(props: UseProjectManagementProps) {
     deleteProject,
   };
 }
+

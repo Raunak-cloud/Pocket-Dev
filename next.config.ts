@@ -1,5 +1,15 @@
 import type { NextConfig } from "next";
 
+let supabaseImageHost: string | null = null;
+try {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (supabaseUrl) {
+    supabaseImageHost = new URL(supabaseUrl).hostname;
+  }
+} catch {
+  supabaseImageHost = null;
+}
+
 const nextConfig: NextConfig = {
   serverExternalPackages: ["eslint"],
   experimental: {
@@ -12,6 +22,9 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "replicate.delivery" },
       { protocol: "https", hostname: "utfs.io" },
       { protocol: "https", hostname: "lh3.googleusercontent.com" },
+      ...(supabaseImageHost
+        ? [{ protocol: "https" as const, hostname: supabaseImageHost }]
+        : []),
     ],
   },
   headers: async () => [

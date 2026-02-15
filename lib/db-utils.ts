@@ -1,34 +1,34 @@
-import { prisma } from './prisma';
-import type { User } from '@clerk/nextjs/server';
+﻿import { prisma } from './prisma';
+import type { AuthUser } from '@/lib/supabase-auth/server';
 
 /**
- * Get user data from Prisma database by Clerk user ID
+ * Get user data from Prisma database by auth user ID
  */
-export async function getUserByClerkId(clerkUserId: string) {
+export async function getUserByAuthId(authUserId: string) {
   return await prisma.user.findUnique({
-    where: { clerkUserId },
+    where: { authUserId },
   });
 }
 
 /**
- * Create a new user in the database from Clerk user data
+ * Create a new user in the database from auth user data
  */
-export async function createUser(clerkUser: User) {
-  const email = clerkUser.emailAddresses[0]?.emailAddress || null;
-  const displayName = clerkUser.fullName || clerkUser.username || null;
-  const photoURL = clerkUser.imageUrl || null;
+export async function createUser(authUser: AuthUser) {
+  const email = authUser.email || null;
+  const displayName = authUser.fullName || authUser.username || null;
+  const photoURL = authUser.imageUrl || null;
 
   return await prisma.user.upsert({
-    where: { clerkUserId: clerkUser.id },
+    where: { authUserId: authUser.id },
     create: {
-      clerkUserId: clerkUser.id,
+      authUserId: authUser.id,
       email,
       displayName,
       photoURL,
       lastLoginAt: new Date(),
       // Default token balances for new users
       appTokens: 4,
-      integrationTokens: 10,
+      integrationTokens: 0,
     },
     update: {
       email,
@@ -42,9 +42,9 @@ export async function createUser(clerkUser: User) {
 /**
  * Update user's last login timestamp
  */
-export async function updateUserLastLogin(clerkUserId: string) {
+export async function updateUserLastLogin(authUserId: string) {
   return await prisma.user.update({
-    where: { clerkUserId },
+    where: { authUserId },
     data: { lastLoginAt: new Date() },
   });
 }
@@ -267,3 +267,5 @@ export async function checkAppTokenBalance(
     return { sufficient: false, balance: 0 };
   }
 }
+
+

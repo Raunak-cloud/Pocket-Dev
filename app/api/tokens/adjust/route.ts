@@ -1,35 +1,32 @@
-import { auth } from "@clerk/nextjs/server";
+﻿import { auth } from "@/lib/supabase-auth/server";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
-    if (!clerkUserId) {
+    const { userId: authUserId } = await auth();
+    if (!authUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({ where: { clerkUserId } });
+    const user = await prisma.user.findUnique({ where: { authUserId } });
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
     const body = await req.json();
-    const tokenType = body.tokenType as "app" | "integration";
     const amount = Number(body.amount);
     const reason = String(body.reason || "Token adjustment");
 
-    if (!["app", "integration"].includes(tokenType) || !Number.isFinite(amount)) {
+    if (!Number.isFinite(amount)) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
-
-    const balanceField = tokenType === "app" ? "appTokens" : "integrationTokens";
 
     await prisma.$transaction(async (tx) => {
       const fresh = await tx.user.findUnique({ where: { id: user.id } });
       if (!fresh) throw new Error("User not found");
 
-      const currentBalance = fresh[balanceField];
+      const currentBalance = fresh.appTokens;
       const nextBalance = currentBalance + amount;
       if (nextBalance < 0) {
         throw new Error("Insufficient token balance");
@@ -37,14 +34,14 @@ export async function POST(req: Request) {
 
       await tx.user.update({
         where: { id: user.id },
-        data: { [balanceField]: nextBalance },
+        data: { appTokens: nextBalance },
       });
 
       await tx.tokenTransaction.create({
         data: {
           userId: user.id,
           type: amount >= 0 ? "credit" : "deduction",
-          tokenType,
+          tokenType: "app",
           amount,
           balanceBefore: currentBalance,
           balanceAfter: nextBalance,
@@ -60,3 +57,5 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status });
   }
 }
+
+

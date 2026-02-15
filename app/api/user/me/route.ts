@@ -1,44 +1,47 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+﻿import { auth, currentUser } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
-import { getUserByClerkId, createUser, updateUserLastLogin } from '@/lib/db-utils';
+import { getUserByAuthId, createUser, updateUserLastLogin } from '@/lib/db-utils';
 import type { UserData } from '@/app/contexts/AuthContext';
+import { withPrismaRetry } from '@/lib/prisma';
 
 export async function GET() {
   try {
-    const { userId: clerkUserId } = await auth();
+    const { userId: authUserId } = await auth();
 
-    if (!clerkUserId) {
+    if (!authUserId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Try to get user from database
-    let user = await getUserByClerkId(clerkUserId);
+    const userData = await withPrismaRetry(async () => {
+      // Try to get user from database
+      let user = await getUserByAuthId(authUserId);
 
-    // If user doesn't exist, create them
-    if (!user) {
-      const clerkUser = await currentUser();
-      if (!clerkUser) {
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      // If user doesn't exist, create them
+      if (!user) {
+        const authUser = await currentUser();
+        if (!authUser) {
+          throw new Error('User not found');
+        }
+
+        user = await createUser(authUser);
+      } else {
+        // Update last login timestamp
+        await updateUserLastLogin(authUserId);
       }
 
-      user = await createUser(clerkUser);
-    } else {
-      // Update last login timestamp
-      await updateUserLastLogin(clerkUserId);
-    }
-
-    // Transform to UserData interface for compatibility with existing code
-    const userData: UserData = {
-      uid: user.id, // Use Prisma user ID as uid
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL,
-      createdAt: user.createdAt,
-      lastLoginAt: user.lastLoginAt,
-      projectCount: user.projectCount,
-      appTokens: user.appTokens,
-      integrationTokens: user.integrationTokens,
-    };
+      // Transform to UserData interface for compatibility with existing code
+      const result: UserData = {
+        uid: user.id, // Use Prisma user ID as uid
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        createdAt: user.createdAt,
+        lastLoginAt: user.lastLoginAt,
+        projectCount: user.projectCount,
+        appTokens: user.appTokens,
+      };
+      return result;
+    });
 
     return NextResponse.json(userData);
   } catch (error) {
@@ -49,3 +52,5 @@ export async function GET() {
     );
   }
 }
+
+

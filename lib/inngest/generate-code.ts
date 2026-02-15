@@ -62,16 +62,15 @@ PLATFORM CONTRACT (strict):
 }
 - Keep code compatible with Next.js App Router + TypeScript + Tailwind utility classes.
 - Never return lockfiles.
+- Never use Unsplash, Pollinations, Picsum, or other stock-image URLs.
+- For AI-generated images, use placeholders like REPLICATE_IMG_1, REPLICATE_IMG_2, ... and include descriptive alt text.
 - If app/globals.css has @layer base/components/utilities, include matching:
   @tailwind base; @tailwind components; @tailwind utilities;
 - Never use variant utilities inside @apply (examples forbidden: selection:*, hover:*, focus:* in @apply).
 - If a hook guard says "must be used within XProvider", ensure XProvider wraps {children} in app/layout.tsx.
-- If authentication is required, use Clerk (@clerk/nextjs) with NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY. Do not use Firebase/Auth0/Supabase.
-- In server components/routes, import auth helpers from "@clerk/nextjs/server" and call \`await auth()\`.
-- For authenticated apps, enforce tenant isolation with Clerk Organizations:
-  - Use NEXT_PUBLIC_POCKET_APP_SLUG as the app tenant slug.
-  - Scope all user-owned data to the active organization id (never global user-only scope).
-  - If org context is missing, block protected data/actions until organization is selected/created.
+- If authentication is required, use Supabase Auth (@supabase/supabase-js + @supabase/ssr).
+- Use cookie-based server sessions for protected routes and API access.
+- For multi-tenant apps, scope data by tenant/team id in the application database.
 - Do not output malformed PostCSS config shapes.
 
 DESIGN GOALS:
@@ -375,6 +374,29 @@ function parseAIGeneratedJSON(text: string): ParsedAIResponse {
   }
 }
 
+async function repairMalformedJSONWithGemini(rawText: string): Promise<string> {
+  const repairPrompt = `You are a JSON repair utility.
+
+TASK:
+- Convert the following malformed output into STRICT valid JSON.
+- Preserve intended data and structure as much as possible.
+- Output JSON only. No markdown. No commentary.
+- Required top-level shape:
+{
+  "files": [{ "path": "string", "content": "string" }],
+  "dependencies": { "pkg": "version" },
+  "_checks": { "key": true }
+}
+
+MALFORMED INPUT:
+${rawText}`;
+
+  return generateWithGemini(
+    "Return strict JSON only. Do not include markdown fences.",
+    repairPrompt,
+  );
+}
+
 async function repairProjectFromLintFeedback(args: {
   originalPrompt: string;
   files: GeneratedFile[];
@@ -585,9 +607,11 @@ function validateSyntaxOrThrow(files: GeneratedFile[]) {
       scriptKind,
     );
 
-    if (sf.parseDiagnostics.length === 0) continue;
+    const parseDiagnostics = (sf as unknown as { parseDiagnostics?: ts.Diagnostic[] })
+      .parseDiagnostics || [];
+    if (parseDiagnostics.length === 0) continue;
 
-    const first = sf.parseDiagnostics[0];
+    const first = parseDiagnostics[0];
     const message = ts.flattenDiagnosticMessageText(first.messageText, "\n");
     const pos = first.start ?? 0;
     const lineCol = sf.getLineAndCharacterOfPosition(pos);
@@ -723,7 +747,7 @@ STRICT IMPLEMENTATION RULES:
 - In app/globals.css, if any @layer base/components/utilities is present, include matching @tailwind directives.
 - Never use variant classes inside @apply (forbidden examples: selection:*, hover:*, focus:* in @apply).
 - If code contains a guard like "must be used within XProvider", ensure app/layout.tsx wraps {children} with XProvider.
-- If auth is implemented, use Clerk Organizations and tenant-scope the app with NEXT_PUBLIC_POCKET_APP_SLUG.
+- If auth is implemented, use Supabase Auth and tenant-scope app data at the database layer.
 - Preserve accessibility and responsive behavior.
 
 DESIGN DIRECTION:
@@ -804,8 +828,15 @@ DESIGN DIRECTION:
               "AI response doesn't contain valid JSON (no closing brace)",
             );
           }
-
-          throw parseError;
+          console.warn("Attempting AI JSON repair pass...");
+          try {
+            const repairedText = await repairMalformedJSONWithGemini(generatedText);
+            parsed = parseAIGeneratedJSON(repairedText);
+            console.log("AI JSON repair succeeded.");
+          } catch (repairError) {
+            console.error("AI JSON repair failed:", repairError);
+            throw parseError;
+          }
         }
 
         let files: GeneratedFile[] = parsed.files || [];
@@ -922,3 +953,4 @@ DESIGN DIRECTION:
     };
   },
 );
+

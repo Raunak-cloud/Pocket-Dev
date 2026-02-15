@@ -1,16 +1,11 @@
 "use client";
 
-type TokenType = "app" | "integration";
-
 interface TokenPurchaseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  tokenType: TokenType;
-  onTokenTypeChange: (type: TokenType) => void;
   amount: number;
   onAmountChange: (amount: number) => void;
   appTokens: number;
-  integrationTokens: number;
   insufficientMessage: string | null;
   isProcessing: boolean;
   onPurchase: () => Promise<void>;
@@ -19,35 +14,23 @@ interface TokenPurchaseModalProps {
 export function TokenPurchaseModal({
   isOpen,
   onClose,
-  tokenType,
-  onTokenTypeChange,
   amount,
   onAmountChange,
   appTokens,
-  integrationTokens,
   insufficientMessage,
   isProcessing,
   onPurchase,
 }: TokenPurchaseModalProps) {
   if (!isOpen) return null;
 
-  const getTokenOptions = () =>
-    tokenType === "app"
-      ? [
-          { aud: 2, tokens: 2, label: "2 tokens" },
-          { aud: 5, tokens: 5, label: "5 tokens" },
-          { aud: 10, tokens: 10, label: "10 tokens" },
-          { aud: 20, tokens: 20, label: "20 tokens" },
-        ]
-      : [
-          { aud: 1, tokens: 10, label: "10 tokens" },
-          { aud: 5, tokens: 50, label: "50 tokens" },
-          { aud: 10, tokens: 100, label: "100 tokens" },
-          { aud: 20, tokens: 200, label: "200 tokens" },
-        ];
+  const getTokenOptions = () => [
+    { aud: 2, tokens: 2, label: "2 tokens" },
+    { aud: 5, tokens: 5, label: "5 tokens" },
+    { aud: 10, tokens: 10, label: "10 tokens" },
+    { aud: 20, tokens: 20, label: "20 tokens" },
+  ];
 
-  const tokensToReceive =
-    tokenType === "app" ? amount : amount * 10;
+  const tokensToReceive = amount;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -76,11 +59,7 @@ export function TokenPurchaseModal({
             </svg>
           </button>
           <div
-            className={`inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl ${
-              tokenType === "app"
-                ? "bg-gradient-to-br from-blue-500 to-violet-500"
-                : "bg-gradient-to-br from-violet-500 to-purple-500"
-            }`}
+            className="inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl bg-gradient-to-br from-blue-500 to-violet-500"
           >
             <svg
               className="w-8 h-8 text-white"
@@ -97,7 +76,7 @@ export function TokenPurchaseModal({
             </svg>
           </div>
           <h3 className="text-xl font-bold text-text-primary mb-2">
-            Buy {tokenType === "app" ? "App" : "Integration"} Tokens
+            Buy App Tokens
           </h3>
           {insufficientMessage ? (
             <div className="mt-1 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-left">
@@ -120,59 +99,18 @@ export function TokenPurchaseModal({
             </div>
           ) : (
             <p className="text-text-tertiary text-sm">
-              {tokenType === "app"
-                ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
-                : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
+              App tokens are used for generation, edits, authentication, and
+              database integrations.
             </p>
           )}
           <p className="text-text-muted text-xs mt-2">
-            Current balance:{" "}
-            {tokenType === "app"
-              ? appTokens
-              : integrationTokens}{" "}
-            tokens
+            Current balance: {appTokens} tokens
           </p>
-        </div>
-
-        {/* Token Type Tabs */}
-        <div className="px-6 pb-3 flex-shrink-0">
-          <div className="flex bg-bg-tertiary rounded-lg p-1">
-            <button
-              onClick={() => {
-                onTokenTypeChange("app");
-                onAmountChange(0);
-              }}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                tokenType === "app"
-                  ? "bg-blue-600 text-white"
-                  : "text-text-tertiary hover:text-text-primary"
-              }`}
-            >
-              App Tokens
-            </button>
-            <button
-              onClick={() => {
-                onTokenTypeChange("integration");
-                onAmountChange(0);
-              }}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                tokenType === "integration"
-                  ? "bg-violet-600 text-white"
-                  : "text-text-tertiary hover:text-text-primary"
-              }`}
-            >
-              Integration Tokens
-            </button>
-          </div>
         </div>
 
         {/* Amount Selection */}
         <div className="px-6 py-4 overflow-y-auto flex-1">
-          <p className="text-xs text-text-tertiary mb-3">
-            {tokenType === "app"
-              ? "1 AUD = 1 app token"
-              : "1 AUD = 10 integration tokens"}
-          </p>
+          <p className="text-xs text-text-tertiary mb-3">1 AUD = 1 app token</p>
           <div className="grid grid-cols-2 gap-2 mb-3">
             {getTokenOptions().map((option) => (
               <button
@@ -180,22 +118,14 @@ export function TokenPurchaseModal({
                 onClick={() => onAmountChange(option.aud)}
                 className={`p-3 rounded-xl border-2 transition-all text-left ${
                   amount === option.aud
-                    ? tokenType === "app"
-                      ? "border-blue-500 bg-blue-500/10"
-                      : "border-violet-500 bg-violet-500/10"
+                    ? "border-blue-500 bg-blue-500/10"
                     : "border-border-secondary bg-bg-tertiary/50 hover:border-text-faint"
                 }`}
               >
                 <div className="text-lg font-bold text-text-primary">
                   ${option.aud} AUD
                 </div>
-                <div
-                  className={`text-xs ${
-                    tokenType === "app"
-                      ? "text-blue-400"
-                      : "text-violet-400"
-                  }`}
-                >
+                <div className="text-xs text-blue-400">
                   {option.label}
                 </div>
               </button>
@@ -214,9 +144,7 @@ export function TokenPurchaseModal({
                 onAmountChange(Math.max(0, parseInt(e.target.value) || 0))
               }
               className={`w-full pl-7 pr-16 py-2.5 bg-bg-tertiary/50 border rounded-xl text-text-primary text-sm font-medium focus:outline-none transition placeholder-text-muted ${
-                tokenType === "app"
-                  ? "border-blue-500/30 focus:border-blue-500"
-                  : "border-violet-500/30 focus:border-violet-500"
+                "border-blue-500/30 focus:border-blue-500"
               }`}
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-xs">
@@ -226,18 +154,14 @@ export function TokenPurchaseModal({
           {amount > 0 && (
             <div
               className={`mt-3 p-3 rounded-xl border ${
-                tokenType === "app"
-                  ? "bg-blue-500/5 border-blue-500/20"
-                  : "bg-violet-500/5 border-violet-500/20"
+                "bg-blue-500/5 border-blue-500/20"
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm text-text-secondary">
                   You&apos;ll receive
                 </span>
-                <span
-                  className={`text-lg font-bold ${tokenType === "app" ? "text-blue-400" : "text-violet-400"}`}
-                >
+                <span className="text-lg font-bold text-blue-400">
                   {tokensToReceive} tokens
                 </span>
               </div>
@@ -252,9 +176,7 @@ export function TokenPurchaseModal({
               onClick={onPurchase}
               disabled={isProcessing}
               className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                tokenType === "app"
-                  ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                  : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
+                "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
               }`}
             >
               {isProcessing ? (

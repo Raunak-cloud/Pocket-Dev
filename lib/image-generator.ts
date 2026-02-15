@@ -1,5 +1,5 @@
 /**
- * Replicate AI image generation using prunaai/p-image.
+ * Replicate AI image generation using prunaai/z-image-turbo.
  *
  * Pipeline:
  *   1. Templates emit <img src="REPLICATE_IMG_N" alt="detailed prompt …">
@@ -13,6 +13,22 @@
  */
 
 import Replicate from "replicate";
+
+const REPLICATE_MODEL = "prunaai/z-image-turbo";
+const DEFAULT_IMAGE_SIZE = 768;
+
+type UrlOutput = {
+  url: () => string | URL;
+};
+
+function isUrlOutput(value: unknown): value is UrlOutput {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "url" in value &&
+    typeof (value as { url?: unknown }).url === "function"
+  );
+}
 
 /** Gradient SVG used as a fallback when Replicate fails for one image. */
 const FALLBACK_IMG =
@@ -63,7 +79,7 @@ export async function generateLogo(
 
 // ── single image fetch ────────────────────────────────────────
 
-/** Call Replicate prunaai/p-image and return the image URL. */
+/** Call Replicate prunaai/z-image-turbo and return the image URL. */
 async function fetchImage(prompt: string): Promise<string> {
   const apiKey = process.env.REPLICATE_API_TOKEN;
 
@@ -82,19 +98,17 @@ async function fetchImage(prompt: string): Promise<string> {
   const maxRetries = 3;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const output = await replicate.run("prunaai/p-image", {
+      const output = await replicate.run(REPLICATE_MODEL, {
         input: {
+          height: DEFAULT_IMAGE_SIZE,
+          width: DEFAULT_IMAGE_SIZE,
           prompt: enhancedPrompt,
         },
       });
 
-      // p-image returns a FileOutput with .url() method
-      if (
-        output &&
-        typeof output === "object" &&
-        typeof (output as any).url === "function"
-      ) {
-        const url = String((output as any).url());
+      // z-image-turbo returns a FileOutput with .url() method
+      if (isUrlOutput(output)) {
+        const url = String(output.url());
         console.log(`✅ Generated image: ${url.substring(0, 100)}...`);
         return url;
       }
@@ -114,15 +128,17 @@ async function fetchImage(prompt: string): Promise<string> {
 
       console.error("Unexpected output format from Replicate:", typeof output);
       throw new Error(`Unexpected output format: ${typeof output}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Retry on rate limit (429)
-      if (error.message?.includes("429") && attempt < maxRetries) {
+      const message =
+        error instanceof Error ? error.message : String(error || "");
+      if (message.includes("429") && attempt < maxRetries) {
         const waitSec = 10 * attempt;
         console.log(`⏳ Rate limited, waiting ${waitSec}s before retry ${attempt + 1}/${maxRetries}...`);
         await new Promise((r) => setTimeout(r, waitSec * 1000));
         continue;
       }
-      console.error(`Replicate generation error: ${error.message || error}`);
+      console.error(`Replicate generation error: ${message}`);
       throw error;
     }
   }

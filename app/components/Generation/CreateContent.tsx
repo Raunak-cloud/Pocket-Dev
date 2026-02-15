@@ -60,6 +60,7 @@ interface CreateContentProps {
   uploadedFiles: UploadedFile[];
   fileInputRef: React.RefObject<HTMLInputElement>;
   currentAppAuth: string[];
+  currentAppDatabase: string[];
   isRecording: boolean;
   voiceError: string | null;
   authPromptWarning: string | null;
@@ -93,6 +94,7 @@ export default function CreateContent({
   uploadedFiles,
   fileInputRef,
   currentAppAuth,
+  currentAppDatabase,
   isRecording,
   voiceError,
   authPromptWarning,
@@ -178,13 +180,15 @@ export default function CreateContent({
 
       {error && (
         <div className="w-full max-w-3xl mb-6">
-          <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400">
+          <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-300 rounded-xl text-red-800 dark:bg-red-500/10 dark:border-red-500/20 dark:text-red-300">
             <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div>
               <p className="text-sm font-medium">Generation failed</p>
-              <p className="text-sm text-red-400/80 mt-1">{error}</p>
+              <p className="text-sm text-red-700 mt-1 dark:text-red-300/90">
+                {error}
+              </p>
             </div>
           </div>
         </div>
@@ -223,12 +227,14 @@ export default function CreateContent({
       )}
 
       {voiceError && (
-        <div className="mb-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-start gap-3">
-          <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="mb-3 p-4 bg-red-50 border border-red-300 rounded-xl flex items-start gap-3 dark:bg-red-500/10 dark:border-red-500/30">
+          <svg className="w-5 h-5 text-red-700 dark:text-red-300 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
-          <p className="text-sm text-red-300 font-medium">{voiceError}</p>
-          <button onClick={() => setVoiceError(null)} className="text-red-400 hover:text-red-300 transition">
+          <p className="text-sm text-red-800 dark:text-red-300 font-medium">
+            {voiceError}
+          </p>
+          <button onClick={() => setVoiceError(null)} className="text-red-700 hover:text-red-800 dark:text-red-300 dark:hover:text-red-200 transition">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -237,12 +243,14 @@ export default function CreateContent({
       )}
 
       {authPromptWarning && (
-        <div className="mb-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
-          <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="mb-3 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3 dark:bg-amber-500/10 dark:border-amber-500/30">
+          <svg className="w-5 h-5 text-amber-700 dark:text-amber-300 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
           </svg>
-          <p className="text-sm text-amber-300 font-medium">{authPromptWarning}</p>
-          <button onClick={() => setAuthPromptWarning(null)} className="text-amber-400 hover:text-amber-300 transition">
+          <p className="text-sm text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
+            {authPromptWarning}
+          </p>
+          <button onClick={() => setAuthPromptWarning(null)} className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -271,7 +279,7 @@ export default function CreateContent({
                   <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                 </svg>
               </button>
-              <button type="button" onClick={() => setShowDbModal(true)} className="p-2 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition" title="Database options">
+              <button type="button" onClick={() => setShowDbModal(true)} className={`p-2 rounded-lg transition ${currentAppDatabase.length > 0 ? "text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`} title={currentAppDatabase.length > 0 ? "Database configured" : "Database options"}>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
                 </svg>
@@ -293,12 +301,42 @@ export default function CreateContent({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
               </svg>
               <span className="text-xs text-blue-300 font-medium">{auth === "username-password" ? "Username/Password" : "Google OAuth"}</span>
-              <span className="text-xs text-violet-400">(30 tokens)</span>
+              <span className="text-xs text-violet-400">(2 tokens)</span>
               <button type="button" onClick={() => setCurrentAppAuth(currentAppAuth.filter((a) => a !== auth))} className="ml-0.5 text-text-tertiary hover:text-text-primary transition">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {currentAppDatabase.length > 0 && (
+        <div className="flex items-center justify-center gap-2 mt-2 flex-wrap max-w-2xl">
+          {currentAppDatabase.map((db) => (
+            <div
+              key={db}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full"
+            >
+              <svg
+                className="w-3.5 h-3.5 text-emerald-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"
+                />
+              </svg>
+              <span className="text-xs text-emerald-300 font-medium">
+                {db
+                  .replace(/-/g, " ")
+                  .replace(/\b\w/g, (ch) => ch.toUpperCase())}
+              </span>
             </div>
           ))}
         </div>

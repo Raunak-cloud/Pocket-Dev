@@ -1,18 +1,18 @@
-import { auth } from '@clerk/nextjs/server';
+﻿import { auth } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
 export async function DELETE(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
+    const { userId: authUserId } = await auth();
 
-    if (!clerkUserId) {
+    if (!authUserId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Get user from database
     const user = await prisma.user.findUnique({
-      where: { clerkUserId },
+      where: { authUserId },
     });
 
     if (!user) {
@@ -53,3 +53,5 @@ export async function DELETE(req: Request) {
     );
   }
 }
+
+

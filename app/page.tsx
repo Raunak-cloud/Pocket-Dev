@@ -21,8 +21,11 @@ import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
 import GenerationProgress from "./components/GenerationProgress";
 import MaintenanceToggle from "./components/MaintenanceToggle";
-import { persistPollinationsImages } from "@/lib/persist-images";
-import { useUploadThing } from "@/lib/uploadthing";
+import {
+  normalizeGeneratedImageSources,
+  persistGeneratedImages,
+} from "@/lib/persist-images";
+import { useSupabaseUploads } from "@/lib/supabase-uploads";
 import ThemeToggle from "./components/ThemeToggle";
 import {
   DeleteConfirmModal,
@@ -51,6 +54,10 @@ import type {
 } from "./types";
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
+const BASE_GENERATION_APP_COST = 2;
+const BASE_EDIT_APP_COST = 0.1;
+const AUTH_OPTION_APP_COST = 2;
+const DATABASE_APP_FLAT_COST = 10;
 
 // E2B preview component with loading state
 function ReactGeneratorContent() {
@@ -100,14 +107,11 @@ function ReactGeneratorContent() {
   const [isEditMinimized, setIsEditMinimized] = useState(false);
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
   const [showTokenPurchaseModal, setShowTokenPurchaseModal] = useState(false);
-  const [purchaseTokenType, setPurchaseTokenType] = useState<
-    "app" | "integration"
-  >("app");
   const [tokenPurchaseAmount, setTokenPurchaseAmount] = useState(0);
   const [isProcessingTokenPurchase, setIsProcessingTokenPurchase] =
     useState(false);
   const [showTokenConfirmModal, setShowTokenConfirmModal] = useState<
-    "app" | "integration" | null
+    "generation" | "edit" | null
   >(null);
   const [skipEditTokenConfirm, setSkipEditTokenConfirm] = useState(() => {
     if (typeof window !== "undefined") {
@@ -123,6 +127,7 @@ function ReactGeneratorContent() {
     "generation" | "edit" | null
   >(null);
   const [currentAppAuth, setCurrentAppAuth] = useState<string[]>([]);
+  const [currentAppDatabase, setCurrentAppDatabase] = useState<string[]>([]);
   const [insufficientTokenMessage, setInsufficientTokenMessage] = useState<
     string | null
   >(null);
@@ -168,7 +173,7 @@ function ReactGeneratorContent() {
   );
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
-  const { startUpload } = useUploadThing("imageUploader");
+  const { startUpload } = useSupabaseUploads();
 
   // Initialize custom hooks for publishing, GitHub export, and editor export
   const publishingHook = usePublishing({
@@ -239,19 +244,70 @@ function ReactGeneratorContent() {
     exportToCursor,
   } = editorExportHook;
 
-  // Uses Gemini to detect if a prompt has authentication intent
-  async function detectAuthInPrompt(text: string): Promise<boolean> {
+  async function detectIntegrationIntent(
+    text: string,
+  ): Promise<{ hasAuthIntent: boolean; hasDatabaseIntent: boolean }> {
+    const lower = text.toLowerCase();
+    const localAuthIntent =
+      /\bauth\b|\bauthentication\b|\blog[\s-]?in\b|\bsign[\s-]?in\b|\bsign[\s-]?up\b|\bregister\b|\bpassword\b|\boauth\b|\bsso\b|\bsession\b/.test(
+        lower,
+      );
+    const localDatabaseIntent =
+      /\bdatabase\b|\bdb\b|\bsql\b|\bnosql\b|\bpostgres\b|\bmysql\b|\bmongodb\b|\bredis\b|\bsupabase\b|\bprisma\b|\bschema\b|\btable\b|\bquery\b|\bcrud\b|\bpersist\b|\bdata model\b/.test(
+        lower,
+      );
+
     try {
-      const res = await fetch("/api/check-auth-intent", {
+      const res = await fetch("/api/check-integration-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: text }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        return {
+          hasAuthIntent: localAuthIntent,
+          hasDatabaseIntent: localDatabaseIntent,
+        };
+      }
       const data = await res.json();
-      return data.hasAuthIntent === true;
+      return {
+        hasAuthIntent: data.hasAuthIntent === true || localAuthIntent,
+        hasDatabaseIntent:
+          data.hasDatabaseIntent === true || localDatabaseIntent,
+      };
     } catch {
-      return false;
+      return {
+        hasAuthIntent: localAuthIntent,
+        hasDatabaseIntent: localDatabaseIntent,
+      };
+    }
+  }
+
+  function showIntegrationBlockedFeedback(args: {
+    hasAuthIntent: boolean;
+    hasDatabaseIntent: boolean;
+    source: "generation" | "edit";
+  }) {
+    const { hasAuthIntent, hasDatabaseIntent, source } = args;
+    const blocked =
+      hasAuthIntent && hasDatabaseIntent
+        ? "authentication and database"
+        : hasAuthIntent
+          ? "authentication (login features)"
+          : "database";
+    const message =
+      source === "generation"
+        ? `This request is paused.\n${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using the buttons.\nUse Add Auth and Database below the prompt.`
+        : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using buttons. Use Add Auth and Database in the edit panel.`;
+
+    setAuthPromptWarning(message);
+    setError(message);
+
+    if (hasAuthIntent) {
+      setShowAuthModal(true);
+    }
+    if (hasDatabaseIntent) {
+      setShowDbModal(true);
     }
   }
 
@@ -374,7 +430,7 @@ function ReactGeneratorContent() {
     if (tokenPayment === "success" && user) {
       const handleTokenSuccess = async () => {
         const sessionId = searchParams.get("session_id");
-        const tokenType = searchParams.get("tokenType") || "tokens";
+        const tokenType = "app";
         const amount = searchParams.get("amount") || "";
 
         let credited = false;
@@ -521,11 +577,17 @@ function ReactGeneratorContent() {
     setLoadingProjects(true);
     try {
       const response = await fetch("/api/projects/list", { cache: "no-store" });
-      if (!response.ok) throw new Error("Failed to load projects");
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to load projects");
+      }
       const projects = (await response.json()) as SavedProject[];
       setSavedProjects(projects);
     } catch (error) {
       console.error("Error loading projects:", error);
+      setError(
+        error instanceof Error ? error.message : "Failed to load projects",
+      );
     } finally {
       setLoadingProjects(false);
     }
@@ -720,7 +782,7 @@ function ReactGeneratorContent() {
   // Open a saved project
   const openSavedProject = (savedProject: SavedProject) => {
     setProject({
-      files: savedProject.files,
+      files: normalizeGeneratedImageSources(savedProject.files),
       dependencies: savedProject.dependencies || {},
       lintReport: savedProject.lintReport || {
         passed: true,
@@ -790,7 +852,6 @@ function ReactGeneratorContent() {
         body: JSON.stringify({
           userId: user.uid,
           userEmail: user.email,
-          tokenType: purchaseTokenType,
           quantity: tokenPurchaseAmount,
         }),
       });
@@ -840,7 +901,6 @@ function ReactGeneratorContent() {
     }
   };
 
-
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
@@ -854,7 +914,10 @@ function ReactGeneratorContent() {
               new Promise<{ file: File; dataUrl: string }>((resolve) => {
                 const reader = new FileReader();
                 reader.onload = (ev) =>
-                  resolve({ file, dataUrl: (ev.target?.result as string) || "" });
+                  resolve({
+                    file,
+                    dataUrl: (ev.target?.result as string) || "",
+                  });
                 reader.readAsDataURL(file);
               }),
           ),
@@ -899,7 +962,10 @@ function ReactGeneratorContent() {
               new Promise<{ file: File; dataUrl: string }>((resolve) => {
                 const reader = new FileReader();
                 reader.onload = (ev) =>
-                  resolve({ file, dataUrl: (ev.target?.result as string) || "" });
+                  resolve({
+                    file,
+                    dataUrl: (ev.target?.result as string) || "",
+                  });
                 reader.readAsDataURL(file);
               }),
           ),
@@ -958,20 +1024,59 @@ function ReactGeneratorContent() {
     setShowCancelConfirm(null);
   };
 
-  // Calculate integration token cost for generation based on auth selection
-  const getGenerationIntegrationCost = () => {
-    let cost = 0;
-    if (currentAppAuth.includes("username-password")) cost += 30;
-    if (currentAppAuth.includes("google")) cost += 30;
-    return cost;
-  };
+  const getAuthAppCost = (auth: string[]) => auth.length * AUTH_OPTION_APP_COST;
+  const getDatabaseAppCost = (db: string[]) =>
+    db.length > 0 ? DATABASE_APP_FLAT_COST : 0;
+  const roundToken = (value: number) => Math.round(value * 10) / 10;
+  const getGenerationAppCost = () =>
+    roundToken(
+      BASE_GENERATION_APP_COST +
+        getAuthAppCost(currentAppAuth) +
+        getDatabaseAppCost(currentAppDatabase),
+    );
+  const getEditAppCost = () =>
+    roundToken(
+      BASE_EDIT_APP_COST +
+        getAuthAppCost(editAppAuth) +
+        getDatabaseAppCost(currentAppDatabase),
+    );
 
-  // Calculate integration token cost for edit based on auth selection
-  const getEditIntegrationCost = () => {
-    let cost = 0;
-    if (editAppAuth.includes("username-password")) cost += 30;
-    if (editAppAuth.includes("google")) cost += 30;
-    return cost > 0 ? cost : 3; // Minimum 3 for regular edits
+  const buildDatabaseRequirementPrompt = (
+    selectedDatabase: string[],
+    mode: "new" | "existing",
+  ) => {
+    if (selectedDatabase.length === 0) return "";
+
+    const selectedSet = new Set(selectedDatabase);
+    const scopeText =
+      mode === "new"
+        ? "for this new app"
+        : "and integrate it into this existing app";
+
+    const requirements: string[] = [
+      `Use Supabase only ${scopeText}.`,
+      "Create a production-ready Supabase setup with clear env variable usage.",
+    ];
+
+    if (selectedSet.has("supabase-postgres")) {
+      requirements.push(
+        "Add a Supabase Postgres data model with practical tables, relations, and typed data access.",
+      );
+    }
+    if (selectedSet.has("crud-api-routes")) {
+      requirements.push(
+        "Implement complete CRUD API routes/server actions for the selected entities, including validation and error handling.",
+      );
+    }
+    if (selectedSet.has("row-level-security")) {
+      requirements.push(
+        "Enable and apply Row Level Security (RLS) policies so users can only access their own tenant/user-scoped data.",
+      );
+    }
+
+    return `\n\n🗄️ DATABASE REQUIREMENT:\n${requirements
+      .map((item, index) => `${index + 1}. ${item}`)
+      .join("\n")}`;
   };
 
   const handleEdit = async (e: React.FormEvent) => {
@@ -984,16 +1089,19 @@ function ReactGeneratorContent() {
       checkingEditClarity
     )
       return;
-
-    // Use Gemini to detect auth intent in edit prompt
-    if (editPrompt.trim() && editAppAuth.length === 0) {
+    // Block auth/database intent in text prompts; force integration buttons.
+    if (editPrompt.trim()) {
       setCheckingAuthIntent(true);
-      const hasAuth = await detectAuthInPrompt(editPrompt);
+      const { hasAuthIntent, hasDatabaseIntent } =
+        await detectIntegrationIntent(editPrompt);
       setCheckingAuthIntent(false);
-      if (hasAuth) {
-        setAuthPromptWarning(
-          "Authentication detected in your prompt! To add login/signup, click the ðŸ”’ lock icon below the edit box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
-        );
+
+      if (hasAuthIntent || hasDatabaseIntent) {
+        showIntegrationBlockedFeedback({
+          hasAuthIntent,
+          hasDatabaseIntent,
+          source: "edit",
+        });
         return;
       }
     }
@@ -1016,25 +1124,14 @@ function ReactGeneratorContent() {
       }
     }
 
-    // Check integration token balance based on auth selection
-    const editCost = getEditIntegrationCost();
-    const integrationBalance = userData?.integrationTokens || 0;
-    if (integrationBalance < editCost) {
-      const deficit = editCost - integrationBalance;
-      const authNames = [
-        ...(editAppAuth.includes("username-password")
-          ? ["Username/Password"]
-          : []),
-        ...(editAppAuth.includes("google") ? ["Google OAuth"] : []),
-      ];
-      const reason =
-        authNames.length > 0
-          ? `This edit with ${authNames.join(" + ")} authentication requires ${editCost} integration tokens`
-          : `This edit requires ${editCost} integration tokens`;
+    // Check app token balance for edit + integrations
+    const editCost = getEditAppCost();
+    const appTokenBalance = userData?.appTokens || 0;
+    if (appTokenBalance < editCost) {
+      const deficit = editCost - appTokenBalance;
       setInsufficientTokenMessage(
-        `${reason} but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`,
+        `This edit needs ${editCost} app tokens but you only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`,
       );
-      setPurchaseTokenType("integration");
       setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
       return;
@@ -1047,17 +1144,16 @@ function ReactGeneratorContent() {
     }
 
     // Show confirmation modal before deducting token
-    setShowTokenConfirmModal("integration");
+    setShowTokenConfirmModal("edit");
     return;
   };
 
-  const adjustIntegrationTokens = async (amount: number, reason: string) => {
+  const adjustAppTokens = async (amount: number, reason: string) => {
     if (!user || amount === 0) return;
     const response = await fetch("/api/tokens/adjust", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        tokenType: "integration",
         amount,
         reason,
       }),
@@ -1079,11 +1175,11 @@ function ReactGeneratorContent() {
     setEditProgressMessages([]);
     setIsEditMinimized(false);
 
-    // Deduct integration tokens upfront (refundable if cancelled within 10s)
+    // Deduct app tokens upfront (refundable if cancelled within 10s)
     if (user) {
       try {
-        const editCost = getEditIntegrationCost();
-        await adjustIntegrationTokens(-editCost, "Edit request token usage");
+        const editCost = getEditAppCost();
+        await adjustAppTokens(-editCost, "Edit request token usage");
       } catch (err) {
         console.error("Error deducting tokens:", err);
       }
@@ -1155,7 +1251,7 @@ The app currently uses ONLY these packages: ${allowedPackagesList}
 - DO NOT add framer-motion, gsap, three, @react-three/fiber, or any other new package
 - Use Tailwind CSS classes for animations (animate-*, transition, hover:, etc.)
 - Use inline SVGs or existing lucide-react icons for icons
-- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, @clerk/nextjs, uploadthing, @uploadthing/react, @prisma/client
+- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, @supabase/supabase-js, @supabase/ssr, @prisma/client
 - Any import of a package NOT listed above will cause a build error
 
 ðŸŽ¨ TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
@@ -1185,7 +1281,7 @@ ${imageUrlList}
 2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Replace existing placeholder images with these actual images
 4. Embed these images prominently in the relevant sections
-5. DO NOT use placeholder images - use ONLY the URLs listed above
+5. DO NOT use placeholder images or third-party stock URLs - use ONLY the URLs listed above
 
 The user expects to see their ACTUAL uploaded images in the updated website.`;
       }
@@ -1218,18 +1314,18 @@ Implement a complete username/password authentication system into this existing 
 4. Logout functionality
 5. Protected routes that require authentication
 6. User profile display
-7. Use Clerk (@clerk/nextjs) for authentication with Organizations support for multi-tenant SaaS
+7. Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
 8. Include proper form validation and error handling
 9. Store user sessions securely
 10. Add authentication UI components (login form, signup form, password reset form)
 
-Integrate the authentication seamlessly into the existing app design and layout. Use Clerk only (no Firebase/Auth0/Supabase).`;
+Integrate the authentication seamlessly into the existing app design and layout. Use Supabase Auth only.`;
     }
     if (editAppAuth.includes("google")) {
       editFullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
-Implement Google OAuth authentication into this existing app using Clerk social sign-in:
+Implement Google OAuth authentication into this existing app using Supabase Auth social sign-in:
 1. "Sign in with Google" button with proper Google branding
-2. Google OAuth via Clerk social connection with Organizations support for multi-tenant SaaS
+2. Google OAuth via Supabase Auth provider configuration
 3. Automatic user profile creation with Google account data
 4. Session management for logged-in users
 5. Logout functionality
@@ -1238,8 +1334,12 @@ Implement Google OAuth authentication into this existing app using Clerk social 
 8. Handle OAuth errors gracefully
 9. Add loading states during authentication
 
-Integrate the Google OAuth seamlessly into the existing app design and layout. Use Clerk only (no Firebase/Auth0/Supabase).`;
+Integrate the Google OAuth seamlessly into the existing app design and layout. Use Supabase Auth only.`;
     }
+    editFullPrompt += buildDatabaseRequirementPrompt(
+      currentAppDatabase,
+      "existing",
+    );
 
     editFullPrompt += `\n\nðŸš¨ CRITICAL REQUIREMENT:
 You MUST return ALL of these exact files in your response: ${existingFilePaths}
@@ -1296,10 +1396,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setEditProgressMessages((prev) => [...prev, "ðŸ’¾ Merging changes..."]);
 
       // AI code generation: persist images and use generated files
-      const persistedFiles = await persistPollinationsImages(
-        result.files,
-        user?.uid ?? "anonymous",
-      );
+      const persistedFiles = await persistGeneratedImages(result.files);
       const mergedProject = { ...result, files: persistedFiles };
 
       setProject(mergedProject);
@@ -1357,18 +1454,18 @@ Implement a complete username/password authentication system with the following 
 4. Logout functionality
 5. Protected routes that require authentication
 6. User profile display
-7. Use Clerk (@clerk/nextjs) for authentication with Organizations support for multi-tenant SaaS
+7. Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
 8. Include proper form validation and error handling
 9. Store user sessions securely
 10. Add authentication UI components (login form, signup form, password reset form)
 
-Make sure the authentication is fully functional and integrated throughout the app. Use Clerk only (no Firebase/Auth0/Supabase).`;
+Make sure the authentication is fully functional and integrated throughout the app. Use Supabase Auth only.`;
     }
     if (currentAppAuth.includes("google")) {
       fullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT:
-Implement Google OAuth authentication with Clerk (social sign-in) with the following features:
+Implement Google OAuth authentication with Supabase Auth (social sign-in) with the following features:
 1. "Sign in with Google" button with proper Google branding
-2. Google OAuth via Clerk social connection with Organizations support for multi-tenant SaaS
+2. Google OAuth via Supabase Auth provider configuration
 3. Automatic user profile creation with Google account data
 4. Session management for logged-in users
 5. Logout functionality
@@ -1377,8 +1474,9 @@ Implement Google OAuth authentication with Clerk (social sign-in) with the follo
 8. Handle OAuth errors gracefully
 9. Add loading states during authentication
 
-Make sure the Google OAuth is fully functional and integrated throughout the app. Use Clerk only (no Firebase/Auth0/Supabase).`;
+Make sure the Google OAuth is fully functional and integrated throughout the app. Use Supabase Auth only.`;
     }
+    fullPrompt += buildDatabaseRequirementPrompt(currentAppDatabase, "new");
 
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) =>
@@ -1403,7 +1501,7 @@ ${imageUrlList}
 1. Use these EXACT image URLs in your img src attributes
 2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Embed these images prominently in the website (hero sections, galleries, cards, etc.)
-4. DO NOT use placeholder images like via.placeholder.com - use ONLY the URLs listed above
+4. DO NOT use placeholder images or third-party stock URLs - use ONLY the URLs listed above
 5. The user uploaded these images specifically to see them in the generated website
 
 The user expects to see their ACTUAL uploaded images in the final website.`;
@@ -1451,20 +1549,17 @@ ${pdfUrlList}
       setProgressMessages((prev) => [...prev, "ðŸ’¾ Saving project..."]);
 
       // Check if authentication was generated
-      // Auth stack is Clerk-based; no Firebase bootstrap needed.
-      // Persist Pollinations AI images to Firebase Storage so they don't change on reload
+      // Auth stack is Supabase-based.
+      // Persist generated images to Supabase Storage for stable URLs.
       setProgressMessages((prev) => [...prev, "Persisting images..."]);
-      const persistedFiles = await persistPollinationsImages(
-        result.files,
-        user?.uid ?? "anonymous",
-      );
+      const persistedFiles = await persistGeneratedImages(result.files);
       result = { ...result, files: persistedFiles };
       setProject(result);
 
       // Save project to Firestore
       if (user) {
         try {
-          const authCost = getGenerationIntegrationCost();
+          const authCost = getAuthAppCost(currentAppAuth);
           const projectId = await saveProjectToFirestore(
             result,
             generationPrompt,
@@ -1481,6 +1576,7 @@ ${pdfUrlList}
 
       setStatus("success");
       setCurrentAppAuth([]); // Reset auth selection for next app
+      setCurrentAppDatabase([]); // Keep database opt-in only for each new app
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
     } catch (err) {
       if (progressIntervalRef.current) {
@@ -1505,21 +1601,24 @@ ${pdfUrlList}
     }
   };
 
-  // Calculate integration token cost for generation based on auth selection
+  // Handle generation submission
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!prompt.trim() || status === "loading" || checkingAuthIntent) return;
-
-    // Use Gemini to detect auth intent â€” auth must be added via the integration toggle (lock icon)
-    if (currentAppAuth.length === 0) {
+    // Block auth/database intent in text prompts; force integration buttons.
+    if (prompt.trim()) {
       setCheckingAuthIntent(true);
-      const hasAuth = await detectAuthInPrompt(prompt);
+      const { hasAuthIntent, hasDatabaseIntent } =
+        await detectIntegrationIntent(prompt);
       setCheckingAuthIntent(false);
-      if (hasAuth) {
-        setAuthPromptWarning(
-          "Authentication detected in your prompt! To add login/signup, click the ðŸ”’ lock icon below the prompt box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
-        );
+
+      if (hasAuthIntent || hasDatabaseIntent) {
+        showIntegrationBlockedFeedback({
+          hasAuthIntent,
+          hasDatabaseIntent,
+          source: "generation",
+        });
         return;
       }
     }
@@ -1532,43 +1631,21 @@ ${pdfUrlList}
       return;
     }
 
-    // Check app token balance (every project costs 2 app tokens)
+    // Check app token balance (project + selected integrations)
+    const generationCost = getGenerationAppCost();
     const appTokenBalance = userData?.appTokens || 0;
-    if (appTokenBalance < 2) {
-      const deficit = 2 - appTokenBalance;
+    if (appTokenBalance < generationCost) {
+      const deficit = generationCost - appTokenBalance;
       setInsufficientTokenMessage(
-        `You need 2 app tokens to create a project but only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`,
+        `You need ${generationCost} app tokens to continue but only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`,
       );
-      setPurchaseTokenType("app");
       setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
       return;
     }
 
-    // Check integration token balance if auth is selected
-    const integrationCost = getGenerationIntegrationCost();
-    if (integrationCost > 0) {
-      const integrationBalance = userData?.integrationTokens || 0;
-      if (integrationBalance < integrationCost) {
-        const authNames = [
-          ...(currentAppAuth.includes("username-password")
-            ? ["Username/Password"]
-            : []),
-          ...(currentAppAuth.includes("google") ? ["Google OAuth"] : []),
-        ].join(" + ");
-        const deficit = integrationCost - integrationBalance;
-        setInsufficientTokenMessage(
-          `Adding ${authNames} authentication requires ${integrationCost} integration tokens but you only have ${integrationBalance}. Please purchase at least ${deficit} more integration token${deficit > 1 ? "s" : ""} to continue.`,
-        );
-        setPurchaseTokenType("integration");
-        setTokenPurchaseAmount(0);
-        setShowTokenPurchaseModal(true);
-        return;
-      }
-    }
-
     // Show confirmation modal before deducting tokens
-    setShowTokenConfirmModal("app");
+    setShowTokenConfirmModal("generation");
   };
 
   // Voice recording functions
@@ -1643,7 +1720,7 @@ ${pdfUrlList}
     const previewWindow = window.open("about:blank", "_blank");
     if (previewWindow) {
       previewWindow.document.write(
-        "<html><body style='font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;'>Preparing preview sandbox...</body></html>"
+        "<html><body style='font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;'>Preparing preview sandbox...</body></html>",
       );
     }
 
@@ -1672,7 +1749,7 @@ ${pdfUrlList}
   const replaceFirstTextInProject = (
     sourceProject: ReactProject,
     from: string,
-    to: string
+    to: string,
   ): ReactProject => {
     if (!from || from === to) return sourceProject;
     const files = sourceProject.files.map((f) => ({ ...f }));
@@ -1715,13 +1792,15 @@ ${pdfUrlList}
     }
   };
 
-
-
   // Calculate total unread ticket count
   const unreadTicketCount = supportTickets.reduce(
     (total, ticket) => total + (ticket.unreadAdminMessageCount || 0),
     0,
   );
+  const isEditBusy = isEditing || checkingAuthIntent || checkingEditClarity;
+  const isEditSubmitDisabled =
+    (!editPrompt.trim() && editAppAuth.length === 0) || isEditBusy;
+  const editPromptCount = editPrompt.trim().length;
 
   // SUCCESS STATE
   if (status === "success" && project) {
@@ -1743,8 +1822,7 @@ ${pdfUrlList}
             }}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={setIsSidebarCollapsed}
-            onBuyTokens={(tokenType) => {
-              setPurchaseTokenType(tokenType);
+            onBuyTokens={() => {
               setTokenPurchaseAmount(0);
               setShowTokenPurchaseModal(true);
             }}
@@ -1773,10 +1851,9 @@ ${pdfUrlList}
                       d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
                     />
                   </svg>
-                  Edit Tokens: {userData?.integrationTokens || 0}
+                  App Tokens: {userData?.appTokens || 0}
                   <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
-                    Each AI edit costs 3 integration tokens. Buy more in the
-                    Tokens section.
+                    Edits and integrations use app tokens.
                   </span>
                 </span>
 
@@ -2194,27 +2271,9 @@ ${pdfUrlList}
             {/* Edit Panel - Right on desktop, Bottom on mobile/tablet */}
             <div className="flex-shrink-0 lg:w-56 xl:w-64 border-t lg:border-t-0 lg:border-l border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col">
               {/* Panel Header - Desktop only */}
-              <div className="hidden lg:flex items-center gap-2 px-4 py-3 border-b border-border-primary">
-                <svg
-                  className="w-4 h-4 text-text-tertiary"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                  />
-                </svg>
-                <span className="text-sm font-medium text-text-secondary">
-                  Edit App
-                </span>
-              </div>
 
-              {/* Integration token balance indicator */}
-              {(userData?.integrationTokens || 0) < 6 && (
+              {/* Low token balance indicator */}
+              {(userData?.appTokens || 0) < 10 && (
                 <div className="px-4 py-3 bg-gradient-to-r from-violet-500/10 to-blue-500/10 border-b border-violet-500/20">
                   <div className="flex items-center gap-2 mb-2">
                     <svg
@@ -2231,23 +2290,21 @@ ${pdfUrlList}
                       />
                     </svg>
                     <span className="text-xs font-medium text-violet-300">
-                      Low Integration Tokens
+                      Low App Tokens
                     </span>
                   </div>
                   <p className="text-xs text-text-tertiary mb-2">
-                    {userData?.integrationTokens || 0} token
-                    {(userData?.integrationTokens || 0) !== 1 ? "s" : ""}{" "}
-                    remaining. Each edit costs 3 tokens.
+                    {userData?.appTokens || 0} token
+                    {(userData?.appTokens || 0) !== 1 ? "s" : ""} remaining.
                   </p>
                   <button
                     onClick={() => {
-                      setPurchaseTokenType("integration");
                       setTokenPurchaseAmount(0);
                       setShowTokenPurchaseModal(true);
                     }}
                     className="w-full px-3 py-1.5 bg-gradient-to-r from-violet-500 to-blue-500 hover:from-violet-400 hover:to-blue-400 text-white text-xs font-medium rounded-lg transition"
                   >
-                    Buy Integration Tokens
+                    Buy App Tokens
                   </button>
                 </div>
               )}
@@ -2351,8 +2408,8 @@ ${pdfUrlList}
 
               {/* Edit Error */}
               {error && (
-                <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/20">
-                  <p className="text-sm text-red-400">{error}</p>
+                <div className="px-4 py-2 bg-red-50 border-b border-red-300 dark:bg-red-500/10 dark:border-red-500/20">
+                  <p className="text-sm text-red-800 dark:text-red-300">{error}</p>
                 </div>
               )}
 
@@ -2434,9 +2491,9 @@ ${pdfUrlList}
 
               {/* Auth prompt warning for edit */}
               {authPromptWarning && (
-                <div className="mx-4 mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
+                <div className="mx-4 mt-4 p-3 bg-amber-50 border border-amber-300 dark:bg-amber-500/10 dark:border-amber-500/30 rounded-xl flex items-start gap-3">
                   <svg
-                    className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"
+                    className="w-5 h-5 text-amber-700 dark:text-amber-300 flex-shrink-0 mt-0.5"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -2449,14 +2506,14 @@ ${pdfUrlList}
                     />
                   </svg>
                   <div className="flex-1">
-                    <p className="text-xs text-amber-300 font-medium">
+                    <p className="text-xs text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
                       {authPromptWarning}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setAuthPromptWarning(null)}
-                    className="text-amber-400 hover:text-amber-300 transition"
+                    className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition"
                   >
                     <svg
                       className="w-4 h-4"
@@ -2478,12 +2535,22 @@ ${pdfUrlList}
               {/* Edit Form */}
               <form onSubmit={handleEdit} className="flex-1 flex flex-col p-4">
                 {/* Desktop: Vertical layout with taller textarea */}
-                <div className="hidden lg:flex flex-col gap-3 flex-1">
+                <div className="hidden lg:flex flex-col gap-3.5 flex-1">
                   {/* Prompt area with auth tags */}
-                  <div className="flex-1 flex flex-col bg-bg-tertiary/50 border border-border-secondary rounded-xl focus-within:border-blue-500/50 overflow-hidden">
+                  <div className="flex-1 flex flex-col rounded-2xl border border-border-secondary bg-gradient-to-b from-bg-tertiary/65 to-bg-tertiary/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] focus-within:border-blue-500/60 focus-within:ring-2 focus-within:ring-blue-500/15 overflow-hidden transition">
+                    <div className="flex items-start justify-between gap-4 px-4 pt-3 pb-2 border-b border-border-secondary/70">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-text-primary">
+                          Edit Prompt
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-500/10 text-[11px] text-blue-400 border border-blue-500/20 whitespace-nowrap">
+                        Enter to submit
+                      </span>
+                    </div>
                     {/* Auth prefill tags (non-editable) */}
                     {editAppAuth.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
+                      <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1.5">
                         {editAppAuth.includes("username-password") && (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-medium">
                             <svg
@@ -2584,83 +2651,121 @@ ${pdfUrlList}
                       placeholder={
                         editAppAuth.length > 0
                           ? "Add additional instructions (optional)..."
-                          : "Describe changes you want to make...\n\nExamples:\nâ€¢ Change the color scheme to blue\nâ€¢ Add a contact form\nâ€¢ Make the header sticky\nâ€¢ Add dark mode toggle"
+                          : "Describe changes you want to make...\n\nExamples:\n- Change the color scheme to blue\n- Add a contact form\n- Make the header sticky\n- Add dark mode toggle"
                       }
                       disabled={isEditing}
-                      className="flex-1 min-h-[120px] px-4 py-3 bg-transparent text-text-primary placeholder-text-muted focus:outline-none resize-none text-sm disabled:opacity-50"
+                      className="flex-1 min-h-[120px] px-4 py-3.5 bg-transparent text-text-primary placeholder-text-muted focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
                     />
+                    <div className="flex items-center justify-between px-4 py-2 border-t border-border-secondary/70">
+                      <p className="text-[11px] text-text-muted">
+                        Shift+Enter for new line
+                      </p>
+                      <p className="text-[11px] text-text-muted">
+                        {editPromptCount} chars
+                      </p>
+                    </div>
                   </div>
-                  {/* Auth selector for edit */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-text-muted">Add Auth:</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditAppAuth(
+                  <div className="rounded-xl border border-border-secondary bg-bg-tertiary/35 px-3 py-2">
+                    <p className="text-xs font-medium text-text-muted mb-2">
+                      Add Integrations:
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditAppAuth(
+                            editAppAuth.includes("username-password")
+                              ? editAppAuth.filter(
+                                  (a) => a !== "username-password",
+                                )
+                              : [...editAppAuth, "username-password"],
+                          )
+                        }
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                           editAppAuth.includes("username-password")
-                            ? editAppAuth.filter(
-                                (a) => a !== "username-password",
-                              )
-                            : [...editAppAuth, "username-password"],
-                        )
-                      }
-                      disabled={isEditing}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                        editAppAuth.includes("username-password")
-                          ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                      } disabled:opacity-50`}
-                    >
-                      <svg
-                        className="w-3 h-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
+                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
+                        } disabled:opacity-50`}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
-                        />
-                      </svg>
-                      Password
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditAppAuth(
+                        <svg
+                          className="w-3 h-3"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                          />
+                        </svg>
+                        Password
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditAppAuth(
+                            editAppAuth.includes("google")
+                              ? editAppAuth.filter((a) => a !== "google")
+                              : [...editAppAuth, "google"],
+                          )
+                        }
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                           editAppAuth.includes("google")
-                            ? editAppAuth.filter((a) => a !== "google")
-                            : [...editAppAuth, "google"],
-                        )
-                      }
-                      disabled={isEditing}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                        editAppAuth.includes("google")
-                          ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                      } disabled:opacity-50`}
-                    >
-                      <svg
-                        className="w-3 h-3"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
+                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
+                        } disabled:opacity-50`}
                       >
-                        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                      </svg>
-                      Google
-                    </button>
+                        <svg
+                          className="w-3 h-3"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                        </svg>
+                        Google
+                      </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowDbModal(true)}
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1.5 self-start px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                          currentAppDatabase.length > 0
+                            ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
+                        } disabled:opacity-50`}
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"
+                          />
+                        </svg>
+                        Database
+                      </button>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-3 bg-bg-tertiary hover:bg-border-secondary text-text-secondary text-sm font-medium rounded-xl transition disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-3 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary text-sm font-medium rounded-xl transition disabled:opacity-50"
                       title="Attach image or PDF"
                     >
                       <svg
@@ -2679,13 +2784,8 @@ ${pdfUrlList}
                     </button>
                     <button
                       type="submit"
-                      disabled={
-                        (!editPrompt.trim() && editAppAuth.length === 0) ||
-                        isEditing ||
-                        checkingAuthIntent ||
-                        checkingEditClarity
-                      }
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={isEditSubmitDisabled}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {isEditing ? (
                         <>
@@ -2718,30 +2818,87 @@ ${pdfUrlList}
                     </button>
                   </div>
                   <p className="text-xs text-text-muted text-center">
-                    Press Enter to apply or Shift+Enter for new line
+                    Press Enter to apply edits quickly
                   </p>
                 </div>
 
                 {/* Mobile/Tablet: Layout */}
-                <div className="flex lg:hidden flex-col gap-2">
+                <div className="flex lg:hidden flex-col gap-2.5">
                   {/* Auth selector for mobile edit */}
-                  <div className="flex items-center gap-2 px-1">
-                    <span className="text-xs text-text-muted">Add Auth:</span>
+                  <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-text-muted">
+                        Add:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditAppAuth(
+                            editAppAuth.includes("username-password")
+                              ? editAppAuth.filter(
+                                  (a) => a !== "username-password",
+                                )
+                              : [...editAppAuth, "username-password"],
+                          )
+                        }
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
+                          editAppAuth.includes("username-password")
+                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
+                        } disabled:opacity-50`}
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                          />
+                        </svg>
+                        Password
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditAppAuth(
+                            editAppAuth.includes("google")
+                              ? editAppAuth.filter((a) => a !== "google")
+                              : [...editAppAuth, "google"],
+                          )
+                        }
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
+                          editAppAuth.includes("google")
+                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
+                        } disabled:opacity-50`}
+                      >
+                        <svg
+                          className="w-3 h-3"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                        </svg>
+                        Google
+                      </button>
+                    </div>
                     <button
                       type="button"
-                      onClick={() =>
-                        setEditAppAuth(
-                          editAppAuth.includes("username-password")
-                            ? editAppAuth.filter(
-                                (a) => a !== "username-password",
-                              )
-                            : [...editAppAuth, "username-password"],
-                        )
-                      }
+                      onClick={() => setShowDbModal(true)}
                       disabled={isEditing}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                        editAppAuth.includes("username-password")
-                          ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
+                        currentAppDatabase.length > 0
+                          ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
                           : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                       } disabled:opacity-50`}
                     >
@@ -2755,43 +2912,15 @@ ${pdfUrlList}
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
-                          d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                          d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375"
                         />
                       </svg>
-                      Password
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditAppAuth(
-                          editAppAuth.includes("google")
-                            ? editAppAuth.filter((a) => a !== "google")
-                            : [...editAppAuth, "google"],
-                        )
-                      }
-                      disabled={isEditing}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                        editAppAuth.includes("google")
-                          ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
-                      } disabled:opacity-50`}
-                    >
-                      <svg
-                        className="w-3 h-3"
-                        viewBox="0 0 24 24"
-                        fill="currentColor"
-                      >
-                        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                      </svg>
-                      Google
+                      Database
                     </button>
                   </div>
                   {/* Auth prefill tags for mobile */}
                   {editAppAuth.length > 0 && (
-                    <div className="flex flex-wrap gap-1 px-1">
+                    <div className="flex flex-wrap gap-1.5 px-1">
                       {editAppAuth.includes("username-password") && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-md text-xs">
                           Add Password Auth
@@ -2852,12 +2981,12 @@ ${pdfUrlList}
                       )}
                     </div>
                   )}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-end gap-2">
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="p-3 bg-bg-tertiary hover:bg-border-secondary text-text-tertiary rounded-xl transition disabled:opacity-50"
+                      className="p-3 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary rounded-xl transition disabled:opacity-50"
                       title="Attach file"
                     >
                       <svg
@@ -2895,19 +3024,14 @@ ${pdfUrlList}
                         }
                         rows={1}
                         disabled={isEditing}
-                        className="w-full px-4 py-3 bg-bg-tertiary/50 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/50 resize-none text-sm disabled:opacity-50"
+                        className="w-full px-4 py-3 bg-bg-tertiary/55 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 resize-none text-sm disabled:opacity-50"
                         style={{ minHeight: "46px", maxHeight: "120px" }}
                       />
                     </div>
                     <button
                       type="submit"
-                      disabled={
-                        (!editPrompt.trim() && editAppAuth.length === 0) ||
-                        isEditing ||
-                        checkingAuthIntent ||
-                        checkingEditClarity
-                      }
-                      className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={isEditSubmitDisabled}
+                      className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {isEditing ? (
                         <>
@@ -2938,6 +3062,14 @@ ${pdfUrlList}
                         </>
                       )}
                     </button>
+                  </div>
+                  <div className="flex items-center justify-between px-1">
+                    <p className="text-[11px] text-text-muted">
+                      Shift+Enter for new line
+                    </p>
+                    <p className="text-[11px] text-text-muted">
+                      {editPromptCount} chars
+                    </p>
                   </div>
                 </div>
               </form>
@@ -3077,271 +3209,19 @@ ${pdfUrlList}
         />
 
         {/* Token Purchase Modal (success view) */}
-        {showTokenPurchaseModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
-              <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">
-                <button
-                  onClick={() => {
-                    setShowTokenPurchaseModal(false);
-                    setInsufficientTokenMessage(null);
-                  }}
-                  className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-                <div
-                  className={`inline-flex items-center justify-center w-16 h-16 mb-4 rounded-2xl ${
-                    purchaseTokenType === "app"
-                      ? "bg-gradient-to-br from-blue-500 to-violet-500"
-                      : "bg-gradient-to-br from-violet-500 to-purple-500"
-                  }`}
-                >
-                  <svg
-                    className="w-8 h-8 text-white"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                    />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-bold text-text-primary mb-2">
-                  Buy {purchaseTokenType === "app" ? "App" : "Integration"}{" "}
-                  Tokens
-                </h3>
-                {insufficientTokenMessage ? (
-                  <div className="mt-1 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-left">
-                    <div className="flex items-start gap-2">
-                      <svg
-                        className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                        />
-                      </svg>
-                      <p className="text-sm text-red-300">
-                        {insufficientTokenMessage}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-text-tertiary text-sm">
-                    {purchaseTokenType === "app"
-                      ? "App tokens are used to create new projects (2 tokens per project). New accounts start with 4 free tokens."
-                      : "Integration tokens are used for AI edits and backend/API calls (3 tokens per edit)."}
-                  </p>
-                )}
-                <p className="text-text-muted text-xs mt-2">
-                  Current balance:{" "}
-                  {purchaseTokenType === "app"
-                    ? userData?.appTokens || 0
-                    : userData?.integrationTokens || 0}{" "}
-                  tokens
-                </p>
-              </div>
-              <div className="px-6 pb-3 flex-shrink-0">
-                <div className="flex bg-bg-tertiary rounded-lg p-1">
-                  <button
-                    onClick={() => {
-                      setPurchaseTokenType("app");
-                      setTokenPurchaseAmount(0);
-                    }}
-                    className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                      purchaseTokenType === "app"
-                        ? "bg-blue-600 text-white"
-                        : "text-text-tertiary hover:text-text-primary"
-                    }`}
-                  >
-                    App Tokens
-                  </button>
-                  <button
-                    onClick={() => {
-                      setPurchaseTokenType("integration");
-                      setTokenPurchaseAmount(0);
-                    }}
-                    className={`flex-1 py-2 text-sm font-medium rounded-md transition ${
-                      purchaseTokenType === "integration"
-                        ? "bg-violet-600 text-white"
-                        : "text-text-tertiary hover:text-text-primary"
-                    }`}
-                  >
-                    Integration Tokens
-                  </button>
-                </div>
-              </div>
-              <div className="px-6 py-4 overflow-y-auto flex-1">
-                <p className="text-xs text-text-tertiary mb-3">
-                  {purchaseTokenType === "app"
-                    ? "1 AUD = 1 app token"
-                    : "1 AUD = 10 integration tokens"}
-                </p>
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  {(purchaseTokenType === "app"
-                    ? [
-                        { aud: 2, tokens: 2, label: "2 tokens" },
-                        { aud: 5, tokens: 5, label: "5 tokens" },
-                        { aud: 10, tokens: 10, label: "10 tokens" },
-                        { aud: 20, tokens: 20, label: "20 tokens" },
-                      ]
-                    : [
-                        { aud: 1, tokens: 10, label: "10 tokens" },
-                        { aud: 5, tokens: 50, label: "50 tokens" },
-                        { aud: 10, tokens: 100, label: "100 tokens" },
-                        { aud: 20, tokens: 200, label: "200 tokens" },
-                      ]
-                  ).map((option) => (
-                    <button
-                      key={option.aud}
-                      onClick={() => setTokenPurchaseAmount(option.aud)}
-                      className={`p-3 rounded-xl border-2 transition-all text-left ${
-                        tokenPurchaseAmount === option.aud
-                          ? purchaseTokenType === "app"
-                            ? "border-blue-500 bg-blue-500/10"
-                            : "border-violet-500 bg-violet-500/10"
-                          : "border-border-secondary bg-bg-tertiary/50 hover:border-text-faint"
-                      }`}
-                    >
-                      <div className="text-lg font-bold text-text-primary">
-                        ${option.aud} AUD
-                      </div>
-                      <div
-                        className={`text-xs ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}
-                      >
-                        {option.label}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary text-sm font-medium">
-                    $
-                  </span>
-                  <input
-                    type="number"
-                    min={1}
-                    placeholder="Custom amount"
-                    value={tokenPurchaseAmount || ""}
-                    onChange={(e) =>
-                      setTokenPurchaseAmount(
-                        Math.max(0, parseInt(e.target.value) || 0),
-                      )
-                    }
-                    className={`w-full pl-7 pr-16 py-2.5 bg-bg-tertiary/50 border rounded-xl text-text-primary text-sm font-medium focus:outline-none transition placeholder-text-muted ${
-                      purchaseTokenType === "app"
-                        ? "border-blue-500/30 focus:border-blue-500"
-                        : "border-violet-500/30 focus:border-violet-500"
-                    }`}
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted text-xs">
-                    AUD
-                  </span>
-                </div>
-                {tokenPurchaseAmount > 0 && (
-                  <div
-                    className={`mt-3 p-3 rounded-xl border ${
-                      purchaseTokenType === "app"
-                        ? "bg-blue-500/5 border-blue-500/20"
-                        : "bg-violet-500/5 border-violet-500/20"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-text-secondary">
-                        You&apos;ll receive
-                      </span>
-                      <span
-                        className={`text-lg font-bold ${purchaseTokenType === "app" ? "text-blue-400" : "text-violet-400"}`}
-                      >
-                        {purchaseTokenType === "app"
-                          ? tokenPurchaseAmount
-                          : tokenPurchaseAmount * 10}{" "}
-                        tokens
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="px-6 pb-6 space-y-3 flex-shrink-0">
-                {tokenPurchaseAmount > 0 && (
-                  <button
-                    onClick={purchaseTokens}
-                    disabled={isProcessingTokenPurchase}
-                    className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${
-                      purchaseTokenType === "app"
-                        ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                        : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
-                    }`}
-                  >
-                    {isProcessingTokenPurchase ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <svg
-                          className="w-5 h-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                          />
-                        </svg>
-                        Pay ${tokenPurchaseAmount} AUD -{" "}
-                        {purchaseTokenType === "app"
-                          ? tokenPurchaseAmount
-                          : tokenPurchaseAmount * 10}{" "}
-                        tokens
-                      </>
-                    )}
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    setShowTokenPurchaseModal(false);
-                    setInsufficientTokenMessage(null);
-                  }}
-                  className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
-                >
-                  Cancel
-                </button>
-                {tokenPurchaseAmount > 0 && (
-                  <p className="text-xs text-text-muted text-center">
-                    Secure payment powered by Stripe
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <TokenPurchaseModal
+          isOpen={showTokenPurchaseModal}
+          onClose={() => {
+            setShowTokenPurchaseModal(false);
+            setInsufficientTokenMessage(null);
+          }}
+          amount={tokenPurchaseAmount}
+          onAmountChange={setTokenPurchaseAmount}
+          appTokens={userData?.appTokens || 0}
+          insufficientMessage={insufficientTokenMessage}
+          isProcessing={isProcessingTokenPurchase}
+          onPurchase={purchaseTokens}
+        />
 
         {/* Cancel Confirmation Modal (success view) */}
         {showCancelConfirm && (
@@ -3395,7 +3275,7 @@ ${pdfUrlList}
                   Date.now() - editStartTimeRef.current < 10000 && (
                     <div className="mt-3 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
                       <p className="text-xs text-emerald-300">
-                        Cancelling now will refund your integration tokens.
+                        Cancelling now will refund your app tokens.
                       </p>
                     </div>
                   )}
@@ -3428,8 +3308,8 @@ ${pdfUrlList}
                       setShowCancelConfirm(null);
                       if (withinRefundWindow && user) {
                         try {
-                          const editCost = getEditIntegrationCost();
-                          await adjustIntegrationTokens(
+                          const editCost = getEditAppCost();
+                          await adjustAppTokens(
                             editCost,
                             "Edit cancelled refund",
                           );
@@ -3473,6 +3353,7 @@ ${pdfUrlList}
         uploadedFiles={uploadedFiles}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         currentAppAuth={currentAppAuth}
+        currentAppDatabase={currentAppDatabase}
         isRecording={isRecording}
         voiceError={voiceError}
         authPromptWarning={authPromptWarning}
@@ -3882,8 +3763,7 @@ ${pdfUrlList}
           }}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={setIsSidebarCollapsed}
-          onBuyTokens={(tokenType) => {
-            setPurchaseTokenType(tokenType);
+          onBuyTokens={() => {
             setTokenPurchaseAmount(0);
             setShowTokenPurchaseModal(true);
           }}
@@ -3923,7 +3803,6 @@ ${pdfUrlList}
         }}
         onSuccess={handleSignInSuccess}
       />
-
 
       {/* Delete Confirmation Modal (projects list) */}
       {showDeleteModal && projectToDelete && (
@@ -4009,47 +3888,49 @@ ${pdfUrlList}
       )}
 
       {/* Welcome Modal for New Users */}
-      <WelcomeModal
-        isOpen={isNewUser}
-        onClose={clearNewUser}
-      />
+      <WelcomeModal isOpen={isNewUser} onClose={clearNewUser} />
 
       {/* Token Confirmation Modal */}
-      {showTokenConfirmModal && (() => {
-        const isGeneration = showTokenConfirmModal === "app";
-        const genIntegrationCost = getGenerationIntegrationCost();
-        const editIntCost = getEditIntegrationCost();
-        const appCost = isGeneration ? 2 : 0;
-        const integrationCost = isGeneration ? genIntegrationCost : editIntCost;
-        const appBalance = userData?.appTokens || 0;
-        const integrationBalance = userData?.integrationTokens || 0;
+      {showTokenConfirmModal &&
+        (() => {
+          const isGeneration = showTokenConfirmModal === "generation";
+          const authCost = isGeneration
+            ? getAuthAppCost(currentAppAuth)
+            : getAuthAppCost(editAppAuth);
+          const databaseCost = getDatabaseAppCost(currentAppDatabase);
+          const baseCost = isGeneration
+            ? BASE_GENERATION_APP_COST
+            : BASE_EDIT_APP_COST;
+          const totalCost = baseCost + authCost + databaseCost;
+          const appBalance = userData?.appTokens || 0;
 
-        const handleConfirm = () => {
-          if (isGeneration) {
-            setShowTokenConfirmModal(null);
-            startGeneration();
-          } else {
-            proceedWithEdit();
-          }
-        };
+          const handleConfirm = () => {
+            if (isGeneration) {
+              setShowTokenConfirmModal(null);
+              startGeneration();
+            } else {
+              proceedWithEdit();
+            }
+          };
 
-        return (
-          <TokenConfirmModal
-            isOpen={true}
-            onClose={() => setShowTokenConfirmModal(null)}
-            confirmationType={isGeneration ? "generation" : "edit"}
-            appCost={appCost}
-            integrationCost={integrationCost}
-            appBalance={appBalance}
-            integrationBalance={integrationBalance}
-            skipEditTokenConfirm={skipEditTokenConfirm}
-            onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
-            onConfirm={handleConfirm}
-            currentAppAuth={currentAppAuth}
-            editAppAuth={editAppAuth}
-          />
-        );
-      })()}
+          return (
+            <TokenConfirmModal
+              isOpen={true}
+              onClose={() => setShowTokenConfirmModal(null)}
+              confirmationType={isGeneration ? "generation" : "edit"}
+              totalCost={totalCost}
+              baseCost={baseCost}
+              authCost={authCost}
+              databaseCost={databaseCost}
+              appBalance={appBalance}
+              skipEditTokenConfirm={skipEditTokenConfirm}
+              onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
+              onConfirm={handleConfirm}
+              currentAppAuth={currentAppAuth}
+              editAppAuth={editAppAuth}
+            />
+          );
+        })()}
 
       {/* Authentication Modal */}
 
@@ -4072,8 +3953,11 @@ ${pdfUrlList}
             setShowCancelConfirm(null);
             if (withinRefundWindow && user) {
               try {
-                const editCost = getEditIntegrationCost();
-                await adjustIntegrationTokens(editCost, "Edit cancelled refund");
+                const editCost = getEditAppCost();
+                await adjustAppTokens(
+                  editCost,
+                  "Edit cancelled refund",
+                );
               } catch (err) {
                 console.error("Error refunding tokens:", err);
               }
@@ -4097,20 +3981,21 @@ ${pdfUrlList}
         }
       />
 
-      <DatabaseModal
-        isOpen={showDbModal}
-        onClose={() => setShowDbModal(false)}
-      />
+      {showDbModal && (
+        <DatabaseModal
+          isOpen={showDbModal}
+          onClose={() => setShowDbModal(false)}
+          selectedDatabase={currentAppDatabase}
+          onDatabaseChange={setCurrentAppDatabase}
+        />
+      )}
 
       <TokenPurchaseModal
         isOpen={showTokenPurchaseModal}
         onClose={() => setShowTokenPurchaseModal(false)}
-        tokenType={purchaseTokenType}
-        onTokenTypeChange={setPurchaseTokenType}
         amount={tokenPurchaseAmount}
         onAmountChange={setTokenPurchaseAmount}
         appTokens={userData?.appTokens || 0}
-        integrationTokens={userData?.integrationTokens || 0}
         insufficientMessage={insufficientTokenMessage}
         isProcessing={isProcessingTokenPurchase}
         onPurchase={purchaseTokens}
@@ -4173,5 +4058,3 @@ export default function ReactGenerator() {
     </Suspense>
   );
 }
-
-

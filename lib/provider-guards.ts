@@ -107,104 +107,10 @@ function applyProviderGuards(files: FileEntry[]): FileEntry[] {
   );
 }
 
-function normalizeClerkMiddleware(files: FileEntry[]): FileEntry[] {
-  const middlewarePaths = new Set([
-    "middleware.ts",
-    "middleware.js",
-    "src/middleware.ts",
-    "src/middleware.js",
-  ]);
-
-  const modernMiddleware = `import { clerkMiddleware } from "@clerk/nextjs/server";
-
-export default clerkMiddleware();
-
-export const config = {
-  matcher: [
-    "/((?!_next|[^?]*\\\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    "/(api|trpc)(.*)",
-  ],
-};`;
-
-  return files.map((file) => {
-    const normalizedPath = file.path.replace(/\\/g, "/");
-    if (!middlewarePaths.has(normalizedPath)) return file;
-
-    const usesDeprecatedAuthMiddleware =
-      /authMiddleware/.test(file.content) &&
-      /@clerk\/nextjs/.test(file.content);
-    if (usesDeprecatedAuthMiddleware) {
-      return {
-        ...file,
-        content: modernMiddleware,
-      };
-    }
-
-    // Normalize Clerk v6 callback API usage in generated middleware.
-    if (
-      /clerkMiddleware/.test(file.content) &&
-      /auth\(\)\.protect\(\)/.test(file.content)
-    ) {
-      let content = file.content.replace(
-        /auth\(\)\.protect\(\)/g,
-        "await auth.protect()",
-      );
-
-      // Ensure the middleware callback is async if we inserted await.
-      content = content.replace(
-        /clerkMiddleware\(\s*\(([^)]*)\)\s*=>/g,
-        "clerkMiddleware(async ($1) =>",
-      );
-
-      return {
-        ...file,
-        content,
-      };
-    }
-
-    return file;
-  });
-}
-
-function normalizeClerkServerAuth(files: FileEntry[]): FileEntry[] {
-  const serverLikeFile = (path: string) =>
-    /(^|\/)(app\/.*\/page|app\/.*\/layout|app\/.*\/loading|app\/.*\/error|app\/.*\/not-found|app\/.*\/template|app\/.*\/default|app\/.*\/route|middleware)\.(ts|tsx|js|jsx)$/.test(
-      path,
-    );
-
-  return files.map((file) => {
-    const normalizedPath = file.path.replace(/\\/g, "/");
-    if (!SOURCE_EXT_REGEX.test(normalizedPath) || !serverLikeFile(normalizedPath)) {
-      return file;
-    }
-
-    let next = file.content;
-
-    // Ensure server-side Clerk import when auth() is used.
-    const usesAuthCall = /\bauth\s*\(/.test(next);
-    if (usesAuthCall) {
-      next = next.replace(
-        /from\s+["']@clerk\/nextjs["']/g,
-        'from "@clerk/nextjs/server"',
-      );
-
-      // If auth() is used without await in common destructuring cases, fix it.
-      next = next.replace(
-        /\b(const|let|var)\s+(\{[^}]*\})\s*=\s*auth\(\s*\)\s*;/g,
-        "$1 $2 = await auth();",
-      );
-    }
-
-    return next === file.content ? file : { ...file, content: next };
-  });
-}
-
 export function ensureProviderGuardsForGeneratedFiles<T extends FileEntry>(
   files: T[]
 ): T[] {
-  return applyProviderGuards(
-    normalizeClerkServerAuth(normalizeClerkMiddleware(files)),
-  ) as T[];
+  return applyProviderGuards(files) as T[];
 }
 
 export function ensureProviderGuardsForFileMap(
@@ -214,12 +120,11 @@ export function ensureProviderGuardsForFileMap(
     path,
     content,
   }));
-  const guarded = applyProviderGuards(
-    normalizeClerkServerAuth(normalizeClerkMiddleware(entries)),
-  );
+  const guarded = applyProviderGuards(entries);
   const next: Record<string, string> = {};
   for (const file of guarded) {
     next[file.path] = file.content;
   }
   return next;
 }
+

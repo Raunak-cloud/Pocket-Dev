@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
@@ -380,7 +380,7 @@ export default function E2BPreview({
         />
       )}
 
-      {/* Auth previews must run at top-level due Clerk frame-ancestors CSP */}
+      {/* Auth previews must run at top-level due Supabase Auth frame-ancestors CSP */}
       {previewUrl && requiresTopLevelAuthPreview && (
         <div className="h-full flex items-center justify-center p-6 bg-bg-secondary">
           <div className="max-w-md w-full rounded-xl border border-border-primary bg-bg-tertiary/70 p-5 text-center">
@@ -388,7 +388,7 @@ export default function E2BPreview({
               Open Auth Preview In New Tab
             </h3>
             <p className="text-sm text-text-tertiary mb-4">
-              Clerk blocks embedded auth flows inside iframes. Use top-level preview for sign-in/sign-up testing.
+              Supabase Auth blocks embedded auth flows inside iframes. Use top-level preview for sign-in/sign-up testing.
             </p>
             <button
               onClick={() =>
@@ -404,3 +404,4 @@ export default function E2BPreview({
     </div>
   );
 }
+

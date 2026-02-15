@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { ClerkProvider } from "@clerk/nextjs";
+import { SupabaseAuthProvider } from "@/lib/supabase-auth/client";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import MaintenanceCheck from "./components/MaintenanceCheck";
@@ -39,15 +39,16 @@ export default function RootLayout({
         />
       </head>
       <body className={`${inter.variable} font-sans antialiased bg-bg-primary text-text-primary selection:bg-blue-500/30`}>
-        <ClerkProvider>
+        <SupabaseAuthProvider>
           <ThemeProvider>
             <AuthProvider>
               <MaintenanceCheck />
               {children}
             </AuthProvider>
           </ThemeProvider>
-        </ClerkProvider>
+        </SupabaseAuthProvider>
       </body>
     </html>
   );
 }
+

@@ -1,24 +1,24 @@
-import { auth, currentUser } from '@clerk/nextjs/server';
+﻿import { auth, currentUser } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
 export async function POST(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
+    const { userId: authUserId } = await auth();
 
-    if (!clerkUserId) {
+    if (!authUserId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const user = await prisma.user.findUnique({
-      where: { clerkUserId },
+      where: { authUserId },
     });
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const clerkUser = await currentUser();
+    const authUser = await currentUser();
     const body = await req.json();
     const { category, subject, description, projectId, projectName } = body;
 
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
       data: {
         userId: user.id,
         userEmail: user.email || '',
-        userName: user.displayName || clerkUser?.emailAddresses[0]?.emailAddress || 'User',
+        userName: user.displayName || authUser?.email || 'User',
         category,
         subject,
         description,
@@ -49,3 +49,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
+
+

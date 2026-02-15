@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { creditTokens } from "@/lib/db-utils";
@@ -36,15 +36,11 @@ export async function POST(request: NextRequest) {
   try {
     if (metadata.type === "token_purchase") {
       const userId = metadata.userId;
-      const clerkUserId = metadata.clerkUserId;
-      const tokenType = metadata.tokenType as "app" | "integration";
+      const authUserId = metadata.authUserId;
       const tokensToCredit = Number.parseInt(metadata.tokensToCredit || "0", 10);
 
-      if (!userId || !tokenType || !Number.isFinite(tokensToCredit) || tokensToCredit <= 0) {
+      if (!userId || !Number.isFinite(tokensToCredit) || tokensToCredit <= 0) {
         return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
-      }
-      if (tokenType !== "app" && tokenType !== "integration") {
-        return NextResponse.json({ error: "Invalid token type" }, { status: 400 });
       }
 
       let targetUserId: string | null = null;
@@ -56,11 +52,11 @@ export async function POST(request: NextRequest) {
       if (byId) {
         targetUserId = byId.id;
       } else {
-        const byClerkId = await prisma.user.findUnique({
-          where: { clerkUserId: clerkUserId || userId },
+        const byAuthId = await prisma.user.findUnique({
+          where: { authUserId: authUserId || userId },
           select: { id: true },
         });
-        targetUserId = byClerkId?.id || null;
+        targetUserId = byAuthId?.id || null;
       }
 
       if (!targetUserId) {
@@ -70,8 +66,8 @@ export async function POST(request: NextRequest) {
       await creditTokens(
         targetUserId,
         tokensToCredit,
-        tokenType,
-        `Purchased ${tokensToCredit} ${tokenType} tokens`,
+        "app",
+        `Purchased ${tokensToCredit} app tokens`,
         session.id,
       );
     }
@@ -98,3 +94,4 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ received: true });
 }
+

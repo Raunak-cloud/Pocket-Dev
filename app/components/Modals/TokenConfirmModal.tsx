@@ -4,10 +4,11 @@ interface TokenConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
   confirmationType: "generation" | "edit";
-  appCost: number;
-  integrationCost: number;
+  totalCost: number;
+  baseCost: number;
+  authCost: number;
+  databaseCost: number;
   appBalance: number;
-  integrationBalance: number;
   skipEditTokenConfirm: boolean;
   onSkipEditTokenConfirmChange: (skip: boolean) => void;
   onConfirm: () => void;
@@ -19,10 +20,11 @@ export function TokenConfirmModal({
   isOpen,
   onClose,
   confirmationType,
-  appCost,
-  integrationCost,
+  totalCost,
+  baseCost,
+  authCost,
+  databaseCost,
   appBalance,
-  integrationBalance,
   skipEditTokenConfirm,
   onSkipEditTokenConfirmChange,
   onConfirm,
@@ -87,99 +89,40 @@ export function TokenConfirmModal({
           </p>
         </div>
         <div className="px-6 pb-4 space-y-3">
-          {appCost > 0 && (
-            <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">
-                  App Tokens
-                </span>
-              </div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-text-secondary">
-                  Project creation
-                </span>
-                <span className="text-sm font-bold text-blue-400">
-                  -{appCost}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                <span>Balance: {appBalance}</span>
-                <span>After: {appBalance - appCost}</span>
-              </div>
+          <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">
+                App Tokens
+              </span>
+              <span className="text-sm font-bold text-blue-400">-{totalCost}</span>
             </div>
-          )}
-          {integrationCost > 0 && (
-            <div className="p-4 rounded-xl border bg-violet-500/5 border-violet-500/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-violet-400 uppercase tracking-wide">
-                  Integration Tokens
+            <div className="space-y-1.5 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-text-secondary">
+                  {isGeneration ? "Project creation" : "Edit request"}
                 </span>
+                <span className="font-medium text-text-primary">-{baseCost}</span>
               </div>
-              {isGeneration ? (
-                <>
-                  {authList.includes("username-password") && (
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-text-secondary">
-                        Username & Password auth
-                      </span>
-                      <span className="text-sm font-bold text-violet-400">
-                        -30
-                      </span>
-                    </div>
-                  )}
-                  {authList.includes("google") && (
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-text-secondary">
-                        Google OAuth auth
-                      </span>
-                      <span className="text-sm font-bold text-violet-400">
-                        -30
-                      </span>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {authList.includes("username-password") && (
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-text-secondary">
-                        Username & Password auth
-                      </span>
-                      <span className="text-sm font-bold text-violet-400">
-                        -30
-                      </span>
-                    </div>
-                  )}
-                  {authList.includes("google") && (
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-text-secondary">
-                        Google OAuth auth
-                      </span>
-                      <span className="text-sm font-bold text-violet-400">
-                        -30
-                      </span>
-                    </div>
-                  )}
-                  {authList.length === 0 && (
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-text-secondary">
-                        Edit changes
-                      </span>
-                      <span className="text-sm font-bold text-violet-400">
-                        -3
-                      </span>
-                    </div>
-                  )}
-                </>
+              {authCost > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">
+                    Authentication ({authList.length} option{authList.length === 1 ? "" : "s"})
+                  </span>
+                  <span className="font-medium text-text-primary">-{authCost}</span>
+                </div>
               )}
-              <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                <span>Balance: {integrationBalance}</span>
-                <span>
-                  After: {integrationBalance - integrationCost}
-                </span>
-              </div>
+              {databaseCost > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">Database setup</span>
+                  <span className="font-medium text-text-primary">-{databaseCost}</span>
+                </div>
+              )}
             </div>
-          )}
+            <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 mt-2 border-t border-border-secondary/50">
+              <span>Balance: {appBalance}</span>
+              <span>After: {appBalance - totalCost}</span>
+            </div>
+          </div>
           <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
             <svg
               className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5"

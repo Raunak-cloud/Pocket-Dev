@@ -1,19 +1,19 @@
-import { auth } from '@clerk/nextjs/server';
+﻿import { auth } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { deductAppTokens, deductIntegrationToken } from '@/lib/db-utils';
+import { deductAppTokens } from '@/lib/db-utils';
 
 export async function POST(req: Request) {
   try {
-    const { userId: clerkUserId } = await auth();
+    const { userId: authUserId } = await auth();
 
-    if (!clerkUserId) {
+    if (!authUserId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Get user from database
     const user = await prisma.user.findUnique({
-      where: { clerkUserId },
+      where: { authUserId },
     });
 
     if (!user) {
@@ -28,7 +28,6 @@ export async function POST(req: Request) {
       lintReport,
       config,
       imageCache,
-      authIntegrationCost = 0,
     } = body;
 
     // Use Prisma transaction to create project and update user atomically
@@ -42,20 +41,6 @@ export async function POST(req: Request) {
 
       if (!tokenResult.success) {
         throw new Error(tokenResult.error || 'Failed to deduct app tokens');
-      }
-
-      // Deduct integration tokens if auth integration was used
-      if (authIntegrationCost > 0) {
-        for (let i = 0; i < authIntegrationCost; i++) {
-          const integrationResult = await deductIntegrationToken(
-            user.id,
-            `Auth integration for project: ${prompt.substring(0, 50)}...`,
-          );
-
-          if (!integrationResult.success) {
-            throw new Error(integrationResult.error || 'Failed to deduct integration tokens');
-          }
-        }
       }
 
       // Create project
@@ -89,3 +74,5 @@ export async function POST(req: Request) {
     );
   }
 }
+
+

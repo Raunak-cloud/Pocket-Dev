@@ -53,9 +53,11 @@ function validateSyntaxOrThrow(files: GeneratedFile[]) {
       scriptKind,
     );
 
-    if (sf.parseDiagnostics.length === 0) continue;
+    const parseDiagnostics = (sf as unknown as { parseDiagnostics?: ts.Diagnostic[] })
+      .parseDiagnostics || [];
+    if (parseDiagnostics.length === 0) continue;
 
-    const first = sf.parseDiagnostics[0];
+    const first = parseDiagnostics[0];
     const message = ts.flattenDiagnosticMessageText(first.messageText, "\n");
     const pos = first.start ?? 0;
     const lineCol = sf.getLineAndCharacterOfPosition(pos);
@@ -84,10 +86,11 @@ REQUIREMENTS:
 - TypeScript strict mode
 - Responsive design
 - Dark mode support
-- If authentication is implemented, use Clerk only (@clerk/nextjs), never Firebase/Auth0/Supabase.
-- In server components/routes, import auth helpers from "@clerk/nextjs/server" and call \`await auth()\`.
-- For authenticated apps, enforce Clerk Organizations tenant isolation using NEXT_PUBLIC_POCKET_APP_SLUG.
-- Scope all protected data/actions by active organization id, not only by user id.
+- Never use Unsplash, Pollinations, Picsum, or other stock image URLs.
+- For AI-generated images, use string placeholders like REPLICATE_IMG_1, REPLICATE_IMG_2, ... and add descriptive alt text.
+- If authentication is implemented, use Supabase Auth only (@supabase/supabase-js + @supabase/ssr).
+- Use cookie-based session auth for server routes/components.
+- Scope protected data/actions by tenant/team id in the database.
 
 OUTPUT FORMAT: Return JSON only:
 {
@@ -380,3 +383,4 @@ Generate COMPLETE updated files with changes applied. Output JSON only.`;
     attempts: 1,
   };
 }
+

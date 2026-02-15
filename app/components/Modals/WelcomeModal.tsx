@@ -272,7 +272,6 @@ export function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
             </p>
           </div>
 
-          {/* Integration Tokens */}
           <div
             className="p-4 bg-violet-500/5 border border-violet-500/20 rounded-xl"
             style={{
@@ -291,30 +290,26 @@ export function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z"
+                    d="M13 10V3L4 14h7v7l9-11h-7z"
                   />
                 </svg>
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-text-primary">
-                  Integration Tokens
+                  Token Costs
                 </h4>
                 <p className="text-xs text-violet-400 font-medium">
-                  10 free tokens awarded
+                  One token balance for everything
                 </p>
               </div>
             </div>
             <p className="text-xs text-text-secondary leading-relaxed">
-              Integration tokens let you make AI-powered edits to your
-              projects. Each edit costs{" "}
+              Authentication costs{" "}
               <span className="text-text-primary font-medium">
-                1 integration token
-              </span>
-              , so you get{" "}
-              <span className="text-text-primary font-medium">
-                10 edits
+                2 tokens per option
               </span>{" "}
-              for free.
+              and database setup costs{" "}
+              <span className="text-text-primary font-medium">10 tokens</span>.
             </p>
           </div>
 

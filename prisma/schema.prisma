@@ -13,14 +13,14 @@ datasource db {
 // User model - migrated from Firebase Auth + Firestore users collection
 model User {
   id                  String              @id @default(cuid())
-  clerkUserId         String              @unique // Clerk user ID
+  authUserId          String              @unique @map("clerkUserId") // Supabase auth user ID
   email               String?
   displayName         String?
   photoURL            String?
   createdAt           DateTime            @default(now())
   lastLoginAt         DateTime            @default(now())
   projectCount        Int                 @default(0)
-  appTokens           Int                 @default(4) // Free tier: 4 app tokens
+  appTokens           Float               @default(4) // Free tier: 4 app tokens
   integrationTokens   Int                 @default(10) // Free tier: 10 integration tokens
 
   // Relations
@@ -28,7 +28,7 @@ model User {
   supportTickets      SupportTicket[]
   tokenTransactions   TokenTransaction[]
 
-  @@index([clerkUserId])
+  @@index([authUserId], map: "users_clerkUserId_idx")
   @@map("users")
 }
 
@@ -97,9 +97,9 @@ model TokenTransaction {
   userId        String
   type          String    // "deduction" | "credit" | "purchase"
   tokenType     String    // "app" | "integration"
-  amount        Int       // Negative for deductions, positive for credits
-  balanceBefore Int
-  balanceAfter  Int
+  amount        Float     // Negative for deductions, positive for credits
+  balanceBefore Float
+  balanceAfter  Float
   reason        String
   projectId     String?
   stripePaymentIntentId String? @unique // For idempotency in Stripe webhooks
@@ -123,3 +123,4 @@ model Maintenance {
 
   @@map("maintenance")
 }
+

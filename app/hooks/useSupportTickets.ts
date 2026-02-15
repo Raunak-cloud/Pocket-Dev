@@ -1,10 +1,10 @@
-import { useState, useMemo } from "react";
+﻿import { useState, useMemo } from "react";
 import type { SupportTicket, SavedProject } from "@/app/types";
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
 
 interface UseSupportTicketsProps {
-  user: any; // Clerk user object
+  user: any; // auth user object
   savedProjects: SavedProject[];
 }
 
@@ -211,3 +211,4 @@ export function useSupportTickets({ user, savedProjects }: UseSupportTicketsProp
     userReplyToTicket,
   };
 }
+
