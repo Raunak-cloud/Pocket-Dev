@@ -44,8 +44,7 @@ export default function E2BPreview({
   const latestProjectRef = useRef<ReactProject | null>(project);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const recoveringRef = useRef(false);
-  const openedTopLevelPreviewRef = useRef(false);
-  const requiresTopLevelAuthPreview = project ? hasAuthentication(project) : false;
+  const hasAuthPreviewHint = project ? hasAuthentication(project) : false;
 
   useEffect(() => {
     latestProjectRef.current = project;
@@ -203,13 +202,6 @@ export default function E2BPreview({
       "*"
     );
   }, [textEditMode, previewUrl]);
-
-  useEffect(() => {
-    if (!requiresTopLevelAuthPreview || !previewUrl) return;
-    if (openedTopLevelPreviewRef.current) return;
-    openedTopLevelPreviewRef.current = true;
-    window.open(previewUrl, "_blank", "noopener,noreferrer");
-  }, [requiresTopLevelAuthPreview, previewUrl]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -370,7 +362,7 @@ export default function E2BPreview({
       )}
 
       {/* Iframe preview */}
-      {previewUrl && !requiresTopLevelAuthPreview && (
+      {previewUrl && (
         <iframe
           ref={iframeRef}
           src={previewUrl}
@@ -380,23 +372,23 @@ export default function E2BPreview({
         />
       )}
 
-      {/* Auth previews must run at top-level due Supabase Auth frame-ancestors CSP */}
-      {previewUrl && requiresTopLevelAuthPreview && (
-        <div className="h-full flex items-center justify-center p-6 bg-bg-secondary">
-          <div className="max-w-md w-full rounded-xl border border-border-primary bg-bg-tertiary/70 p-5 text-center">
-            <h3 className="text-base font-semibold text-text-primary mb-2">
-              Open Auth Preview In New Tab
+      {/* Auth hint: iframe preview stays available; open tab is optional for OAuth flows */}
+      {previewUrl && loadingState === "ready" && hasAuthPreviewHint && (
+        <div className="pointer-events-none absolute top-3 right-3 z-20 max-w-sm">
+          <div className="pointer-events-auto rounded-xl border border-border-primary bg-bg-secondary/95 backdrop-blur-md p-3 shadow-xl">
+            <h3 className="text-sm font-semibold text-text-primary mb-1">
+              Auth Testing Tip
             </h3>
-            <p className="text-sm text-text-tertiary mb-4">
-              Supabase Auth blocks embedded auth flows inside iframes. Use top-level preview for sign-in/sign-up testing.
+            <p className="text-xs text-text-tertiary mb-2 leading-relaxed">
+              Preview works here. For Google/OAuth sign-in flows, use a new tab.
             </p>
             <button
               onClick={() =>
                 window.open(previewUrl, "_blank", "noopener,noreferrer")
               }
-              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition"
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition"
             >
-              Open Preview
+              Open In New Tab
             </button>
           </div>
         </div>
