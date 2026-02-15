@@ -40,11 +40,11 @@ export default function SignInModal({ isOpen, onClose, onSuccess }: SignInModalP
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={handleBackdropClick}
     >
-      <div className="relative w-full max-w-md mx-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl">
+      <div className="relative w-full max-w-md mx-4 bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl">
         {/* Close button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-1 text-slate-500 hover:text-slate-300 transition"
+          className="absolute top-4 right-4 p-1 text-text-muted hover:text-text-secondary transition"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -59,8 +59,8 @@ export default function SignInModal({ isOpen, onClose, onSuccess }: SignInModalP
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
               </svg>
             </div>
-            <h2 className="text-2xl font-semibold text-white mb-2">Sign in to continue</h2>
-            <p className="text-slate-400 text-sm">
+            <h2 className="text-2xl font-semibold text-text-primary mb-2">Sign in to continue</h2>
+            <p className="text-text-tertiary text-sm">
               Sign in with your Google account to generate apps
             </p>
           </div>
@@ -104,7 +104,7 @@ export default function SignInModal({ isOpen, onClose, onSuccess }: SignInModalP
           </button>
 
           {/* Terms */}
-          <p className="mt-6 text-center text-xs text-slate-500">
+          <p className="mt-6 text-center text-xs text-text-muted">
             By signing in, you agree to our Terms of Service and Privacy Policy
           </p>
         </div>

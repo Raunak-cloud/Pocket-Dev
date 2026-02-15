@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import Logo from "./Logo";
+import ThemeToggle from "./ThemeToggle";
 
 interface DashboardSidebarProps {
   activeSection: string;
@@ -48,12 +49,12 @@ export default function DashboardSidebar({
 
   return (
     <div
-      className={`flex flex-col h-full bg-slate-950/80 backdrop-blur-xl border-r border-slate-800/60 transition-all duration-300 ${
+      className={`flex flex-col h-full bg-bg-primary/80 backdrop-blur-xl border-r border-border-primary/60 transition-all duration-300 ${
         isCollapsed ? "w-16" : "w-72"
       }`}
     >
       {/* Header / Brand */}
-      <div className="flex items-center justify-between px-5 py-5 border-b border-slate-800/60">
+      <div className="flex items-center justify-between px-5 py-5 border-b border-border-primary/60">
         <button
           onClick={() => onSectionChange("create")}
           className={`flex items-center gap-3 hover:opacity-80 transition ${isCollapsed ? "justify-center w-full" : ""}`}
@@ -61,10 +62,10 @@ export default function DashboardSidebar({
           <Logo size={30} />
           {!isCollapsed && (
             <div>
-              <span className="font-bold text-white text-base tracking-tight">
+              <span className="font-bold text-text-primary text-base tracking-tight">
                 Pocket Dev
               </span>
-              <span className="block text-[10px] text-slate-500 font-medium -mt-0.5">
+              <span className="block text-[10px] text-text-muted font-medium -mt-0.5">
                 Build apps with AI
               </span>
             </div>
@@ -72,7 +73,7 @@ export default function DashboardSidebar({
         </button>
         <button
           onClick={toggleCollapse}
-          className={`p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition ${
+          className={`p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-tertiary rounded-lg transition ${
             isCollapsed ? "hidden" : ""
           }`}
         >
@@ -96,7 +97,7 @@ export default function DashboardSidebar({
       {isCollapsed && (
         <button
           onClick={toggleCollapse}
-          className="mx-auto mt-3 p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition"
+          className="mx-auto mt-3 p-1.5 text-text-muted hover:text-text-primary hover:bg-bg-tertiary rounded-lg transition"
         >
           <svg
             className="w-4 h-4"
@@ -117,7 +118,7 @@ export default function DashboardSidebar({
       {/* Navigation */}
       <nav className="flex-1 px-3 pt-5 pb-3 space-y-1.5 overflow-y-auto">
         {!isCollapsed && (
-          <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
+          <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-text-faint">
             Menu
           </p>
         )}
@@ -128,7 +129,7 @@ export default function DashboardSidebar({
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${
             activeSection === "create"
               ? "bg-gradient-to-r from-blue-600/20 to-violet-600/10 text-blue-400 border border-blue-500/25 shadow-lg shadow-blue-500/5"
-              : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              : "text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary/60"
           } ${isCollapsed ? "justify-center" : ""}`}
           title={isCollapsed ? "Create App" : undefined}
         >
@@ -136,7 +137,7 @@ export default function DashboardSidebar({
             className={`flex items-center justify-center w-8 h-8 rounded-lg transition ${
               activeSection === "create"
                 ? "bg-blue-500/15"
-                : "bg-slate-800/80 group-hover:bg-slate-700/80"
+                : "bg-bg-tertiary/80 group-hover:bg-border-secondary/80"
             }`}
           >
             <svg
@@ -164,7 +165,7 @@ export default function DashboardSidebar({
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${
             activeSection === "projects"
               ? "bg-gradient-to-r from-blue-600/20 to-violet-600/10 text-blue-400 border border-blue-500/25 shadow-lg shadow-blue-500/5"
-              : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              : "text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary/60"
           } ${isCollapsed ? "justify-center" : ""}`}
           title={isCollapsed ? "My Projects" : undefined}
         >
@@ -172,7 +173,7 @@ export default function DashboardSidebar({
             className={`flex items-center justify-center w-8 h-8 rounded-lg transition ${
               activeSection === "projects"
                 ? "bg-blue-500/15"
-                : "bg-slate-800/80 group-hover:bg-slate-700/80"
+                : "bg-bg-tertiary/80 group-hover:bg-border-secondary/80"
             }`}
           >
             <svg
@@ -194,7 +195,7 @@ export default function DashboardSidebar({
               <span className="text-sm font-medium flex-1 text-left">
                 My Projects
               </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-bg-tertiary text-text-tertiary">
                 {projectCount}
               </span>
             </>
@@ -207,7 +208,7 @@ export default function DashboardSidebar({
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${
             activeSection === "support"
               ? "bg-gradient-to-r from-blue-600/20 to-violet-600/10 text-blue-400 border border-blue-500/25 shadow-lg shadow-blue-500/5"
-              : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              : "text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary/60"
           } ${isCollapsed ? "justify-center" : ""}`}
           title={isCollapsed ? "Support" : undefined}
         >
@@ -215,7 +216,7 @@ export default function DashboardSidebar({
             className={`flex items-center justify-center w-8 h-8 rounded-lg transition ${
               activeSection === "support"
                 ? "bg-blue-500/15"
-                : "bg-slate-800/80 group-hover:bg-slate-700/80"
+                : "bg-bg-tertiary/80 group-hover:bg-border-secondary/80"
             }`}
           >
             <svg
@@ -250,7 +251,7 @@ export default function DashboardSidebar({
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${
             activeSection === "settings"
               ? "bg-gradient-to-r from-blue-600/20 to-violet-600/10 text-blue-400 border border-blue-500/25 shadow-lg shadow-blue-500/5"
-              : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+              : "text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary/60"
           } ${isCollapsed ? "justify-center" : ""}`}
           title={isCollapsed ? "Settings" : undefined}
         >
@@ -258,7 +259,7 @@ export default function DashboardSidebar({
             className={`flex items-center justify-center w-8 h-8 rounded-lg transition ${
               activeSection === "settings"
                 ? "bg-blue-500/15"
-                : "bg-slate-800/80 group-hover:bg-slate-700/80"
+                : "bg-bg-tertiary/80 group-hover:bg-border-secondary/80"
             }`}
           >
             <svg
@@ -292,7 +293,7 @@ export default function DashboardSidebar({
             className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all group ${
               activeSection === "admin"
                 ? "bg-gradient-to-r from-amber-600/20 to-orange-600/10 text-amber-400 border border-amber-500/25 shadow-lg shadow-amber-500/5"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+                : "text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary/60"
             } ${isCollapsed ? "justify-center" : ""}`}
             title={isCollapsed ? "Admin" : undefined}
           >
@@ -300,7 +301,7 @@ export default function DashboardSidebar({
               className={`flex items-center justify-center w-8 h-8 rounded-lg transition ${
                 activeSection === "admin"
                   ? "bg-amber-500/15"
-                  : "bg-slate-800/80 group-hover:bg-slate-700/80"
+                  : "bg-bg-tertiary/80 group-hover:bg-border-secondary/80"
               }`}
             >
               <svg
@@ -324,12 +325,23 @@ export default function DashboardSidebar({
         )}
       </nav>
 
+      {/* Theme Toggle */}
+      {!isCollapsed ? (
+        <div className="px-4 pb-2">
+          <ThemeToggle className="w-full justify-center" size={16} />
+        </div>
+      ) : (
+        <div className="flex justify-center pb-2">
+          <ThemeToggle size={16} />
+        </div>
+      )}
+
       {/* Token Balances Card */}
       {!isCollapsed && (
         <div className="px-4 pb-4">
-          <div className="p-4 bg-gradient-to-br from-slate-800/80 to-slate-900/60 rounded-2xl border border-slate-700/40 space-y-4">
+          <div className="p-4 bg-gradient-to-br from-bg-tertiary/80 to-bg-secondary/60 rounded-2xl border border-border-secondary/40 space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
                 Token Balance
               </p>
             </div>
@@ -354,10 +366,10 @@ export default function DashboardSidebar({
                     </svg>
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400 leading-none">
+                    <p className="text-xs text-text-tertiary leading-none">
                       App Tokens
                     </p>
-                    <p className="text-[10px] text-slate-600 mt-0.5">
+                    <p className="text-[10px] text-text-faint mt-0.5">
                       2 per project
                     </p>
                   </div>
@@ -390,10 +402,10 @@ export default function DashboardSidebar({
                     </svg>
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400 leading-none">
+                    <p className="text-xs text-text-tertiary leading-none">
                       Integration
                     </p>
-                    <p className="text-[10px] text-slate-600 mt-0.5">
+                    <p className="text-[10px] text-text-faint mt-0.5">
                       3 per edit / 30 for auth
                     </p>
                   </div>
@@ -431,10 +443,10 @@ export default function DashboardSidebar({
       )}
 
       {/* User Profile */}
-      <div className="relative px-3 pb-4 pt-3 border-t border-slate-800/60">
+      <div className="relative px-3 pb-4 pt-3 border-t border-border-primary/60">
         <button
           onClick={() => setShowUserMenu(!showUserMenu)}
-          className={`w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-800/50 transition ${
+          className={`w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-bg-tertiary/50 transition ${
             isCollapsed ? "justify-center" : ""
           }`}
         >
@@ -442,7 +454,7 @@ export default function DashboardSidebar({
             <img
               src={user.photoURL}
               alt={user.displayName || "User"}
-              className="w-9 h-9 rounded-full ring-2 ring-slate-700/50"
+              className="w-9 h-9 rounded-full ring-2 ring-border-secondary/50"
             />
           ) : (
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center">
@@ -453,17 +465,17 @@ export default function DashboardSidebar({
           )}
           {!isCollapsed && (
             <div className="flex-1 text-left min-w-0">
-              <p className="text-sm font-medium text-white truncate">
+              <p className="text-sm font-medium text-text-primary truncate">
                 {user.displayName || "User"}
               </p>
-              <p className="text-[11px] text-slate-500 truncate">
+              <p className="text-[11px] text-text-muted truncate">
                 {user.email}
               </p>
             </div>
           )}
           {!isCollapsed && (
             <svg
-              className={`w-4 h-4 text-slate-500 transition-transform ${showUserMenu ? "rotate-180" : ""}`}
+              className={`w-4 h-4 text-text-muted transition-transform ${showUserMenu ? "rotate-180" : ""}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -481,7 +493,7 @@ export default function DashboardSidebar({
         {/* User Dropdown Menu */}
         {showUserMenu && (
           <div
-            className={`absolute bottom-full mb-2 bg-slate-800 border border-slate-700/60 rounded-xl shadow-2xl shadow-black/40 overflow-hidden ${
+            className={`absolute bottom-full mb-2 bg-bg-tertiary border border-border-secondary/60 rounded-xl shadow-2xl shadow-black/40 overflow-hidden ${
               isCollapsed ? "left-full ml-2" : "left-3 right-3"
             }`}
           >
@@ -491,7 +503,7 @@ export default function DashboardSidebar({
                   onSectionChange("settings");
                   setShowUserMenu(false);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-lg transition"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-text-secondary hover:text-text-primary hover:bg-border-secondary/60 rounded-lg transition"
               >
                 <svg
                   className="w-4 h-4"
@@ -508,7 +520,7 @@ export default function DashboardSidebar({
                 </svg>
                 Profile
               </button>
-              <div className="mx-2 my-1 border-t border-slate-700/40" />
+              <div className="mx-2 my-1 border-t border-border-secondary/40" />
               <button
                 onClick={async () => {
                   await signOut();

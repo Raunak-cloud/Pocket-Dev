@@ -1,14 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import {
-  User,
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut as firebaseSignOut,
-} from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db, googleProvider } from "@/lib/firebase";
+import { useUser, useClerk } from "@clerk/nextjs";
 
 export interface UserData {
   uid: string;
@@ -22,8 +15,15 @@ export interface UserData {
   integrationTokens: number;
 }
 
+export interface CompatibleUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+}
+
 interface AuthContextType {
-  user: User | null;
+  user: CompatibleUser | null;
   userData: UserData | null;
   loading: boolean;
   isNewUser: boolean;
@@ -35,110 +35,71 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-async function createOrUpdateUser(user: User): Promise<{ data: UserData; isNew: boolean }> {
-  if (!db) {
-    throw new Error("Firebase Firestore is not initialized");
-  }
-  const userRef = doc(db, "users", user.uid);
-  const userSnap = await getDoc(userRef);
-
-  if (!userSnap.exists()) {
-    // Create new user
-    const newUserData = {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL,
-      createdAt: serverTimestamp(),
-      lastLoginAt: serverTimestamp(),
-      projectCount: 0,
-      appTokens: 4,
-      integrationTokens: 10,
-    };
-    await setDoc(userRef, newUserData);
-    return {
-      data: {
-        ...newUserData,
-        createdAt: new Date(),
-        lastLoginAt: new Date(),
-      },
-      isNew: true,
-    };
-  } else {
-    // Update last login
-    await setDoc(userRef, { lastLoginAt: serverTimestamp() }, { merge: true });
-    const data = userSnap.data();
-    return {
-      data: {
-        uid: data.uid,
-        email: data.email,
-        displayName: data.displayName,
-        photoURL: data.photoURL,
-        createdAt: data.createdAt?.toDate() || null,
-        lastLoginAt: new Date(),
-        projectCount: data.projectCount || 0,
-        appTokens: data.appTokens || 0,
-        integrationTokens: data.integrationTokens || 0,
-      },
-      isNew: false,
-    };
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const { user: clerkUser, isLoaded: clerkLoaded, isSignedIn } = useUser();
+  const { openSignIn, signOut: clerkSignOut } = useClerk();
+
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isNewUser, setIsNewUser] = useState(false);
 
-  useEffect(() => {
-    // Check if auth is available (it may be null during SSR)
-    if (!auth) {
+  // Fetch user data from Prisma via API
+  const fetchUserData = useCallback(async () => {
+    if (!clerkUser || !isSignedIn) {
+      setUserData(null);
       setLoading(false);
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        try {
-          const result = await createOrUpdateUser(user);
-          setUserData(result.data);
-          if (result.isNew) {
-            setIsNewUser(true);
-          }
-        } catch (error) {
-          console.error("Error creating/updating user:", error);
+    try {
+      const response = await fetch('/api/user/me');
+      if (response.ok) {
+        const data = await response.json();
+        setUserData(data);
+
+        // Check if user was just created (based on createdAt being very recent)
+        const createdAt = new Date(data.createdAt);
+        const now = new Date();
+        const diffInMinutes = (now.getTime() - createdAt.getTime()) / 1000 / 60;
+
+        if (diffInMinutes < 1) {
+          setIsNewUser(true);
         }
       } else {
+        console.error('Failed to fetch user data');
         setUserData(null);
-        setIsNewUser(false);
       }
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      setUserData(null);
+    } finally {
       setLoading(false);
-    });
+    }
+  }, [clerkUser, isSignedIn]);
 
-    return () => unsubscribe();
-  }, []);
+  // Fetch user data when Clerk user changes
+  useEffect(() => {
+    if (!clerkLoaded) {
+      return;
+    }
+
+    if (isSignedIn && clerkUser) {
+      fetchUserData();
+    } else {
+      setUserData(null);
+      setIsNewUser(false);
+      setLoading(false);
+    }
+  }, [clerkLoaded, isSignedIn, clerkUser, fetchUserData]);
 
   const signInWithGoogle = async () => {
-    if (!auth) {
-      throw new Error("Firebase auth is not initialized");
-    }
-    const result = await signInWithPopup(auth, googleProvider);
-    if (result.user) {
-      const userResult = await createOrUpdateUser(result.user);
-      setUserData(userResult.data);
-      if (userResult.isNew) {
-        setIsNewUser(true);
-      }
-    }
+    await openSignIn({
+      redirectUrl: '/',
+    });
   };
 
   const signOut = async () => {
-    if (!auth) {
-      throw new Error("Firebase auth is not initialized");
-    }
-    await firebaseSignOut(auth);
+    await clerkSignOut();
     setUserData(null);
     setIsNewUser(false);
   };
@@ -148,35 +109,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUserData = useCallback(async () => {
-    if (!user || !db) return;
+    if (!clerkUser || !isSignedIn) return;
+
     try {
-      const userRef = doc(db, "users", user.uid);
-      // Force read from server to bypass cache and get latest data
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const data = userSnap.data();
-        console.log(`[AuthContext] Refreshing user data for ${user.uid}. AppTokens: ${data.appTokens || 0}, IntegrationTokens: ${data.integrationTokens || 0}`);
-        setUserData({
-          uid: data.uid,
-          email: data.email,
-          displayName: data.displayName,
-          photoURL: data.photoURL,
-          createdAt: data.createdAt?.toDate() || null,
-          lastLoginAt: data.lastLoginAt?.toDate() || null,
-          projectCount: data.projectCount || 0,
-          appTokens: data.appTokens || 0,
-          integrationTokens: data.integrationTokens || 0,
-        });
+      const response = await fetch('/api/user/me');
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`[AuthContext] Refreshing user data. AppTokens: ${data.appTokens || 0}, IntegrationTokens: ${data.integrationTokens || 0}`);
+        setUserData(data);
       } else {
-        console.error(`[AuthContext] User document not found for ${user.uid}`);
+        console.error('[AuthContext] Failed to refresh user data');
       }
     } catch (error) {
       console.error("Error refreshing user data:", error);
     }
-  }, [user]);
+  }, [clerkUser, isSignedIn]);
+
+  // Create a compatible user object for components expecting Firebase user
+  const compatibleUser: CompatibleUser | null = clerkUser ? {
+    uid: clerkUser.id,
+    email: clerkUser.emailAddresses[0]?.emailAddress || null,
+    displayName: clerkUser.fullName || clerkUser.username || null,
+    photoURL: clerkUser.imageUrl || null,
+  } : null;
 
   return (
-    <AuthContext.Provider value={{ user, userData, loading, isNewUser, clearNewUser, signInWithGoogle, signOut, refreshUserData }}>
+    <AuthContext.Provider value={{
+      user: compatibleUser,
+      userData,
+      loading,
+      isNewUser,
+      clearNewUser,
+      signInWithGoogle,
+      signOut,
+      refreshUserData
+    }}>
       {children}
     </AuthContext.Provider>
   );

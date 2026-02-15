@@ -1,0 +1,125 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model - migrated from Firebase Auth + Firestore users collection
+model User {
+  id                  String              @id @default(cuid())
+  clerkUserId         String              @unique // Clerk user ID
+  email               String?
+  displayName         String?
+  photoURL            String?
+  createdAt           DateTime            @default(now())
+  lastLoginAt         DateTime            @default(now())
+  projectCount        Int                 @default(0)
+  appTokens           Int                 @default(4) // Free tier: 4 app tokens
+  integrationTokens   Int                 @default(10) // Free tier: 10 integration tokens
+
+  // Relations
+  projects            Project[]
+  supportTickets      SupportTicket[]
+  tokenTransactions   TokenTransaction[]
+
+  @@index([clerkUserId])
+  @@map("users")
+}
+
+// Project model - migrated from Firestore projects collection
+model Project {
+  id              String    @id @default(cuid())
+  userId          String
+  prompt          String    @db.Text
+  files           Json      // Array of GeneratedFile objects
+  dependencies    Json      // Record<string, string>
+  lintReport      Json      // { passed: boolean, errors: number, warnings: number }
+  config          Json?     // WebsiteConfig
+  imageCache      Json?     // Record<string, string>
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deleted         Boolean   @default(false)
+
+  // Publishing fields
+  isPublished     Boolean   @default(false)
+  publishedUrl    String?
+  deploymentId    String?
+  publishedAt     DateTime?
+  customDomain    String?
+  tier            String?   // "free" | "premium"
+  paidAt          DateTime?
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, deleted])
+  @@map("projects")
+}
+
+// Support Ticket model - migrated from Firestore supportTickets collection
+model SupportTicket {
+  id                      String    @id @default(cuid())
+  userId                  String
+  userEmail               String
+  userName                String
+  category                String    // "project-issue" | "billing" | "feature-request" | "general"
+  subject                 String
+  description             String    @db.Text
+  projectId               String?
+  projectName             String?
+  status                  String    @default("open") // "open" | "in-progress" | "resolved"
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  adminResponse           String?   @db.Text
+  respondedAt             DateTime?
+  messages                Json?     // Array of TicketMessage objects
+  lastReadByUserAt        DateTime?
+  unreadAdminMessageCount Int       @default(0)
+
+  // Relations
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("support_tickets")
+}
+
+// Token Transaction model - migrated from Firestore tokenTransactions collection
+model TokenTransaction {
+  id            String    @id @default(cuid())
+  userId        String
+  type          String    // "deduction" | "credit" | "purchase"
+  tokenType     String    // "app" | "integration"
+  amount        Int       // Negative for deductions, positive for credits
+  balanceBefore Int
+  balanceAfter  Int
+  reason        String
+  projectId     String?
+  stripePaymentIntentId String? @unique // For idempotency in Stripe webhooks
+  createdAt     DateTime  @default(now())
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([stripePaymentIntentId])
+  @@map("token_transactions")
+}
+
+// Maintenance mode - singleton model for system state
+model Maintenance {
+  id        Int      @id @default(1)
+  enabled   Boolean  @default(false)
+  message   String?  @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("maintenance")
+}

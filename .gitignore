@@ -42,3 +42,8 @@ next-env.d.ts
 
 # mcp npm cache
 mcp/.cache/
+
+/lib/generated/prisma
+
+# clerk configuration (can include secrets)
+/.clerk/

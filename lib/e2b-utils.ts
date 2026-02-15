@@ -12,25 +12,18 @@ export interface E2BFiles {
   [path: string]: string;
 }
 
-/**
- * Detects if a project includes Firebase authentication
- */
 export function hasAuthentication(project: ReactProject): boolean {
-  return project.files.some(f =>
-    f.content.includes('firebase/auth') ||
-    f.content.includes('firebase/firestore') ||
-    f.content.includes('AuthProvider')
+  return project.files.some(
+    (f) =>
+      f.content.includes("@clerk/nextjs") ||
+      f.content.includes("useAuth(") ||
+      f.content.includes("AuthProvider"),
   );
 }
 
-/**
- * Prepares files for E2B with Next.js App Router structure
- * Includes all necessary config files for Next.js
- */
 export function prepareE2BFiles(project: ReactProject): E2BFiles {
   const files: E2BFiles = {};
 
-  // Config files that will be generated below — skip AI-generated duplicates
   const managedConfigFiles = new Set([
     "package.json",
     "tsconfig.json",
@@ -42,15 +35,15 @@ export function prepareE2BFiles(project: ReactProject): E2BFiles {
     "postcss.config.mjs",
   ]);
 
-  // Add all generated files from AI, excluding config files we manage ourselves
-  // But first, extract any extra dependencies from AI-generated package.json
   let aiDeps: Record<string, string> = {};
   const aiPkgFile = project.files.find((f) => f.path === "package.json");
   if (aiPkgFile) {
     try {
       const aiPkg = JSON.parse(aiPkgFile.content);
       aiDeps = aiPkg.dependencies || {};
-    } catch { /* ignore parse errors */ }
+    } catch {
+      // ignore malformed package
+    }
   }
 
   project.files.forEach((f) => {
@@ -58,38 +51,40 @@ export function prepareE2BFiles(project: ReactProject): E2BFiles {
     files[f.path] = f.content;
   });
 
-  // Add package.json with Next.js scripts — merge AI deps + project deps
-  files["package.json"] = JSON.stringify({
-    name: "generated-nextjs-app",
-    version: "0.1.0",
-    private: true,
-    scripts: {
-      dev: "next dev",
-      build: "next build",
-      start: "next start",
-      lint: "next lint"
+  files["package.json"] = JSON.stringify(
+    {
+      name: "generated-nextjs-app",
+      version: "0.1.0",
+      private: true,
+      scripts: {
+        dev: "next dev",
+        build: "next build",
+        start: "next start",
+        lint: "next lint",
+      },
+      dependencies: {
+        ...aiDeps,
+        ...project.dependencies,
+        next: "^14.0.0",
+        react: "^18.2.0",
+        "react-dom": "^18.2.0",
+        "lucide-react": "^0.294.0",
+        tailwindcss: "^3.3.0",
+        postcss: "^8.4.31",
+        autoprefixer: "^10.4.16",
+        ...(hasAuthentication(project) ? { "@clerk/nextjs": "^6.37.4" } : {}),
+      },
+      devDependencies: {
+        "@types/node": "^20",
+        "@types/react": "^18",
+        "@types/react-dom": "^18",
+        typescript: "^5",
+      },
     },
-    dependencies: {
-      ...aiDeps,
-      ...project.dependencies,
-      "next": "^14.0.0",
-      "react": "^18.2.0",
-      "react-dom": "^18.2.0",
-      "lucide-react": "^0.294.0",
-      ...(hasAuthentication(project) ? { "firebase": "^10.7.1" } : {}),
-    },
-    devDependencies: {
-      "@types/node": "^20",
-      "@types/react": "^18",
-      "@types/react-dom": "^18",
-      "typescript": "^5",
-      "tailwindcss": "^3.3.0",
-      "autoprefixer": "^10.4.16",
-      "postcss": "^8.4.31"
-    }
-  }, null, 2);
+    null,
+    2,
+  );
 
-  // Add next.config.js
   files["next.config.js"] = `/** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
@@ -100,11 +95,7 @@ const nextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'firebasestorage.googleapis.com',
-      },
-      {
-        protocol: 'https',
-        hostname: 'images.unsplash.com',
+        hostname: 'utfs.io',
       },
       {
         protocol: 'https',
@@ -115,8 +106,6 @@ const nextConfig = {
 };
 module.exports = nextConfig;`;
 
-  // Add tailwind.config.js with common custom color fallbacks
-  // (Gemini sometimes generates bg-primary/bg-secondary — these prevent build errors)
   files["tailwind.config.js"] = `/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -135,39 +124,40 @@ module.exports = {
   plugins: [],
 }`;
 
-  // Add postcss.config.js
   files["postcss.config.js"] = `module.exports = {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
   },
-}`;
+};`;
 
-  // Add tsconfig.json
-  files["tsconfig.json"] = JSON.stringify({
-    compilerOptions: {
-      lib: ["dom", "dom.iterable", "esnext"],
-      allowJs: true,
-      skipLibCheck: true,
-      strict: true,
-      noEmit: true,
-      esModuleInterop: true,
-      module: "esnext",
-      moduleResolution: "bundler",
-      resolveJsonModule: true,
-      isolatedModules: true,
-      jsx: "preserve",
-      incremental: true,
-      plugins: [{ name: "next" }],
-      paths: {
-        "@/*": ["./*"]
-      }
+  files["tsconfig.json"] = JSON.stringify(
+    {
+      compilerOptions: {
+        lib: ["dom", "dom.iterable", "esnext"],
+        allowJs: true,
+        skipLibCheck: true,
+        strict: true,
+        noEmit: true,
+        esModuleInterop: true,
+        module: "esnext",
+        moduleResolution: "bundler",
+        resolveJsonModule: true,
+        isolatedModules: true,
+        jsx: "preserve",
+        incremental: true,
+        plugins: [{ name: "next" }],
+        paths: {
+          "@/*": ["./*"],
+        },
+      },
+      include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+      exclude: ["node_modules"],
     },
-    include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-    exclude: ["node_modules"]
-  }, null, 2);
+    null,
+    2,
+  );
 
-  // Add globals.css (if not already generated by AI)
   if (!files["app/globals.css"]) {
     files["app/globals.css"] = `@tailwind base;
 @tailwind components;
@@ -198,7 +188,6 @@ body {
 }`;
   }
 
-  // Add global error handler to catch ChunkLoadError and auto-reload
   if (!files["app/global-error.tsx"]) {
     files["app/global-error.tsx"] = `"use client";
 import { useEffect } from "react";
@@ -219,123 +208,29 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
 }`;
   }
 
-  // Check if auth is present and add setup guide
-  const hasFirebaseAuth = project.files.some(f =>
-    f.content.includes('firebase/auth') ||
-    f.content.includes('firebase/firestore') ||
-    f.content.includes('AuthProvider')
+  const hasAuthIntegration = project.files.some(
+    (f) => f.content.includes("@clerk/nextjs") || f.content.includes("AuthProvider"),
   );
+  if (hasAuthIntegration) {
+    files["README.md"] = `# Your Generated Next.js App
 
-  if (hasFirebaseAuth) {
-    files["README.md"] = `# 🎉 Your Generated Next.js App
+This app was generated by Pocket Dev.
 
-This app was generated by **Pocket Dev** and includes production-ready features!
-
-## ✨ Features
-
-- ⚡ **Next.js 14** with App Router
-- 🎨 **Tailwind CSS** for styling
-- 🔐 **Firebase Authentication** (Pre-configured!)
-- 🔒 **Multi-Tenancy** (Isolated user authentication per app)
-- 🗄️ **Firestore Database** (Real-time data sync)
-- 📦 **Firebase Storage** (File uploads ready)
-
-## 🔐 Authentication - Zero Setup Required!
-
-Your app comes with **fully configured Firebase authentication** - no manual setup needed!
-
-### What's Included:
-
-✅ **Email/Password Authentication**
-✅ **Google Sign-In** (OAuth ready)
-✅ **User Profiles** (/profile page)
-✅ **Protected Routes** (automatic auth checks)
-✅ **Firestore Database** (user data scoped per user)
-
-### How It Works:
-
-1. **Sign Up**: Visit \`/sign-up\` to create an account
-2. **Sign In**: Visit \`/sign-in\` to log in
-3. **Profile**: View your profile at \`/profile\`
-4. **Sign Out**: Click the "Sign Out" button in the navbar
-
-### Data Storage:
-
-All user data is automatically stored in Firestore under:
-\`\`\`
-users/{userId}/
-  ├── cart/
-  ├── preferences/
-  ├── orders/
-  └── [other collections]/
-\`\`\`
-
-Data is **automatically synced** across devices and sessions!
-
-## 🚀 Getting Started
-
-1. Click the **"Sign Up"** link in the navbar
-2. Create an account with email or Google
-3. Start using your app immediately!
-
-## 📝 Adding More Features
-
-### Example: Add a Shopping Cart
-
-\`\`\`typescript
-import { useAuth } from '@/app/components/AuthProvider';
-import { db } from '@/lib/firebase-config';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-
-function useCart() {
-  const { user } = useAuth();
-  const [cart, setCart] = useState([]);
-
-  useEffect(() => {
-    if (!user) return;
-
-    const unsubscribe = onSnapshot(
-      doc(db, 'users', user.uid, 'cart', 'items'),
-      (doc) => setCart(doc.data()?.items || [])
-    );
-
-    return () => unsubscribe();
-  }, [user]);
-
-  return cart;
-}
-\`\`\`
-
-## 🎨 Customization
-
-- **Styling**: Edit Tailwind classes in components
-- **Auth Pages**: Customize \`app/sign-in/page.tsx\` and \`app/sign-up/page.tsx\`
-- **Profile**: Edit \`app/profile/page.tsx\`
-- **Navbar**: Modify \`app/components/Navbar.tsx\`
-
-## 📚 Documentation
-
-- [Firebase Auth Docs](https://firebase.google.com/docs/auth)
-- [Firestore Docs](https://firebase.google.com/docs/firestore)
-- [Next.js Docs](https://nextjs.org/docs)
-- [Tailwind CSS Docs](https://tailwindcss.com/docs)
-
----
-
-**Generated with ❤️ by [Pocket Dev](https://pocket-dev.com)**
+## Stack
+- Next.js App Router
+- Tailwind CSS
+- Clerk Authentication
+- Prisma + Neon
+- UploadThing (for file uploads)
 `;
   }
 
   return files;
 }
 
-/**
- * Computes the difference between old and new files
- * Returns arrays of files to write and files to delete
- */
 export function computeFileDiff(
   oldFiles: Record<string, string>,
-  newFiles: Record<string, string>
+  newFiles: Record<string, string>,
 ): {
   toWrite: Array<{ path: string; data: string }>;
   toDelete: string[];
@@ -343,14 +238,12 @@ export function computeFileDiff(
   const toWrite: Array<{ path: string; data: string }> = [];
   const toDelete: string[] = [];
 
-  // Find files that are new or changed
   for (const [path, content] of Object.entries(newFiles)) {
     if (oldFiles[path] !== content) {
       toWrite.push({ path, data: content });
     }
   }
 
-  // Find files that were deleted
   for (const path of Object.keys(oldFiles)) {
     if (!(path in newFiles)) {
       toDelete.push(path);

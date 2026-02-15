@@ -1,6 +1,7 @@
 "use client";
 
 import Logo from "./Logo";
+import CodeEditorLoading from "./CodeEditorLoading";
 
 interface GenerationProgressProps {
   prompt: string;
@@ -87,6 +88,33 @@ const EDITING_STEPS = [
   },
 ];
 
+// Map progress messages to appropriate icons
+function getIconForMessage(message: string): string {
+  const msg = message.toLowerCase();
+
+  if (msg.includes("analyz") || msg.includes("📝")) {
+    return "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z";
+  }
+  if (msg.includes("generat") || msg.includes("ai") || msg.includes("🤖")) {
+    return "M13 10V3L4 14h7v7l9-11h-7z";
+  }
+  if (msg.includes("prepar") || msg.includes("file") || msg.includes("📦")) {
+    return "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z";
+  }
+  if (msg.includes("check") || msg.includes("lint") || msg.includes("quality") || msg.includes("🔍")) {
+    return "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z";
+  }
+  if (msg.includes("finali") || msg.includes("complet") || msg.includes("✅")) {
+    return "M5 13l4 4L19 7";
+  }
+  if (msg.includes("sav") || msg.includes("💾")) {
+    return "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4";
+  }
+
+  // Default icon
+  return "M13 10V3L4 14h7v7l9-11h-7z";
+}
+
 export default function GenerationProgress({
   prompt,
   progressMessages,
@@ -95,12 +123,30 @@ export default function GenerationProgress({
   onToggleMinimize,
 }: GenerationProgressProps) {
   const isEditMode = prompt.toLowerCase().startsWith("editing:");
-  const steps = isEditMode ? EDITING_STEPS : GENERATION_STEPS;
+
+  // Use actual progress messages if available, otherwise fallback to hardcoded steps
+  const useRealProgress = progressMessages.length > 0;
+  const steps = useRealProgress
+    ? progressMessages.map((msg, i) => ({
+        id: `step-${i}`,
+        label: msg,
+        icon: getIconForMessage(msg)
+      }))
+    : (isEditMode ? EDITING_STEPS : GENERATION_STEPS);
+
   const currentStep = progressMessages.length;
-  const progress = Math.min((currentStep / steps.length) * 100, 95);
+  const progress = Math.min((currentStep / 7) * 100, 95);
   const cleanPrompt = isEditMode
     ? prompt.substring("Editing:".length).trim()
     : prompt;
+
+  // Check if we're currently installing dependencies
+  const isInstallingDeps = progressMessages.some(msg =>
+    msg.toLowerCase().includes("install") && msg.toLowerCase().includes("dependencies")
+  );
+  const latestMessage = progressMessages[progressMessages.length - 1] || "";
+  const showCodeEditor = latestMessage.toLowerCase().includes("install") &&
+                         latestMessage.toLowerCase().includes("dependencies");
 
   const getAppType = () => {
     const lp = cleanPrompt.toLowerCase();
@@ -122,32 +168,32 @@ export default function GenerationProgress({
     return (
       <button
         onClick={onToggleMinimize}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 bg-slate-900/90 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl shadow-blue-500/10 hover:border-blue-500/30 hover:shadow-blue-500/20 transition-all duration-300 group"
+        className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 bg-bg-secondary/90 backdrop-blur-xl border border-border-secondary/50 rounded-2xl shadow-2xl shadow-blue-500/10 hover:border-blue-500/30 hover:shadow-blue-500/20 transition-all duration-300 group"
       >
         <div className="relative">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 flex items-center justify-center ring-1 ring-white/5">
             <Logo size={24} animate />
           </div>
-          <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse ring-2 ring-slate-900" />
+          <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse ring-2 ring-bg-secondary" />
         </div>
         <div className="text-left">
-          <p className="text-sm font-medium text-white">
+          <p className="text-sm font-medium text-text-primary">
             {isEditMode ? "Editing App" : `Building ${getAppType()}`}
           </p>
           <div className="flex items-center gap-2 mt-0.5">
-            <div className="w-24 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+            <div className="w-24 h-1.5 bg-border-secondary/50 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-blue-500 to-violet-500 rounded-full transition-all duration-500"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <span className="text-xs text-slate-400 tabular-nums">
+            <span className="text-xs text-text-tertiary tabular-nums">
               {Math.round(progress)}%
             </span>
           </div>
         </div>
         <svg
-          className="w-4 h-4 text-slate-500 group-hover:text-blue-400 transition-colors ml-1"
+          className="w-4 h-4 text-text-muted group-hover:text-blue-400 transition-colors ml-1"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -172,7 +218,7 @@ export default function GenerationProgress({
       </div>
 
       {/* Glass card */}
-      <div className="relative w-full h-full flex flex-col bg-slate-900/70 backdrop-blur-2xl border border-slate-700/40 shadow-2xl shadow-black/20 overflow-hidden">
+      <div className="relative w-full h-full flex flex-col bg-bg-secondary/70 backdrop-blur-2xl border border-border-secondary/40 shadow-2xl shadow-black/20 overflow-hidden">
         {/* Shimmer border effect */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div
@@ -189,15 +235,15 @@ export default function GenerationProgress({
           {/* Logo with glow */}
           <div className="relative inline-flex mb-4">
             <div className="absolute inset-0 blur-xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-25 scale-150" />
-            <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-slate-800/80 to-slate-800/40 ring-1 ring-white/[0.08]">
+            <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-bg-tertiary/80 to-bg-tertiary/40 ring-1 ring-white/[0.08]">
               <Logo size={40} animate />
             </div>
           </div>
 
-          <h2 className="text-xl font-bold text-white tracking-tight mb-2">
+          <h2 className="text-xl font-bold text-text-primary tracking-tight mb-2">
             {isEditMode ? "Editing your app" : `Building ${getAppType()}`}
           </h2>
-          <p className="text-slate-400 text-sm leading-relaxed max-w-md mx-auto line-clamp-2">
+          <p className="text-text-tertiary text-sm leading-relaxed max-w-md mx-auto line-clamp-2">
             {cleanPrompt}
           </p>
         </div>
@@ -205,11 +251,11 @@ export default function GenerationProgress({
         {/* Progress section */}
         <div className="px-8 pb-5">
           <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+            <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
               Progress
             </span>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-text-muted">
                 {isEditMode ? "5-7 min" : "~5-7 min"}
               </span>
               <span className="text-sm font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
@@ -219,7 +265,7 @@ export default function GenerationProgress({
           </div>
 
           {/* Fancy progress bar */}
-          <div className="relative h-2.5 bg-slate-800/80 rounded-full overflow-hidden ring-1 ring-white/[0.04]">
+          <div className="relative h-2.5 bg-bg-tertiary/80 rounded-full overflow-hidden ring-1 ring-white/[0.04]">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-500 rounded-full transition-all duration-700 ease-out"
               style={{ width: `${progress}%` }}
@@ -238,7 +284,7 @@ export default function GenerationProgress({
         </div>
 
         {/* Divider */}
-        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
+        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
 
         {/* Steps list */}
         <div className="flex-1 px-5 py-4 overflow-y-auto">
@@ -259,7 +305,7 @@ export default function GenerationProgress({
                 {i < steps.length - 1 && (
                   <div
                     className={`absolute left-[27px] top-[36px] w-px h-[calc(100%-20px)] transition-colors duration-500 ${
-                      isCompleted ? "bg-emerald-500/30" : "bg-slate-700/40"
+                      isCompleted ? "bg-emerald-500/30" : "bg-border-secondary/40"
                     }`}
                   />
                 )}
@@ -287,8 +333,8 @@ export default function GenerationProgress({
                       <div className="w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
                     </div>
                   ) : (
-                    <div className="w-6 h-6 rounded-full bg-slate-800/60 flex items-center justify-center ring-1 ring-slate-700/40">
-                      <div className="w-2 h-2 bg-slate-600 rounded-full" />
+                    <div className="w-6 h-6 rounded-full bg-bg-tertiary/60 flex items-center justify-center ring-1 ring-border-secondary/40">
+                      <div className="w-2 h-2 bg-text-muted rounded-full" />
                     </div>
                   )}
                 </div>
@@ -300,7 +346,7 @@ export default function GenerationProgress({
                       ? "text-emerald-500/50"
                       : isCurrent
                         ? "text-blue-400"
-                        : "text-slate-600"
+                        : "text-text-muted"
                   }`}
                 >
                   <svg
@@ -322,10 +368,10 @@ export default function GenerationProgress({
                 <span
                   className={`text-[15px] transition-all duration-300 ${
                     isCompleted
-                      ? "text-slate-500"
+                      ? "text-text-muted"
                       : isCurrent
-                        ? "text-white font-medium"
-                        : "text-slate-500/70"
+                        ? "text-text-primary font-medium"
+                        : "text-text-muted/70"
                   }`}
                 >
                   {step.label}
@@ -368,14 +414,14 @@ export default function GenerationProgress({
         </div>
 
         {/* Divider */}
-        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />
+        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
 
         {/* Actions */}
         <div className="px-8 py-4 flex items-center justify-center gap-3">
           {onToggleMinimize && (
             <button
               onClick={onToggleMinimize}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-700/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-text-tertiary hover:text-text-primary bg-bg-tertiary/40 hover:bg-border-secondary/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
             >
               <svg
                 className="w-3.5 h-3.5"
@@ -428,6 +474,9 @@ export default function GenerationProgress({
           }
         }
       `}</style>
+
+      {/* Code Editor Loading Animation */}
+      {showCodeEditor && <CodeEditorLoading message={latestMessage} />}
     </div>
   );
 }

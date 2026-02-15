@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import { auth } from "@clerk/nextjs/server";
+import { prisma } from "@/lib/prisma";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,12 +15,20 @@ export async function POST(request: NextRequest) {
     }
 
     const stripe = new Stripe(stripeKey);
-    const body = await request.json();
-    const { userId, userEmail, tokenType, quantity } = body;
-
-    if (!userId || !tokenType || !quantity) {
+    const { userId: clerkUserId } = await auth();
+    if (!clerkUserId) {
       return NextResponse.json(
-        { error: "Missing required fields: userId, tokenType, quantity" },
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const body = await request.json();
+    const { userEmail, tokenType, quantity } = body;
+
+    if (!tokenType || !quantity) {
+      return NextResponse.json(
+        { error: "Missing required fields: tokenType, quantity" },
         { status: 400 }
       );
     }
@@ -34,6 +44,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Quantity must be between 1 and 1000" },
         { status: 400 }
+      );
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+      select: { id: true, email: true },
+    });
+
+    if (!user) {
+      return NextResponse.json(
+        { error: "User not found" },
+        { status: 404 }
       );
     }
 
@@ -69,10 +91,12 @@ export async function POST(request: NextRequest) {
       mode: "payment",
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=success&session_id={CHECKOUT_SESSION_ID}&tokenType=${tokenType}&amount=${tokensToCredit}`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=cancelled`,
-      customer_email: userEmail,
+      client_reference_id: user.id,
+      customer_email: user.email || userEmail || undefined,
       metadata: {
         type: "token_purchase",
-        userId,
+        userId: user.id,
+        clerkUserId,
         tokenType,
         tokensToCredit: String(tokensToCredit),
       },

@@ -12,7 +12,7 @@ import type {
   WebsiteConfig,
   TemplateId,
   UploadedImage,
-} from "./templates/types";
+} from "./website-config-types";
 
 export type { UploadedImage };
 
@@ -195,8 +195,8 @@ export async function generateConfig(
 
   if (images && images.length > 0) {
     const uploadedUrls = images
-      .filter((img) => img.downloadUrl)
-      .map((img) => img.downloadUrl);
+      .filter((img) => img.url)
+      .map((img) => img.url);
     if (uploadedUrls.length > 0) {
       userPrompt += `\n\nThe user has uploaded ${uploadedUrls.length} image(s). Reference these in the design.`;
     }
@@ -240,7 +240,7 @@ export async function generateConfig(
   const config = validateAndNormalize(raw);
 
   console.log(
-    `📋 Validated config: templateId=${config.templateId}, sections=${config.sections.length}, pages=${config.pages.length}`,
+    `📋 Validated config: templateId=${config.templateId}, components=${Object.keys(config.components || {}).length}, pages=${Object.keys(config.pages).length}`,
   );
   logCustomSectionStats(config);
 
@@ -307,30 +307,14 @@ Return the UPDATED configuration JSON with the requested changes applied. Keep e
 // ── Custom section stats ─────────────────────────────────────────
 
 function logCustomSectionStats(config: WebsiteConfig): void {
-  const allSections = [
-    ...config.sections,
-    ...config.pages.flatMap((p) => p.sections),
-  ];
-  const customSections = allSections.filter((s) => s.type === "custom");
-
-  if (customSections.length === 0) return;
-
-  let totalChars = 0;
-  let totalLines = 0;
-  for (const s of customSections) {
-    const code = (s as any).code || "";
-    totalChars += code.length;
-    totalLines += code.split("\n").length;
-  }
-
-  console.log(
-    `🧩 Custom sections: ${customSections.length} component(s), ${totalChars} chars, ~${totalLines} lines of code`,
-  );
-  for (const s of customSections) {
-    const code = (s as any).code || "";
-    console.log(
-      `   → ${(s as any).componentName}: ${code.length} chars, ${code.split("\n").length} lines`,
-    );
+  // Log component stats (WebsiteConfig doesn't have sections property)
+  const components = config.components || {};
+  const componentCount = Object.keys(components).length;
+  if (componentCount > 0) {
+    console.log(`🧩 Components configured: ${componentCount}`);
+    Object.keys(components).forEach((key) => {
+      console.log(`   → ${key}`);
+    });
   }
 }
 
@@ -370,7 +354,7 @@ const VALID_TAILWIND_COLORS = new Set([
   "rose",
 ]);
 
-function validateAndNormalize(raw: any): WebsiteConfig {
+function validateAndNormalize(raw: any): any {
   if (!raw || typeof raw !== "object") {
     throw new Error("Config is not an object");
   }
@@ -491,8 +475,6 @@ function validateAndNormalize(raw: any): WebsiteConfig {
       primary,
       secondary,
       accent,
-      background,
-      fontStyle,
     },
     nav: {
       items: navItems,

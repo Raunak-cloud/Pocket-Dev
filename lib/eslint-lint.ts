@@ -1,5 +1,5 @@
 import { ESLint } from "eslint";
-import type { CustomSection, ConfigSection } from "./templates/types";
+import type { CustomSection, ConfigSection } from "./website-config-types";
 
 /**
  * Rules kept in sync with mcp/eslint-server.ts.

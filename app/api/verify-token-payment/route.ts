@@ -1,20 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-
-function getAdminDb() {
-  if (getApps().length === 0) {
-    initializeApp({
-      credential: cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-      }),
-    });
-  }
-  return getFirestore();
-}
+import { prisma } from "@/lib/prisma";
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,78 +28,120 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Not a token purchase session" }, { status: 400 });
     }
 
-    const { userId, tokenType, tokensToCredit } = metadata;
+    const { userId, clerkUserId, tokenType, tokensToCredit } = metadata;
     if (!userId || !tokenType || !tokensToCredit) {
       return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
     }
 
-    const adminDb = getAdminDb();
     const tokensAmount = parseInt(tokensToCredit, 10);
-    const tokenField = tokenType === "app" ? "appTokens" : "integrationTokens";
+    if (!Number.isFinite(tokensAmount) || tokensAmount <= 0) {
+      return NextResponse.json({ error: "Invalid token amount" }, { status: 400 });
+    }
+    if (tokenType !== "app" && tokenType !== "integration") {
+      return NextResponse.json({ error: "Invalid token type" }, { status: 400 });
+    }
 
-    // Use session ID as document ID so the idempotency check is inside the transaction
+    // Use Prisma transaction with idempotency check
     let alreadyCredited = false;
     let finalBalances = { appTokens: 0, integrationTokens: 0 };
 
-    await adminDb.runTransaction(async (transaction) => {
-      const txRef = adminDb.collection("tokenTransactions").doc(session.id);
-      const txDoc = await transaction.get(txRef);
+    await prisma.$transaction(async (tx) => {
+      // Check if this payment has already been processed (idempotency)
+      const existingTx = await tx.tokenTransaction.findFirst({
+        where: { stripePaymentIntentId: session.id },
+      });
 
-      if (txDoc.exists) {
+      if (existingTx) {
         alreadyCredited = true;
+        // Fetch current user balances
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+          select: { appTokens: true, integrationTokens: true },
+        });
+
+        if (!user) {
+          const byClerkId = await tx.user.findUnique({
+            where: { clerkUserId: clerkUserId || userId },
+            select: { appTokens: true, integrationTokens: true },
+          });
+          if (byClerkId) {
+            finalBalances = {
+              appTokens: byClerkId.appTokens,
+              integrationTokens: byClerkId.integrationTokens,
+            };
+            return;
+          }
+        }
+
+        if (user) {
+          finalBalances = {
+            appTokens: user.appTokens,
+            integrationTokens: user.integrationTokens,
+          };
+        }
         return;
       }
 
-      const userRef = adminDb.collection("users").doc(userId);
-      const userDoc = await transaction.get(userRef);
+      // Get user
+      let user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { id: true, appTokens: true, integrationTokens: true },
+      });
 
-      const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
+      if (!user) {
+        user = await tx.user.findUnique({
+          where: { clerkUserId: clerkUserId || userId },
+          select: { id: true, appTokens: true, integrationTokens: true },
+        });
+      }
+
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      const currentBalance = tokenType === "app" ? user.appTokens : user.integrationTokens;
       const newBalance = currentBalance + tokensAmount;
 
-      // Get current balances for both token types
-      const currentAppTokens = userDoc.exists ? (userDoc.data()?.appTokens || 0) : 0;
-      const currentIntegrationTokens = userDoc.exists ? (userDoc.data()?.integrationTokens || 0) : 0;
+      // Update user balance
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          [tokenType === "app" ? "appTokens" : "integrationTokens"]: newBalance,
+        },
+      });
+
+      // Record transaction
+      await tx.tokenTransaction.create({
+        data: {
+          userId: user.id,
+          type: "purchase",
+          tokenType,
+          amount: tokensAmount,
+          balanceBefore: currentBalance,
+          balanceAfter: newBalance,
+          reason: `Purchased ${tokensAmount} ${tokenType} tokens`,
+          stripePaymentIntentId: session.id,
+        },
+      });
 
       // Calculate final balances
       if (tokenType === "app") {
         finalBalances = {
           appTokens: newBalance,
-          integrationTokens: currentIntegrationTokens,
+          integrationTokens: user.integrationTokens,
         };
       } else {
         finalBalances = {
-          appTokens: currentAppTokens,
+          appTokens: user.appTokens,
           integrationTokens: newBalance,
         };
       }
-
-      transaction.set(userRef, { [tokenField]: newBalance }, { merge: true });
-
-      transaction.set(txRef, {
-        userId,
-        type: "purchase",
-        tokenType,
-        amount: tokensAmount,
-        balanceBefore: currentBalance,
-        balanceAfter: newBalance,
-        reason: `Purchased ${tokensAmount} ${tokenType} tokens`,
-        stripeSessionId: session.id,
-        createdAt: FieldValue.serverTimestamp(),
-      });
     });
 
     if (alreadyCredited) {
-      console.log(`[verify-token-payment] Tokens already credited for session ${session.id}, fetching current balance`);
-      // If already credited, fetch the actual current balance
-      const userDoc = await adminDb.collection("users").doc(userId).get();
-      if (userDoc.exists) {
-        finalBalances = {
-          appTokens: userDoc.data()?.appTokens || 0,
-          integrationTokens: userDoc.data()?.integrationTokens || 0,
-        };
-      }
+      console.log(`[verify-token-payment] Tokens already credited for session ${session.id}`);
     } else {
-      console.log(`[verify-token-payment] Successfully credited ${tokensAmount} ${tokenType} tokens to user ${userId}. New ${tokenType} balance: ${finalBalances[tokenField]}`);
+      console.log(`[verify-token-payment] Successfully credited ${tokensAmount} ${tokenType} tokens for session ${session.id}`);
     }
 
     return NextResponse.json({

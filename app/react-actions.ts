@@ -1,13 +1,6 @@
 "use server";
 
-import { generateProject, editProject } from "@/lib/generation-router";
-
-export async function generateReact(
-  prompt: string,
-  images?: { name: string; type: string; dataUrl: string; downloadUrl?: string }[]
-) {
-  return generateProject(prompt, images);
-}
+import { editProject } from "@/lib/generation-router";
 
 export async function editReact(
   editPrompt: string,
@@ -15,5 +8,6 @@ export async function editReact(
   currentFiles: { path: string; content: string }[],
   imageCache?: Record<string, string>,
 ) {
-  return editProject(editPrompt, currentConfig, currentFiles, undefined, imageCache);
+  // imageCache is deprecated and no longer used
+  return editProject(editPrompt, currentConfig, currentFiles);
 }

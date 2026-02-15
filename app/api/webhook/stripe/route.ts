@@ -1,20 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-
-function getAdminDb() {
-  if (getApps().length === 0) {
-    initializeApp({
-      credential: cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-      }),
-    });
-  }
-  return getFirestore();
-}
+import { prisma } from "@/lib/prisma";
+import { creditTokens } from "@/lib/db-utils";
 
 export async function POST(request: NextRequest) {
   const stripeKey = process.env.STRIPE_SECRET_KEY;
@@ -27,145 +14,86 @@ export async function POST(request: NextRequest) {
   const stripe = new Stripe(stripeKey);
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
-
   if (!signature) {
     return NextResponse.json({ error: "No signature" }, { status: 400 });
   }
 
   let event: Stripe.Event;
-
   try {
-    event = stripe.webhooks.constructEvent(
-      body,
-      signature,
-      webhookSecret
-    );
+    event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (err) {
-    console.error("Webhook signature verification failed:", err);
-    return NextResponse.json(
-      { error: "Invalid signature" },
-      { status: 400 }
-    );
+    console.error("[stripe webhook] Signature verification failed:", err);
+    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  // Handle the event
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const metadata = session.metadata || {};
+  if (event.type !== "checkout.session.completed") {
+    return NextResponse.json({ received: true });
+  }
 
-    // Handle token purchase
+  const session = event.data.object as Stripe.Checkout.Session;
+  const metadata = session.metadata || {};
+
+  try {
     if (metadata.type === "token_purchase") {
-      const { userId, tokenType, tokensToCredit } = metadata;
+      const userId = metadata.userId;
+      const clerkUserId = metadata.clerkUserId;
+      const tokenType = metadata.tokenType as "app" | "integration";
+      const tokensToCredit = Number.parseInt(metadata.tokensToCredit || "0", 10);
 
-      if (!userId || !tokenType || !tokensToCredit) {
-        console.error("[webhook] Missing token purchase metadata:", metadata);
+      if (!userId || !tokenType || !Number.isFinite(tokensToCredit) || tokensToCredit <= 0) {
         return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
       }
-
-      try {
-        const adminDb = getAdminDb();
-        const tokensAmount = parseInt(tokensToCredit, 10);
-        const tokenField = tokenType === "app" ? "appTokens" : "integrationTokens";
-
-        // Idempotency check INSIDE the transaction using session ID as doc ID
-        let alreadyCredited = false;
-
-        await adminDb.runTransaction(async (transaction) => {
-          const txRef = adminDb.collection("tokenTransactions").doc(session.id);
-          const txDoc = await transaction.get(txRef);
-
-          if (txDoc.exists) {
-            alreadyCredited = true;
-            console.log(`[webhook] Transaction already exists for session ${session.id}, skipping credit`);
-            return;
-          }
-
-          const userRef = adminDb.collection("users").doc(userId);
-          const userDoc = await transaction.get(userRef);
-
-          const currentBalance = userDoc.exists ? (userDoc.data()?.[tokenField] || 0) : 0;
-          const newBalance = currentBalance + tokensAmount;
-
-          console.log(`[webhook] Crediting ${tokensAmount} ${tokenType} tokens to user ${userId}. Balance: ${currentBalance} -> ${newBalance}`);
-
-          transaction.set(userRef, { [tokenField]: newBalance }, { merge: true });
-
-          transaction.set(txRef, {
-            userId,
-            type: "purchase",
-            tokenType,
-            amount: tokensAmount,
-            balanceBefore: currentBalance,
-            balanceAfter: newBalance,
-            reason: `Purchased ${tokensAmount} ${tokenType} tokens`,
-            stripeSessionId: session.id,
-            createdAt: FieldValue.serverTimestamp(),
-          });
-        });
-
-        if (alreadyCredited) {
-          console.log(`[webhook] Token purchase already processed for session ${session.id}, no changes made`);
-        } else {
-          console.log(`[webhook] Successfully credited ${tokensAmount} ${tokenType} tokens to user ${userId}`);
-        }
-      } catch (error) {
-        console.error("[webhook] Error crediting tokens:", error);
-        return NextResponse.json(
-          { error: "Failed to credit tokens" },
-          { status: 500 }
-        );
+      if (tokenType !== "app" && tokenType !== "integration") {
+        return NextResponse.json({ error: "Invalid token type" }, { status: 400 });
       }
+
+      let targetUserId: string | null = null;
+
+      const byId = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      if (byId) {
+        targetUserId = byId.id;
+      } else {
+        const byClerkId = await prisma.user.findUnique({
+          where: { clerkUserId: clerkUserId || userId },
+          select: { id: true },
+        });
+        targetUserId = byClerkId?.id || null;
+      }
+
+      if (!targetUserId) {
+        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      }
+
+      await creditTokens(
+        targetUserId,
+        tokensToCredit,
+        tokenType,
+        `Purchased ${tokensToCredit} ${tokenType} tokens`,
+        session.id,
+      );
     }
 
-    // Handle premium plan upgrade
-    if (metadata.type === "premium_upgrade") {
-      const { projectId, userId } = metadata;
-
-      if (!projectId || !userId) {
-        console.error("[webhook] Missing premium upgrade metadata:", metadata);
-        return NextResponse.json({ error: "Missing metadata" }, { status: 400 });
-      }
-
-      try {
-        const adminDb = getAdminDb();
-        await adminDb.collection("projects").doc(projectId).update({
-          tier: "premium",
-          paidAt: new Date(),
-          stripeSessionId: session.id,
-          stripeSubscriptionId: session.subscription,
+    if (
+      metadata.type === "premium_upgrade" ||
+      (metadata.projectId && metadata.userId)
+    ) {
+      const projectId = metadata.projectId;
+      if (projectId) {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: {
+            tier: "premium",
+            paidAt: new Date(),
+          },
         });
-
-        console.log(`[webhook] Project ${projectId} upgraded to premium for user ${userId}`);
-      } catch (error) {
-        console.error("[webhook] Error upgrading project to premium:", error);
-        return NextResponse.json(
-          { error: "Failed to upgrade project" },
-          { status: 500 }
-        );
       }
     }
-
-    // Legacy: Handle project upgrade (kept for existing sessions)
-    const { projectId, userId } = metadata;
-    if (projectId && userId && metadata.type !== "token_purchase" && metadata.type !== "premium_upgrade") {
-      try {
-        const adminDb = getAdminDb();
-        await adminDb.collection("projects").doc(projectId).update({
-          tier: "premium",
-          paidAt: new Date(),
-          stripeSessionId: session.id,
-          stripePaymentIntentId: session.payment_intent,
-        });
-
-        console.log(`Project ${projectId} upgraded to premium`);
-      } catch (error) {
-        console.error("Error updating project tier:", error);
-        return NextResponse.json(
-          { error: "Failed to update project" },
-          { status: 500 }
-        );
-      }
-    }
+  } catch (error) {
+    console.error("[stripe webhook] Processing error:", error);
+    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });

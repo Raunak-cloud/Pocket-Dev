@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import type { User } from "firebase/auth";
 import type { ReactProject } from "@/app/types";
+import type { CompatibleUser } from "@/app/contexts/AuthContext";
 
 interface UsePublishingProps {
-  user: User | null;
+  user: CompatibleUser | null;
   currentProjectId: string | null;
   project: ReactProject | null;
   generationPrompt: string;
@@ -59,14 +57,18 @@ export function usePublishing({
       const publishURLFromResponse = data.url;
       const newDeploymentId = data.deploymentId;
 
-      // Update project in Firestore with publish info
-      const projectRef = doc(db, "projects", currentProjectId);
-      await updateDoc(projectRef, {
-        isPublished: true,
-        publishedUrl: publishURLFromResponse,
-        deploymentId: newDeploymentId,
-        publishedAt: serverTimestamp(),
+      const persistRes = await fetch("/api/projects/publish-state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: currentProjectId,
+          isPublished: true,
+          publishedUrl: publishURLFromResponse,
+          deploymentId: newDeploymentId,
+          publishedAt: new Date().toISOString(),
+        }),
       });
+      if (!persistRes.ok) throw new Error("Failed to persist publish state");
 
       setPublishedUrl(publishURLFromResponse);
       setDeploymentId(newDeploymentId);
@@ -102,14 +104,19 @@ export function usePublishing({
         }
       }
 
-      const projectRef = doc(db, "projects", currentProjectId);
-      await updateDoc(projectRef, {
-        isPublished: false,
-        publishedUrl: null,
-        deploymentId: null,
-        publishedAt: null,
-        customDomain: null,
+      const persistRes = await fetch("/api/projects/publish-state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: currentProjectId,
+          isPublished: false,
+          publishedUrl: null,
+          deploymentId: null,
+          publishedAt: null,
+          customDomain: null,
+        }),
       });
+      if (!persistRes.ok) throw new Error("Failed to persist publish state");
       setPublishedUrl(null);
       setDeploymentId(null);
       setCustomDomain("");
@@ -127,10 +134,15 @@ export function usePublishing({
       if (!currentProjectId || !user) return;
 
       try {
-        const projectRef = doc(db, "projects", currentProjectId);
-        await updateDoc(projectRef, {
-          customDomain: domain,
+        const persistRes = await fetch("/api/projects/publish-state", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: currentProjectId,
+            customDomain: domain,
+          }),
         });
+        if (!persistRes.ok) throw new Error("Failed to save custom domain");
         setCustomDomain(domain);
         setShowDomainModal(false);
         await loadSavedProjects();

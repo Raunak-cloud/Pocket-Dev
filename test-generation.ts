@@ -1,4 +1,4 @@
-import { generateReactProject } from "./lib/react-generator";
+import { generateFullCode } from "./lib/ai-code-generator";
 import { prepareE2BFiles } from "./lib/e2b-utils";
 import * as fs from "fs";
 import * as path from "path";
@@ -10,9 +10,10 @@ async function main() {
   console.log("=== Pocket Dev Test Generation ===\n");
 
   // 1. Generate a test project
-  console.log("[1/4] Generating test website with Gemini...");
-  const result = await generateReactProject(
-    "Create a modern restaurant website called Bella Cucina with a home page featuring a hero section, menu page with Italian dishes, reservations page with a booking form, and about page with the restaurant story"
+  console.log("[1/4] Generating test website with AI...");
+  const result = await generateFullCode(
+    "Create a modern restaurant website called Bella Cucina with a home page featuring a hero section, menu page with Italian dishes, reservations page with a booking form, and about page with the restaurant story",
+    (msg) => console.log(`  -> ${msg}`)
   );
 
   console.log(`  -> Generated ${result.files.length} files`);

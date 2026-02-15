@@ -21,23 +21,8 @@ import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
 import GenerationProgress from "./components/GenerationProgress";
 import MaintenanceToggle from "./components/MaintenanceToggle";
-import {
-  collection,
-  addDoc,
-  updateDoc,
-  doc,
-  getDocs,
-  query,
-  where,
-  orderBy,
-  serverTimestamp,
-  increment,
-  Timestamp,
-  getDoc,
-} from "firebase/firestore";
-import { db, storage } from "@/lib/firebase";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { persistPollinationsImages } from "@/lib/persist-images";
+import { useUploadThing } from "@/lib/uploadthing";
 import ThemeToggle from "./components/ThemeToggle";
 import {
   DeleteConfirmModal,
@@ -45,6 +30,10 @@ import {
   AuthModal,
   DatabaseModal,
   TokenPurchaseModal,
+  WelcomeModal,
+  DomainSettingsModal,
+  GitHubExportModal,
+  TokenConfirmModal,
 } from "./components/Modals";
 import CreateContentComponent from "./components/Generation/CreateContent";
 import SupportContentComponent from "./components/Support/SupportContent";
@@ -59,7 +48,6 @@ import type {
   SavedProject,
   EditHistoryEntry,
   SupportTicket,
-  TicketMessage,
 } from "./types";
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
@@ -105,6 +93,7 @@ function ReactGeneratorContent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
+  const [textEditMode, setTextEditMode] = useState(false);
   const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
     [],
   );
@@ -178,6 +167,8 @@ function ReactGeneratorContent() {
     null,
   );
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
+  const [checkingEditClarity, setCheckingEditClarity] = useState(false);
+  const { startUpload } = useUploadThing("imageUploader");
 
   // Initialize custom hooks for publishing, GitHub export, and editor export
   const publishingHook = usePublishing({
@@ -264,6 +255,27 @@ function ReactGeneratorContent() {
     }
   }
 
+  async function detectEditClarification(
+    text: string,
+    filePaths: string[],
+  ): Promise<{ needsClarification: boolean; question: string }> {
+    try {
+      const res = await fetch("/api/check-edit-clarity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text, filePaths }),
+      });
+      if (!res.ok) return { needsClarification: false, question: "" };
+      const data = await res.json();
+      return {
+        needsClarification: data.needsClarification === true,
+        question: typeof data.question === "string" ? data.question : "",
+      };
+    } catch {
+      return { needsClarification: false, question: "" };
+    }
+  }
+
   // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
@@ -342,7 +354,7 @@ function ReactGeneratorContent() {
     }
   }, [project, activeSection]);
 
-  // Close export dropdown when clicking outside
+  // Close edit/export dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
@@ -395,21 +407,14 @@ function ReactGeneratorContent() {
           sessionStorage.removeItem("pendingEdit");
           try {
             const pendingEdit = JSON.parse(pendingEditStr);
-            // Load saved projects, find the one we were editing, and reopen it
-            const projectsQuery = query(
-              collection(db, "projects"),
-              where("userId", "==", user.uid),
-              orderBy("createdAt", "desc"),
-            );
-            const snapshot = await getDocs(projectsQuery);
-            const projects: SavedProject[] = snapshot.docs
-              .filter((d) => !d.data().deleted)
-              .map((d) => ({
-                id: d.id,
-                ...d.data(),
-                createdAt: d.data().createdAt?.toDate() || new Date(),
-                updatedAt: d.data().updatedAt?.toDate() || new Date(),
-              })) as SavedProject[];
+            // Load saved projects, find the one we were editing, and reopen it.
+            const listRes = await fetch("/api/projects/list", {
+              cache: "no-store",
+            });
+            if (!listRes.ok) {
+              throw new Error("Failed to load projects");
+            }
+            const projects = (await listRes.json()) as SavedProject[];
             setSavedProjects(projects);
 
             const targetProject = projects.find(
@@ -448,7 +453,7 @@ function ReactGeneratorContent() {
     }
   }, [searchParams, user]);
 
-  // Save project to Firestore
+  // Save project to DB via Prisma API
   const saveProjectToFirestore = async (
     projectData: ReactProject,
     projectPrompt: string,
@@ -456,59 +461,57 @@ function ReactGeneratorContent() {
   ): Promise<string> => {
     if (!user) throw new Error("User not logged in");
 
-    const projectDoc: any = {
-      userId: user.uid,
-      prompt: projectPrompt,
-      files: projectData.files,
-      dependencies: projectData.dependencies || {},
-      lintReport: projectData.lintReport || {
-        passed: true,
-        errors: 0,
-        warnings: 0,
-      },
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      ...(projectData.config ? { config: projectData.config } : {}),
-    };
+    const response = await fetch("/api/projects/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: projectPrompt,
+        files: projectData.files,
+        dependencies: projectData.dependencies || {},
+        lintReport: projectData.lintReport || {
+          passed: true,
+          errors: 0,
+          warnings: 0,
+        },
+        config: projectData.config,
+        authIntegrationCost,
+      }),
+    });
 
-    const docRef = await addDoc(collection(db, "projects"), projectDoc);
-
-    // Update user's project count, deduct 2 app tokens, and deduct integration tokens for auth if applicable
-    const userRef = doc(db, "users", user.uid);
-    const updateData: Record<string, any> = {
-      projectCount: increment(1),
-      appTokens: increment(-2),
-    };
-    if (authIntegrationCost > 0) {
-      updateData.integrationTokens = increment(-authIntegrationCost);
+    const data = await response.json();
+    if (!response.ok || !data.projectId) {
+      throw new Error(data.error || "Failed to save project");
     }
-    await updateDoc(userRef, updateData);
 
-    // Refresh user data to get updated balances
     await refreshUserData();
-
-    return docRef.id;
+    return data.projectId as string;
   };
 
-  // Update existing project in Firestore
+  // Update existing project in DB via Prisma API
   const updateProjectInFirestore = async (
     projectId: string,
     projectData: ReactProject,
   ): Promise<void> => {
     if (!user) throw new Error("User not logged in");
-
-    const projectRef = doc(db, "projects", projectId);
-    await updateDoc(projectRef, {
-      files: projectData.files,
-      dependencies: projectData.dependencies || {},
-      lintReport: projectData.lintReport || {
-        passed: true,
-        errors: 0,
-        warnings: 0,
-      },
-      updatedAt: serverTimestamp(),
-      ...(projectData.config ? { config: projectData.config } : {}),
+    const response = await fetch("/api/projects/update", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId,
+        files: projectData.files,
+        dependencies: projectData.dependencies || {},
+        lintReport: projectData.lintReport || {
+          passed: true,
+          errors: 0,
+          warnings: 0,
+        },
+        config: projectData.config,
+      }),
     });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "Failed to update project");
+    }
   };
 
   // Load saved projects from Firestore
@@ -517,20 +520,9 @@ function ReactGeneratorContent() {
 
     setLoadingProjects(true);
     try {
-      const projectsQuery = query(
-        collection(db, "projects"),
-        where("userId", "==", user.uid),
-        orderBy("createdAt", "desc"),
-      );
-      const snapshot = await getDocs(projectsQuery);
-      const projects: SavedProject[] = snapshot.docs
-        .filter((doc) => !doc.data().deleted) // Filter out deleted projects
-        .map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-          createdAt: doc.data().createdAt?.toDate() || new Date(),
-          updatedAt: doc.data().updatedAt?.toDate() || new Date(),
-        })) as SavedProject[];
+      const response = await fetch("/api/projects/list", { cache: "no-store" });
+      if (!response.ok) throw new Error("Failed to load projects");
+      const projects = (await response.json()) as SavedProject[];
       setSavedProjects(projects);
     } catch (error) {
       console.error("Error loading projects:", error);
@@ -544,39 +536,11 @@ function ReactGeneratorContent() {
     if (!user) return;
     setLoadingTickets(true);
     try {
-      const ticketsQuery = query(
-        collection(db, "supportTickets"),
-        where("userId", "==", user.uid),
-        orderBy("createdAt", "desc"),
-      );
-      const snapshot = await getDocs(ticketsQuery);
-      const tickets: SupportTicket[] = snapshot.docs.map((d) => {
-        const data = d.data();
-        const messages = (data.messages || []).map((m: any) => ({
-          ...m,
-          timestamp: m.timestamp?.toDate
-            ? m.timestamp.toDate()
-            : new Date(m.timestamp),
-        }));
-
-        // Calculate unread admin message count
-        const lastReadByUserAt = data.lastReadByUserAt?.toDate() || new Date(0);
-        const unreadAdminMessageCount = messages.filter(
-          (m: TicketMessage) =>
-            m.sender === "admin" && m.timestamp > lastReadByUserAt,
-        ).length;
-
-        return {
-          id: d.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-          respondedAt: data.respondedAt?.toDate() || null,
-          lastReadByUserAt,
-          messages,
-          unreadAdminMessageCount,
-        };
-      }) as SupportTicket[];
+      const response = await fetch("/api/support-tickets/list", {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Failed to load support tickets");
+      const tickets = (await response.json()) as SupportTicket[];
       setSupportTickets(tickets);
     } catch (error) {
       console.error("Error loading tickets:", error);
@@ -590,27 +554,11 @@ function ReactGeneratorContent() {
     if (!user || user.email !== ADMIN_EMAIL) return;
     setLoadingTickets(true);
     try {
-      const ticketsQuery = query(
-        collection(db, "supportTickets"),
-        orderBy("createdAt", "desc"),
-      );
-      const snapshot = await getDocs(ticketsQuery);
-      const tickets: SupportTicket[] = snapshot.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          updatedAt: data.updatedAt?.toDate() || new Date(),
-          respondedAt: data.respondedAt?.toDate() || null,
-          messages: (data.messages || []).map((m: any) => ({
-            ...m,
-            timestamp: m.timestamp?.toDate
-              ? m.timestamp.toDate()
-              : new Date(m.timestamp),
-          })),
-        };
-      }) as SupportTicket[];
+      const response = await fetch("/api/support-tickets/admin-list", {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Failed to load admin tickets");
+      const tickets = (await response.json()) as SupportTicket[];
       setAdminTickets(tickets);
     } catch (error) {
       console.error("Error loading admin tickets:", error);
@@ -624,16 +572,10 @@ function ReactGeneratorContent() {
     if (!user || !ticketSubject.trim() || !ticketDescription.trim()) return;
     setIsSubmittingTicket(true);
     try {
-      const ticketData: any = {
-        userId: user.uid,
-        userEmail: user.email || "",
-        userName: user.displayName || user.email || "User",
+      const ticketData: Record<string, string> = {
         category: ticketCategory,
         subject: ticketSubject.trim(),
         description: ticketDescription.trim(),
-        status: "open",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       };
       if (ticketProjectId) {
         const proj = savedProjects.find((p) => p.id === ticketProjectId);
@@ -642,14 +584,14 @@ function ReactGeneratorContent() {
           ? proj.prompt.substring(0, 60)
           : ticketProjectId;
       }
-      ticketData.messages = [
-        {
-          sender: "user",
-          text: ticketDescription.trim(),
-          timestamp: new Date(),
-        },
-      ];
-      await addDoc(collection(db, "supportTickets"), ticketData);
+      const response = await fetch("/api/support-tickets/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ticketData),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to submit support ticket");
+      }
       // Reset form
       setTicketSubject("");
       setTicketDescription("");
@@ -675,41 +617,17 @@ function ReactGeneratorContent() {
   ) => {
     if (!user || user.email !== ADMIN_EMAIL || !response.trim()) return;
     try {
-      const ticketRef = doc(db, "supportTickets", ticketId);
-      const ticketSnap = await getDoc(ticketRef);
-      const ticketData = ticketSnap.data();
-      const existing = ticketData?.messages || [];
-
-      await updateDoc(ticketRef, {
-        adminResponse: response.trim(),
-        status: newStatus,
-        respondedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        messages: [
-          ...existing,
-          { sender: "admin", text: response.trim(), timestamp: new Date() },
-        ],
+      const responseResult = await fetch("/api/support-tickets/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticketId,
+          response: response.trim(),
+          status: newStatus,
+        }),
       });
-
-      // Send email notification (don't block if it fails)
-      try {
-        const ticketUrl = `${window.location.origin}?section=support&ticket=${ticketId}`;
-        await fetch("/api/send-ticket-response-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ticketId,
-            userEmail: ticketData?.userEmail,
-            userName: ticketData?.userName || "User",
-            ticketSubject: ticketData?.subject,
-            adminResponse: response.trim(),
-            ticketUrl,
-          }),
-        });
-        console.log("Email notification sent successfully");
-      } catch (emailError) {
-        console.error("Failed to send email notification:", emailError);
-        // Continue anyway - ticket update succeeded
+      if (!responseResult.ok) {
+        throw new Error("Failed to respond to ticket");
       }
 
       setAdminResponse("");
@@ -730,9 +648,10 @@ function ReactGeneratorContent() {
     // If opening a ticket (not closing), mark as read
     if (newSelectedId && user) {
       try {
-        const ticketRef = doc(db, "supportTickets", ticketId);
-        await updateDoc(ticketRef, {
-          lastReadByUserAt: serverTimestamp(),
+        await fetch("/api/support-tickets/mark-read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticketId }),
         });
         // Reload tickets to update unread count
         await loadSupportTickets();
@@ -747,17 +666,14 @@ function ReactGeneratorContent() {
   const userReplyToTicket = async (ticketId: string) => {
     if (!user || !userReplyText.trim()) return;
     try {
-      const ticketRef = doc(db, "supportTickets", ticketId);
-      const ticketSnap = await getDoc(ticketRef);
-      const existing = ticketSnap.data()?.messages || [];
-      await updateDoc(ticketRef, {
-        status: "open",
-        updatedAt: serverTimestamp(),
-        messages: [
-          ...existing,
-          { sender: "user", text: userReplyText.trim(), timestamp: new Date() },
-        ],
+      const response = await fetch("/api/support-tickets/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketId, text: userReplyText.trim() }),
       });
+      if (!response.ok) {
+        throw new Error("Failed to send reply");
+      }
       setUserReplyText("");
       setReplyingToTicketId(null);
       setTicketSubmittedNotice(true);
@@ -771,27 +687,10 @@ function ReactGeneratorContent() {
 
   // Load edit history for a project
   const loadEditHistory = async (projectId: string) => {
-    try {
-      const historyQuery = query(
-        collection(db, "projects", projectId, "editHistory"),
-        orderBy("timestamp", "asc"),
-      );
-      const snapshot = await getDocs(historyQuery);
-      const history: EditHistoryEntry[] = snapshot.docs.map((d) => ({
-        id: d.id,
-        prompt: d.data().prompt,
-        files: d.data().files || [],
-        dependencies: d.data().dependencies || {},
-        timestamp:
-          d.data().timestamp instanceof Timestamp
-            ? d.data().timestamp.toDate()
-            : new Date(),
-      }));
-      setEditHistory(history);
-    } catch (error) {
-      console.error("Error loading edit history:", error);
-      setEditHistory([]);
-    }
+    // Edit history is currently client-session based after Firebase removal.
+    // Keep current state for active session and reset when switching projects.
+    void projectId;
+    setEditHistory([]);
   };
 
   // Rollback to a previous version from edit history
@@ -849,12 +748,12 @@ function ReactGeneratorContent() {
     if (!user) return;
 
     try {
-      // Delete from Firestore
-      const projectRef = doc(db, "projects", projectId);
-      await updateDoc(projectRef, {
-        deleted: true,
-        deletedAt: serverTimestamp(),
+      const response = await fetch("/api/projects/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId }),
       });
+      if (!response.ok) throw new Error("Failed to delete project");
 
       // If this is the currently open project, close it
       if (currentProjectId === projectId) {
@@ -946,39 +845,41 @@ function ReactGeneratorContent() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (!files || !user) return;
+      const fileArray = Array.from(files);
 
-      for (const file of Array.from(files)) {
-        try {
-          // Create a unique filename with timestamp
-          const timestamp = Date.now();
-          const filename = `${user.uid}/${timestamp}-${file.name}`;
-          const storageRef = ref(storage, `user-images/${filename}`);
+      try {
+        const dataUrlResults = await Promise.all(
+          fileArray.map(
+            (file) =>
+              new Promise<{ file: File; dataUrl: string }>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (ev) =>
+                  resolve({ file, dataUrl: (ev.target?.result as string) || "" });
+                reader.readAsDataURL(file);
+              }),
+          ),
+        );
 
-          // Upload file to Firebase Storage
-          const snapshot = await uploadBytes(storageRef, file);
+        const uploaded = await startUpload(fileArray);
+        if (!uploaded) throw new Error("Upload failed");
 
-          // Get download URL
-          const downloadUrl = await getDownloadURL(snapshot.ref);
-
-          // Also keep dataUrl for vision API (sending to AI)
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-            const dataUrl = ev.target?.result as string;
-            setUploadedFiles((prev) => [
-              ...prev,
-              { name: file.name, type: file.type, dataUrl, downloadUrl },
-            ]);
-          };
-          reader.readAsDataURL(file);
-        } catch (error) {
-          console.error("Error uploading file:", error);
-          setError(`Failed to upload ${file.name}. Please try again.`);
-        }
+        setUploadedFiles((prev) => [
+          ...prev,
+          ...uploaded.map((u, idx) => ({
+            name: u.name,
+            type: dataUrlResults[idx].file.type,
+            dataUrl: dataUrlResults[idx].dataUrl,
+            downloadUrl: u.url,
+          })),
+        ]);
+      } catch (error) {
+        console.error("Error uploading file:", error);
+        setError("Failed to upload files. Please try again.");
       }
 
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [user],
+    [user, startUpload],
   );
 
   const removeFile = useCallback((index: number) => {
@@ -989,39 +890,41 @@ function ReactGeneratorContent() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (!files || !user) return;
+      const fileArray = Array.from(files);
 
-      for (const file of Array.from(files)) {
-        try {
-          // Create a unique filename with timestamp
-          const timestamp = Date.now();
-          const filename = `${user.uid}/${timestamp}-${file.name}`;
-          const storageRef = ref(storage, `user-images/${filename}`);
+      try {
+        const dataUrlResults = await Promise.all(
+          fileArray.map(
+            (file) =>
+              new Promise<{ file: File; dataUrl: string }>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (ev) =>
+                  resolve({ file, dataUrl: (ev.target?.result as string) || "" });
+                reader.readAsDataURL(file);
+              }),
+          ),
+        );
 
-          // Upload file to Firebase Storage
-          const snapshot = await uploadBytes(storageRef, file);
+        const uploaded = await startUpload(fileArray);
+        if (!uploaded) throw new Error("Upload failed");
 
-          // Get download URL
-          const downloadUrl = await getDownloadURL(snapshot.ref);
-
-          // Also keep dataUrl for vision API (sending to AI)
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-            const dataUrl = ev.target?.result as string;
-            setEditFiles((prev) => [
-              ...prev,
-              { name: file.name, type: file.type, dataUrl, downloadUrl },
-            ]);
-          };
-          reader.readAsDataURL(file);
-        } catch (error) {
-          console.error("Error uploading file:", error);
-          setError(`Failed to upload ${file.name}. Please try again.`);
-        }
+        setEditFiles((prev) => [
+          ...prev,
+          ...uploaded.map((u, idx) => ({
+            name: u.name,
+            type: dataUrlResults[idx].file.type,
+            dataUrl: dataUrlResults[idx].dataUrl,
+            downloadUrl: u.url,
+          })),
+        ]);
+      } catch (error) {
+        console.error("Error uploading file:", error);
+        setError("Failed to upload files. Please try again.");
       }
 
       if (editFileInputRef.current) editFileInputRef.current.value = "";
     },
-    [user],
+    [user, startUpload],
   );
 
   const removeEditFile = useCallback((index: number) => {
@@ -1077,7 +980,8 @@ function ReactGeneratorContent() {
       (!editPrompt.trim() && editAppAuth.length === 0) ||
       isEditing ||
       !project ||
-      checkingAuthIntent
+      checkingAuthIntent ||
+      checkingEditClarity
     )
       return;
 
@@ -1088,12 +992,29 @@ function ReactGeneratorContent() {
       setCheckingAuthIntent(false);
       if (hasAuth) {
         setAuthPromptWarning(
-          "Authentication detected in your prompt! To add login/signup, click the 🔒 lock icon below the edit box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
+          "Authentication detected in your prompt! To add login/signup, click the ðŸ”’ lock icon below the edit box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
         );
         return;
       }
     }
     setAuthPromptWarning(null);
+
+    // Ask for clarification before starting edit if request is ambiguous.
+    if (editPrompt.trim()) {
+      setCheckingEditClarity(true);
+      const clarity = await detectEditClarification(
+        editPrompt,
+        project.files.map((f) => f.path),
+      );
+      setCheckingEditClarity(false);
+
+      if (clarity.needsClarification) {
+        setAuthPromptWarning(
+          `Before I start editing, I need one detail: ${clarity.question}`,
+        );
+        return;
+      }
+    }
 
     // Check integration token balance based on auth selection
     const editCost = getEditIntegrationCost();
@@ -1130,6 +1051,24 @@ function ReactGeneratorContent() {
     return;
   };
 
+  const adjustIntegrationTokens = async (amount: number, reason: string) => {
+    if (!user || amount === 0) return;
+    const response = await fetch("/api/tokens/adjust", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tokenType: "integration",
+        amount,
+        reason,
+      }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "Failed token adjustment");
+    }
+    await refreshUserData();
+  };
+
   // Actually start the edit after user confirms token deduction
   const proceedWithEdit = async () => {
     if (!project) return;
@@ -1144,9 +1083,7 @@ function ReactGeneratorContent() {
     if (user) {
       try {
         const editCost = getEditIntegrationCost();
-        const userRef = doc(db, "users", user.uid);
-        await updateDoc(userRef, { integrationTokens: increment(-editCost) });
-        await refreshUserData();
+        await adjustIntegrationTokens(-editCost, "Edit request token usage");
       } catch (err) {
         console.error("Error deducting tokens:", err);
       }
@@ -1202,7 +1139,7 @@ ${currentFiles}
 USER'S EDIT REQUEST:
 ${userRequest}
 
-🎯 CRITICAL INSTRUCTIONS:
+ðŸŽ¯ CRITICAL INSTRUCTIONS:
 1. Do EXACTLY what the user requested - nothing more, nothing less
 2. DO NOT add features, components, or changes the user did not ask for
 3. DO NOT refactor, reorganize, or "improve" code unless specifically asked
@@ -1212,20 +1149,20 @@ ${userRequest}
 7. Only modify the specific parts needed to fulfill the user's exact request
 8. Keep everything else EXACTLY as it was before
 
-📦 PACKAGE CONSTRAINT (CRITICAL - DO NOT VIOLATE):
+ðŸ“¦ PACKAGE CONSTRAINT (CRITICAL - DO NOT VIOLATE):
 The app currently uses ONLY these packages: ${allowedPackagesList}
 - DO NOT import any npm package that is not in the list above
 - DO NOT add framer-motion, gsap, three, @react-three/fiber, or any other new package
 - Use Tailwind CSS classes for animations (animate-*, transition, hover:, etc.)
 - Use inline SVGs or existing lucide-react icons for icons
-- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, firebase
+- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, @clerk/nextjs, uploadthing, @uploadthing/react, @prisma/client
 - Any import of a package NOT listed above will cause a build error
 
-🎨 TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
-- NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent — these WILL crash the build
+ðŸŽ¨ TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
+- NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent â€” these WILL crash the build
 - ONLY use @apply with built-in Tailwind utilities: @apply px-4 py-2 bg-blue-600 text-white rounded-lg
 - Use standard Tailwind color classes (blue-600, gray-900, emerald-500, etc.) instead of custom names
-- Keep globals.css simple — just @tailwind base/components/utilities. Put styles in className attributes.`;
+- Keep globals.css simple â€” just @tailwind base/components/utilities. Put styles in className attributes.`;
 
     // Add reference to uploaded files if any
     if (editFiles.length > 0) {
@@ -1239,11 +1176,11 @@ The app currently uses ONLY these packages: ${allowedPackagesList}
               `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
-        editFullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
+        editFullPrompt += `\n\nðŸ“· CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
 ${imageUrlList}
 
-🚨 YOU MUST:
+ðŸš¨ YOU MUST:
 1. Use these EXACT image URLs in your img src attributes
 2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Replace existing placeholder images with these actual images
@@ -1259,11 +1196,11 @@ The user expects to see their ACTUAL uploaded images in the updated website.`;
             (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
-        editFullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+        editFullPrompt += `\n\nðŸ“„ CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
 
 ${pdfUrlList}
 
-🚨 YOU MUST:
+ðŸš¨ YOU MUST:
 1. The PDFs are uploaded for reference/context - analyze their content if shown visually
 2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
 3. If the PDF contains design references, use them to inform the visual design changes
@@ -1273,7 +1210,7 @@ ${pdfUrlList}
 
     // Add authentication requirements if selected for this edit
     if (editAppAuth.includes("username-password")) {
-      editFullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
+      editFullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
 Implement a complete username/password authentication system into this existing app:
 1. User Registration (Sign Up) - with email/username and password
 2. User Login with session management
@@ -1281,18 +1218,18 @@ Implement a complete username/password authentication system into this existing 
 4. Logout functionality
 5. Protected routes that require authentication
 6. User profile display
-7. Use Firebase Authentication or a similar service for backend
+7. Use Clerk (@clerk/nextjs) for authentication with Organizations support for multi-tenant SaaS
 8. Include proper form validation and error handling
 9. Store user sessions securely
 10. Add authentication UI components (login form, signup form, password reset form)
 
-Integrate the authentication seamlessly into the existing app design and layout.`;
+Integrate the authentication seamlessly into the existing app design and layout. Use Clerk only (no Firebase/Auth0/Supabase).`;
     }
     if (editAppAuth.includes("google")) {
-      editFullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
-Implement Google OAuth authentication into this existing app:
+      editFullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
+Implement Google OAuth authentication into this existing app using Clerk social sign-in:
 1. "Sign in with Google" button with proper Google branding
-2. OAuth 2.0 integration using Firebase Authentication or similar
+2. Google OAuth via Clerk social connection with Organizations support for multi-tenant SaaS
 3. Automatic user profile creation with Google account data
 4. Session management for logged-in users
 5. Logout functionality
@@ -1301,10 +1238,10 @@ Implement Google OAuth authentication into this existing app:
 8. Handle OAuth errors gracefully
 9. Add loading states during authentication
 
-Integrate the Google OAuth seamlessly into the existing app design and layout.`;
+Integrate the Google OAuth seamlessly into the existing app design and layout. Use Clerk only (no Firebase/Auth0/Supabase).`;
     }
 
-    editFullPrompt += `\n\n🚨 CRITICAL REQUIREMENT:
+    editFullPrompt += `\n\nðŸš¨ CRITICAL REQUIREMENT:
 You MUST return ALL of these exact files in your response: ${existingFilePaths}
 
 Even if you only modify 1-2 files, you must include ALL files in the output JSON.
@@ -1316,22 +1253,13 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         const editPromptText =
           editPrompt.trim() ||
           (authLabels.length > 0 ? `Add ${authLabels.join(" and ")}` : "Edit");
-        const historyRef = collection(
-          db,
-          "projects",
-          currentProjectId,
-          "editHistory",
-        );
-        const historyDoc = await addDoc(historyRef, {
-          prompt: editPromptText,
-          files: project.files,
-          dependencies: project.dependencies || {},
-          timestamp: serverTimestamp(),
-        });
+        const historyId = `local_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
         setEditHistory((prev) => [
           ...prev,
           {
-            id: historyDoc.id,
+            id: historyId,
             prompt: editPromptText,
             files: project.files,
             dependencies: project.dependencies || {},
@@ -1365,7 +1293,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         setCurrentGenerationProjectId(result.projectId);
       }
 
-      setEditProgressMessages((prev) => [...prev, "💾 Merging changes..."]);
+      setEditProgressMessages((prev) => [...prev, "ðŸ’¾ Merging changes..."]);
 
       // AI code generation: persist images and use generated files
       const persistedFiles = await persistPollinationsImages(
@@ -1421,7 +1349,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
 
     // Add authentication requirements based on user selection
     if (currentAppAuth.includes("username-password")) {
-      fullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT:
+      fullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT:
 Implement a complete username/password authentication system with the following features:
 1. User Registration (Sign Up) - with email/username and password
 2. User Login with session management
@@ -1429,18 +1357,18 @@ Implement a complete username/password authentication system with the following 
 4. Logout functionality
 5. Protected routes that require authentication
 6. User profile display
-7. Use Firebase Authentication or a similar service for backend
+7. Use Clerk (@clerk/nextjs) for authentication with Organizations support for multi-tenant SaaS
 8. Include proper form validation and error handling
 9. Store user sessions securely
 10. Add authentication UI components (login form, signup form, password reset form)
 
-Make sure the authentication is fully functional and integrated throughout the app.`;
+Make sure the authentication is fully functional and integrated throughout the app. Use Clerk only (no Firebase/Auth0/Supabase).`;
     }
     if (currentAppAuth.includes("google")) {
-      fullPrompt += `\n\n🔐 AUTHENTICATION REQUIREMENT:
-Implement Google OAuth authentication with the following features:
+      fullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT:
+Implement Google OAuth authentication with Clerk (social sign-in) with the following features:
 1. "Sign in with Google" button with proper Google branding
-2. OAuth 2.0 integration using Firebase Authentication or similar
+2. Google OAuth via Clerk social connection with Organizations support for multi-tenant SaaS
 3. Automatic user profile creation with Google account data
 4. Session management for logged-in users
 5. Logout functionality
@@ -1449,7 +1377,7 @@ Implement Google OAuth authentication with the following features:
 8. Handle OAuth errors gracefully
 9. Add loading states during authentication
 
-Make sure the Google OAuth is fully functional and integrated throughout the app.`;
+Make sure the Google OAuth is fully functional and integrated throughout the app. Use Clerk only (no Firebase/Auth0/Supabase).`;
     }
 
     if (uploadedFiles.length > 0) {
@@ -1467,11 +1395,11 @@ Make sure the Google OAuth is fully functional and integrated throughout the app
               `IMAGE ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
-        fullPrompt += `\n\n📷 CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
+        fullPrompt += `\n\nðŸ“· CRITICAL - User has uploaded ${imageFiles.length} image(s) that MUST be displayed in the website:
 
 ${imageUrlList}
 
-🚨 YOU MUST:
+ðŸš¨ YOU MUST:
 1. Use these EXACT image URLs in your img src attributes
 2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Embed these images prominently in the website (hero sections, galleries, cards, etc.)
@@ -1487,11 +1415,11 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
             (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
           )
           .join("\n");
-        fullPrompt += `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+        fullPrompt += `\n\nðŸ“„ CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
 
 ${pdfUrlList}
 
-🚨 YOU MUST:
+ðŸš¨ YOU MUST:
 1. The PDFs are uploaded for reference/context - analyze their content if shown visually
 2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
 3. If the PDF contains design references, use them to inform the visual design of the website
@@ -1520,105 +1448,10 @@ ${pdfUrlList}
         return;
       }
 
-      setProgressMessages((prev) => [...prev, "💾 Saving project..."]);
+      setProgressMessages((prev) => [...prev, "ðŸ’¾ Saving project..."]);
 
       // Check if authentication was generated
-      const hasAuth = result.files.some(
-        (f) =>
-          f.content.includes("firebase/auth") ||
-          f.content.includes("firebase/firestore") ||
-          f.content.includes("PLACEHOLDER_API_KEY"),
-      );
-
-      // Auto-create Firebase Web App if auth is detected
-      if (hasAuth && user) {
-        setProgressMessages((prev) => [
-          ...prev,
-          "🔐 Setting up Firebase authentication...",
-        ]);
-
-        try {
-          const response = await fetch("/api/create-firebase-app", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId: user.uid,
-              appName: generationPrompt.substring(0, 100),
-              prompt: generationPrompt,
-            }),
-          });
-
-          if (response.ok) {
-            const { firebaseConfig, appId, tenantId, multiTenancyEnabled } =
-              await response.json();
-
-            // Inject Firebase config into the generated files
-            result.files = result.files.map((file) => {
-              if (
-                file.path === "lib/firebase-config.ts" &&
-                file.content.includes("PLACEHOLDER_API_KEY")
-              ) {
-                return {
-                  ...file,
-                  content: file.content
-                    .replace("PLACEHOLDER_API_KEY", firebaseConfig.apiKey || "")
-                    .replace(
-                      "PLACEHOLDER_AUTH_DOMAIN",
-                      firebaseConfig.authDomain || "",
-                    )
-                    .replace(
-                      "PLACEHOLDER_PROJECT_ID",
-                      firebaseConfig.projectId || "",
-                    )
-                    .replace(
-                      "PLACEHOLDER_STORAGE_BUCKET",
-                      firebaseConfig.storageBucket || "",
-                    )
-                    .replace(
-                      "PLACEHOLDER_MESSAGING_SENDER_ID",
-                      firebaseConfig.messagingSenderId || "",
-                    )
-                    .replace(
-                      "PLACEHOLDER_APP_ID",
-                      appId || firebaseConfig.appId || "",
-                    )
-                    .replace("PLACEHOLDER_TENANT_ID", tenantId || "null"),
-                };
-              }
-              return file;
-            });
-
-            if (multiTenancyEnabled) {
-              setProgressMessages((prev) => [
-                ...prev,
-                "✅ Firebase authentication ready (isolated tenant)!",
-              ]);
-            } else {
-              setProgressMessages((prev) => [
-                ...prev,
-                "✅ Firebase authentication ready!",
-              ]);
-              setProgressMessages((prev) => [
-                ...prev,
-                "ℹ️ Note: Using shared auth pool (upgrade to Identity Platform for isolation)",
-              ]);
-            }
-          } else {
-            console.error("Failed to create Firebase app");
-            setProgressMessages((prev) => [
-              ...prev,
-              "⚠️ Auth setup failed - using defaults",
-            ]);
-          }
-        } catch (error) {
-          console.error("Error creating Firebase app:", error);
-          setProgressMessages((prev) => [
-            ...prev,
-            "⚠️ Auth setup failed - using defaults",
-          ]);
-        }
-      }
-
+      // Auth stack is Clerk-based; no Firebase bootstrap needed.
       // Persist Pollinations AI images to Firebase Storage so they don't change on reload
       setProgressMessages((prev) => [...prev, "Persisting images..."]);
       const persistedFiles = await persistPollinationsImages(
@@ -1678,14 +1511,14 @@ ${pdfUrlList}
 
     if (!prompt.trim() || status === "loading" || checkingAuthIntent) return;
 
-    // Use Gemini to detect auth intent — auth must be added via the integration toggle (lock icon)
+    // Use Gemini to detect auth intent â€” auth must be added via the integration toggle (lock icon)
     if (currentAppAuth.length === 0) {
       setCheckingAuthIntent(true);
       const hasAuth = await detectAuthInPrompt(prompt);
       setCheckingAuthIntent(false);
       if (hasAuth) {
         setAuthPromptWarning(
-          "Authentication detected in your prompt! To add login/signup, click the 🔒 lock icon below the prompt box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
+          "Authentication detected in your prompt! To add login/signup, click the ðŸ”’ lock icon below the prompt box to select your authentication method. Authentication is a premium integration and cannot be added via text prompts.",
         );
         return;
       }
@@ -1807,14 +1640,78 @@ ${pdfUrlList}
   const openInE2BSandbox = async () => {
     if (!project) return;
 
+    const previewWindow = window.open("about:blank", "_blank");
+    if (previewWindow) {
+      previewWindow.document.write(
+        "<html><body style='font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;'>Preparing preview sandbox...</body></html>"
+      );
+    }
+
     const files = prepareE2BFiles(project);
 
     try {
-      const { sandboxId, url } = await createSandboxServer(files);
-      window.open(url, "_blank");
+      const { url } = await createSandboxServer(files, undefined, {
+        projectId: currentProjectId || undefined,
+      });
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.location.href = url;
+      } else if (!previewWindow) {
+        window.location.href = url;
+      } else {
+        window.open(url, "_blank");
+      }
     } catch (err) {
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.close();
+      }
       console.error("Error opening E2B sandbox:", err);
       setError("Failed to create sandbox. Please try again.");
+    }
+  };
+
+  const replaceFirstTextInProject = (
+    sourceProject: ReactProject,
+    from: string,
+    to: string
+  ): ReactProject => {
+    if (!from || from === to) return sourceProject;
+    const files = sourceProject.files.map((f) => ({ ...f }));
+    const mutableExt = /\.(tsx|ts|jsx|js|css|md|txt)$/;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+      const idx = file.content.indexOf(from);
+      if (idx === -1) continue;
+      files[i] = {
+        ...file,
+        content: `${file.content.slice(0, idx)}${to}${file.content.slice(idx + from.length)}`,
+      };
+      return { ...sourceProject, files };
+    }
+
+    return sourceProject;
+  };
+
+  const handlePreviewTextEdited = async (
+    originalText: string,
+    updatedText: string,
+  ) => {
+    if (!textEditMode || !project) return;
+    const from = originalText.trim();
+    const to = updatedText.trim();
+    if (!from || !to || from === to) return;
+
+    const updatedProject = replaceFirstTextInProject(project, from, to);
+    setProject(updatedProject);
+
+    if (currentProjectId && user) {
+      try {
+        await updateProjectInFirestore(currentProjectId, updatedProject);
+        if (publishedUrl) setHasUnpublishedChanges(true);
+      } catch (err) {
+        console.error("Failed to save text edit:", err);
+      }
     }
   };
 
@@ -1882,26 +1779,53 @@ ${pdfUrlList}
                     Tokens section.
                   </span>
                 </span>
-                {project.lintReport.passed ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
-                    <svg
-                      className="w-3 h-3"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    Ready
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full">
-                    {project.lintReport.errors} issues
-                  </span>
-                )}
+
+                {/* View Code Button */}
+                <button
+                  onClick={() => setShowCodeViewer(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                  title="View project code"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+                    />
+                  </svg>
+                  Code
+                </button>
+
+                <button
+                  onClick={() => setTextEditMode((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition ${
+                    textEditMode
+                      ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
+                      : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                  }`}
+                  title="Edit text directly inside preview"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M8 10h8M8 14h5M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H9l-4 4V8a2 2 0 012-2z"
+                    />
+                  </svg>
+                  Text Edit
+                </button>
               </div>
 
               {/* Device Preview Toggle */}
@@ -1978,28 +1902,6 @@ ${pdfUrlList}
               </div>
 
               <div className="flex items-center gap-2">
-                {/* View Code Button */}
-                <button
-                  onClick={() => setShowCodeViewer(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
-                  title="View project code"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-                    />
-                  </svg>
-                  Code
-                </button>
-
                 {/* Open in E2B Sandbox Button */}
                 <button
                   onClick={openInE2BSandbox}
@@ -2211,7 +2113,7 @@ ${pdfUrlList}
           {/* Main Content Area - Preview + Edit Panel */}
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
             {/* Preview Area */}
-            <div className="flex-1 overflow-hidden relative min-h-0 bg-bg-secondary/30">
+            <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-950/95">
               {/* Editing overlay */}
               {isEditing && !isEditMinimized && (
                 <div className="absolute inset-0 bg-bg-primary/95 backdrop-blur-sm z-50">
@@ -2250,22 +2152,22 @@ ${pdfUrlList}
                 className={`h-full flex items-center justify-center p-4 ${
                   previewMode === "desktop"
                     ? ""
-                    : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-bg-tertiary/20 to-transparent"
+                    : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-700/20 to-transparent"
                 }`}
               >
                 <div
                   className={`h-full transition-all duration-300 ${
                     previewMode === "mobile"
-                      ? "w-[375px] rounded-[2rem] border-[8px] border-border-secondary shadow-2xl shadow-black/50 overflow-hidden"
+                      ? "w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
                       : previewMode === "tablet"
-                        ? "w-[768px] rounded-[1.5rem] border-[6px] border-border-secondary shadow-2xl shadow-black/50 overflow-hidden"
+                        ? "w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
                         : "w-full"
                   }`}
                 >
                   {/* Device Notch for Mobile */}
                   {previewMode === "mobile" && (
-                    <div className="bg-border-secondary h-6 flex items-center justify-center">
-                      <div className="w-20 h-4 bg-bg-tertiary rounded-full" />
+                    <div className="bg-slate-700 h-6 flex items-center justify-center">
+                      <div className="w-20 h-4 bg-slate-800 rounded-full" />
                     </div>
                   )}
 
@@ -2277,7 +2179,13 @@ ${pdfUrlList}
                         : "h-full"
                     }
                   >
-                    <E2BPreview project={project} previewKey={previewKey} />
+                    <E2BPreview
+                      project={project}
+                      previewKey={previewKey}
+                      projectId={currentProjectId}
+                      textEditMode={textEditMode}
+                      onTextEdited={handlePreviewTextEdited}
+                    />
                   </div>
                 </div>
               </div>
@@ -2676,7 +2584,7 @@ ${pdfUrlList}
                       placeholder={
                         editAppAuth.length > 0
                           ? "Add additional instructions (optional)..."
-                          : "Describe changes you want to make...\n\nExamples:\n• Change the color scheme to blue\n• Add a contact form\n• Make the header sticky\n• Add dark mode toggle"
+                          : "Describe changes you want to make...\n\nExamples:\nâ€¢ Change the color scheme to blue\nâ€¢ Add a contact form\nâ€¢ Make the header sticky\nâ€¢ Add dark mode toggle"
                       }
                       disabled={isEditing}
                       className="flex-1 min-h-[120px] px-4 py-3 bg-transparent text-text-primary placeholder-text-muted focus:outline-none resize-none text-sm disabled:opacity-50"
@@ -2774,7 +2682,8 @@ ${pdfUrlList}
                       disabled={
                         (!editPrompt.trim() && editAppAuth.length === 0) ||
                         isEditing ||
-                        checkingAuthIntent
+                        checkingAuthIntent ||
+                        checkingEditClarity
                       }
                       className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
@@ -2783,7 +2692,7 @@ ${pdfUrlList}
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           Updating...
                         </>
-                      ) : checkingAuthIntent ? (
+                      ) : checkingAuthIntent || checkingEditClarity ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           Checking...
@@ -2995,7 +2904,8 @@ ${pdfUrlList}
                       disabled={
                         (!editPrompt.trim() && editAppAuth.length === 0) ||
                         isEditing ||
-                        checkingAuthIntent
+                        checkingAuthIntent ||
+                        checkingEditClarity
                       }
                       className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
@@ -3004,7 +2914,7 @@ ${pdfUrlList}
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           <span className="hidden sm:inline">Updating...</span>
                         </>
-                      ) : checkingAuthIntent ? (
+                      ) : checkingAuthIntent || checkingEditClarity ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           <span className="hidden sm:inline">Checking...</span>
@@ -3036,485 +2946,34 @@ ${pdfUrlList}
         </div>
 
         {/* Domain Modal */}
-        {showDomainModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-              {/* Modal Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
-                <h3 className="text-lg font-semibold text-text-primary">
-                  Domain Settings
-                </h3>
-                <button
-                  onClick={() => setShowDomainModal(false)}
-                  className="p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-6 space-y-6">
-                {/* Published URL */}
-                {publishedUrl && (
-                  <div className="space-y-2">
-                    <label className="block text-sm font-medium text-text-secondary">
-                      Published URL
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-sm text-text-secondary font-mono truncate">
-                        {publishedUrl}
-                      </div>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(publishedUrl);
-                        }}
-                        className="px-3 py-2 text-text-tertiary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition"
-                        title="Copy URL"
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                          />
-                        </svg>
-                      </button>
-                      <a
-                        href={publishedUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-2 text-text-tertiary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition"
-                        title="Open in new tab"
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                          />
-                        </svg>
-                      </a>
-                    </div>
-                  </div>
-                )}
-
-                {/* Connect Custom Domain */}
-                <div className="space-y-3">
-                  <label className="block text-sm font-medium text-text-secondary">
-                    Connect Custom Domain
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={customDomain}
-                      onChange={(e) => setCustomDomain(e.target.value)}
-                      placeholder="yourdomain.com"
-                      className="flex-1 px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm"
-                    />
-                    <button
-                      onClick={() => connectDomain(customDomain)}
-                      disabled={!customDomain.trim()}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Connect
-                    </button>
-                  </div>
-                  <p className="text-xs text-text-muted">
-                    Point your domain&apos;s CNAME record to{" "}
-                    <span className="font-mono text-text-tertiary">
-                      cname.pocketdev.app
-                    </span>
-                  </p>
-                </div>
-
-                {/* Divider */}
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-border-secondary"></div>
-                  </div>
-                  <div className="relative flex justify-center text-xs">
-                    <span className="px-2 bg-bg-secondary text-text-muted">
-                      or
-                    </span>
-                  </div>
-                </div>
-
-                {/* Buy Domain */}
-                <div className="space-y-3">
-                  <label className="block text-sm font-medium text-text-secondary">
-                    Buy a New Domain
-                  </label>
-                  <div className="p-4 bg-gradient-to-br from-violet-500/10 to-blue-500/10 border border-violet-500/20 rounded-xl">
-                    <div className="flex items-start gap-3">
-                      <div className="p-2 bg-violet-500/20 rounded-lg">
-                        <svg
-                          className="w-5 h-5 text-violet-400"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                          />
-                        </svg>
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="text-sm font-medium text-text-primary mb-1">
-                          Get a custom domain
-                        </h4>
-                        <p className="text-xs text-text-tertiary mb-3">
-                          Search for available domains and purchase them
-                          directly. Prices start from $9.99/year.
-                        </p>
-                        <button
-                          onClick={() =>
-                            window.open(
-                              "https://domains.google.com/registrar/search",
-                              "_blank",
-                            )
-                          }
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition"
-                        >
-                          <svg
-                            className="w-3.5 h-3.5"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                            />
-                          </svg>
-                          Search Domains
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Modal Footer */}
-              <div className="px-6 py-4 bg-bg-tertiary/50 border-t border-border-primary flex gap-3">
-                <button
-                  onClick={() => setShowDomainModal(false)}
-                  className="flex-1 px-4 py-2 text-text-secondary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition text-sm font-medium"
-                >
-                  Close
-                </button>
-                {publishedUrl && (
-                  <>
-                    {hasUnpublishedChanges ? (
-                      <button
-                        onClick={publishProject}
-                        disabled={isPublishing}
-                        className="px-4 py-2 text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {isPublishing ? "Publishing..." : "Publish Changes"}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={unpublishProject}
-                        className="px-4 py-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition text-sm font-medium"
-                      >
-                        Unpublish
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <DomainSettingsModal
+          isOpen={showDomainModal}
+          onClose={() => setShowDomainModal(false)}
+          publishedUrl={publishedUrl}
+          customDomain={customDomain}
+          onCustomDomainChange={setCustomDomain}
+          onConnectDomain={connectDomain}
+          hasUnpublishedChanges={hasUnpublishedChanges}
+          isPublishing={isPublishing}
+          onPublish={publishProject}
+          onUnpublish={unpublishProject}
+        />
 
         {/* GitHub Export Modal */}
-        {showGitHubModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
-                <div className="flex items-center gap-3">
-                  <svg
-                    className="w-6 h-6 text-text-primary"
-                    fill="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-                  </svg>
-                  <h3 className="text-lg font-semibold text-text-primary">
-                    Export to GitHub
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setShowGitHubModal(false)}
-                  className="p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Success State */}
-              {githubExportStatus === "success" ? (
-                <div className="px-6 py-8 text-center">
-                  <div className="inline-flex items-center justify-center w-16 h-16 mb-4 bg-emerald-500/20 rounded-2xl">
-                    <svg
-                      className="w-8 h-8 text-emerald-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                  </div>
-                  <h4 className="text-lg font-bold text-text-primary mb-2">
-                    Pushed to GitHub!
-                  </h4>
-                  <p className="text-text-tertiary text-sm mb-4">
-                    {githubExportMessage}
-                  </p>
-                  <a
-                    href={githubRepoUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-black font-medium rounded-xl hover:bg-gray-200 transition text-sm"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-                    </svg>
-                    Open Repository
-                  </a>
-                  <button
-                    onClick={() => setShowGitHubModal(false)}
-                    className="block w-full mt-3 text-sm text-text-tertiary hover:text-text-primary transition"
-                  >
-                    Close
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {/* Form */}
-                  <div className="px-6 py-5 space-y-4">
-                    {/* Token */}
-                    <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1.5">
-                        Personal Access Token
-                      </label>
-                      <input
-                        type="password"
-                        value={githubToken}
-                        onChange={(e) => setGithubToken(e.target.value)}
-                        placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                        disabled={githubExportStatus === "exporting"}
-                        className="w-full px-3 py-2.5 bg-bg-tertiary border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
-                      />
-                      <p className="mt-1 text-xs text-text-muted">
-                        Needs{" "}
-                        <span className="text-text-tertiary font-mono">
-                          repo
-                        </span>{" "}
-                        scope.{" "}
-                        <a
-                          href="https://github.com/settings/tokens/new?scopes=repo&description=Pocket+Dev+Export"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300 underline"
-                        >
-                          Create token
-                        </a>
-                      </p>
-                    </div>
-
-                    {/* Repo Name */}
-                    <div>
-                      <label className="block text-sm font-medium text-text-secondary mb-1.5">
-                        Repository Name
-                      </label>
-                      <input
-                        type="text"
-                        value={githubRepoName}
-                        onChange={(e) =>
-                          setGithubRepoName(
-                            e.target.value.replace(/[^a-zA-Z0-9._-]/g, "-"),
-                          )
-                        }
-                        placeholder="my-nextjs-app"
-                        disabled={githubExportStatus === "exporting"}
-                        className="w-full px-3 py-2.5 bg-bg-tertiary border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 text-sm disabled:opacity-50"
-                      />
-                    </div>
-
-                    {/* Visibility */}
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setGithubPrivate(false)}
-                        disabled={githubExportStatus === "exporting"}
-                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
-                          !githubPrivate
-                            ? "bg-blue-600 text-white border border-blue-500"
-                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-primary hover:border-border-secondary"
-                        }`}
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        Public
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setGithubPrivate(true)}
-                        disabled={githubExportStatus === "exporting"}
-                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
-                          githubPrivate
-                            ? "bg-blue-600 text-white border border-blue-500"
-                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-primary hover:border-border-secondary"
-                        }`}
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                          />
-                        </svg>
-                        Private
-                      </button>
-                    </div>
-
-                    {/* Error */}
-                    {githubExportStatus === "error" && (
-                      <div className="px-3 py-2.5 bg-red-500/10 border border-red-500/30 rounded-xl">
-                        <p className="text-sm text-red-400">
-                          {githubExportMessage}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Progress */}
-                    {githubExportStatus === "exporting" && (
-                      <div className="flex items-center gap-3 px-3 py-2.5 bg-blue-500/10 border border-blue-500/30 rounded-xl">
-                        <div className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
-                        <p className="text-sm text-blue-400">
-                          {githubExportMessage}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Footer */}
-                  <div className="px-6 pb-5 flex gap-3">
-                    <button
-                      onClick={() => setShowGitHubModal(false)}
-                      disabled={githubExportStatus === "exporting"}
-                      className="flex-1 px-4 py-2.5 text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-xl text-sm font-medium transition disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={pushToGitHub}
-                      disabled={
-                        !githubToken ||
-                        !githubRepoName ||
-                        githubExportStatus === "exporting"
-                      }
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {githubExportStatus === "exporting" ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Pushing...
-                        </>
-                      ) : (
-                        <>
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                            />
-                          </svg>
-                          Push to GitHub
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+        <GitHubExportModal
+          isOpen={showGitHubModal}
+          onClose={() => setShowGitHubModal(false)}
+          githubToken={githubToken}
+          onTokenChange={setGithubToken}
+          githubRepoName={githubRepoName}
+          onRepoNameChange={setGithubRepoName}
+          githubPrivate={githubPrivate}
+          onPrivateChange={setGithubPrivate}
+          githubExportStatus={githubExportStatus}
+          githubExportMessage={githubExportMessage}
+          githubRepoUrl={githubRepoUrl}
+          onPushToGitHub={pushToGitHub}
+        />
 
         {/* Export Success Toast */}
         {exportSuccessMessage && (
@@ -3616,211 +3075,6 @@ ${pdfUrlList}
             if (projectToDelete) deleteProject(projectToDelete);
           }}
         />
-
-        {/* Token Deduction Confirmation Modal (success view) */}
-        {showTokenConfirmModal &&
-          (() => {
-            const isGeneration = showTokenConfirmModal === "app";
-            const genIntegrationCost = getGenerationIntegrationCost();
-            const editIntCost = getEditIntegrationCost();
-            const appCost = isGeneration ? 2 : 0;
-            const integrationCost = isGeneration
-              ? genIntegrationCost
-              : editIntCost;
-            const appBalance = userData?.appTokens || 0;
-            const integrationBalance = userData?.integrationTokens || 0;
-
-            return (
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-                  <div className="relative px-6 pt-8 pb-4 text-center">
-                    <button
-                      onClick={() => setShowTokenConfirmModal(null)}
-                      className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
-                    >
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                    <div
-                      className={`inline-flex items-center justify-center w-14 h-14 mb-4 rounded-2xl ${
-                        isGeneration
-                          ? "bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30"
-                          : "bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30"
-                      }`}
-                    >
-                      <svg
-                        className={`w-7 h-7 ${isGeneration ? "text-blue-400" : "text-violet-400"}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                        />
-                      </svg>
-                    </div>
-                    <h3 className="text-lg font-bold text-text-primary mb-1">
-                      {isGeneration ? "Create New Project" : "Edit Project"}
-                    </h3>
-                    <p className="text-text-tertiary text-sm">
-                      {isGeneration
-                        ? "This action will deduct tokens from your balance."
-                        : "This edit will deduct tokens from your balance."}
-                    </p>
-                  </div>
-                  <div className="px-6 pb-4 space-y-3">
-                    {appCost > 0 && (
-                      <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">
-                            App Tokens
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-text-secondary">
-                            Project creation
-                          </span>
-                          <span className="text-sm font-bold text-blue-400">
-                            -{appCost}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                          <span>Balance: {appBalance}</span>
-                          <span>After: {appBalance - appCost}</span>
-                        </div>
-                      </div>
-                    )}
-                    {integrationCost > 0 && (
-                      <div className="p-4 rounded-xl border bg-violet-500/5 border-violet-500/20">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-medium text-violet-400 uppercase tracking-wide">
-                            Integration Tokens
-                          </span>
-                        </div>
-                        {!isGeneration && (
-                          <>
-                            {editAppAuth.includes("username-password") && (
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-text-secondary">
-                                  Username & Password auth
-                                </span>
-                                <span className="text-sm font-bold text-violet-400">
-                                  -30
-                                </span>
-                              </div>
-                            )}
-                            {editAppAuth.includes("google") && (
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-text-secondary">
-                                  Google OAuth auth
-                                </span>
-                                <span className="text-sm font-bold text-violet-400">
-                                  -30
-                                </span>
-                              </div>
-                            )}
-                            {editAppAuth.length === 0 && (
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-sm text-text-secondary">
-                                  Edit changes
-                                </span>
-                                <span className="text-sm font-bold text-violet-400">
-                                  -3
-                                </span>
-                              </div>
-                            )}
-                          </>
-                        )}
-                        <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                          <span>Balance: {integrationBalance}</span>
-                          <span>
-                            After: {integrationBalance - integrationCost}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                    <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
-                      <svg
-                        className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                        />
-                      </svg>
-                      <p className="text-xs text-amber-200/80">
-                        Tokens are non-refundable once deducted, even if you
-                        cancel during the process.
-                      </p>
-                    </div>
-                    {!isGeneration && (
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={skipEditTokenConfirm}
-                          onChange={(e) => {
-                            setSkipEditTokenConfirm(e.target.checked);
-                            localStorage.setItem(
-                              "skipEditTokenConfirm",
-                              String(e.target.checked),
-                            );
-                          }}
-                          className="w-4 h-4 rounded border-text-faint bg-bg-tertiary text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
-                        />
-                        <span className="text-xs text-text-tertiary group-hover:text-text-secondary transition">
-                          Don&apos;t show this again for edits
-                        </span>
-                      </label>
-                    )}
-                  </div>
-                  <div className="px-6 pb-6 space-y-2">
-                    <button
-                      onClick={() => {
-                        if (isGeneration) {
-                          setShowTokenConfirmModal(null);
-                          startGeneration();
-                        } else {
-                          proceedWithEdit();
-                        }
-                      }}
-                      className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all text-white ${
-                        isGeneration
-                          ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                          : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
-                      }`}
-                    >
-                      {isGeneration ? "Create Project" : "Start Edit"}
-                    </button>
-                    <button
-                      onClick={() => setShowTokenConfirmModal(null)}
-                      className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
 
         {/* Token Purchase Modal (success view) */}
         {showTokenPurchaseModal && (
@@ -4175,11 +3429,10 @@ ${pdfUrlList}
                       if (withinRefundWindow && user) {
                         try {
                           const editCost = getEditIntegrationCost();
-                          const userRef = doc(db, "users", user.uid);
-                          await updateDoc(userRef, {
-                            integrationTokens: increment(editCost),
-                          });
-                          await refreshUserData();
+                          await adjustIntegrationTokens(
+                            editCost,
+                            "Edit cancelled refund",
+                          );
                         } catch (err) {
                           console.error("Error refunding tokens:", err);
                         }
@@ -4193,6 +3446,14 @@ ${pdfUrlList}
               </div>
             </div>
           </div>
+        )}
+
+        {/* Code Viewer Modal */}
+        {showCodeViewer && project && (
+          <CodeViewer
+            files={project.files}
+            onClose={() => setShowCodeViewer(false)}
+          />
         )}
       </div>
     );
@@ -4748,576 +4009,47 @@ ${pdfUrlList}
       )}
 
       {/* Welcome Modal for New Users */}
-      {isNewUser && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[70] flex items-center justify-center p-4">
-          <style>{`
-            @keyframes welcome-modal-in {
-              from { opacity: 0; transform: scale(0.9) translateY(20px); }
-              to { opacity: 1; transform: scale(1) translateY(0); }
-            }
-            @keyframes welcome-logo-float {
-              0%, 100% { transform: translateY(0); }
-              50% { transform: translateY(-6px); }
-            }
-            @keyframes welcome-logo-glow-pulse {
-              0%, 100% { opacity: 0.4; transform: scale(1); }
-              50% { opacity: 0.8; transform: scale(1.15); }
-            }
-            @keyframes welcome-ring-spin {
-              from { transform: rotate(0deg); }
-              to { transform: rotate(360deg); }
-            }
-            @keyframes welcome-ring-spin-reverse {
-              from { transform: rotate(360deg); }
-              to { transform: rotate(0deg); }
-            }
-            @keyframes welcome-particle {
-              0% { opacity: 0; transform: translate(0, 0) scale(0); }
-              20% { opacity: 1; transform: scale(1); }
-              100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0); }
-            }
-            @keyframes welcome-shine-sweep {
-              0% { transform: translateX(-100%) rotate(25deg); }
-              100% { transform: translateX(200%) rotate(25deg); }
-            }
-            @keyframes welcome-bracket-blink {
-              0%, 40%, 100% { opacity: 0.6; }
-              20% { opacity: 1; }
-            }
-            @keyframes welcome-text-in {
-              from { opacity: 0; transform: translateY(10px); }
-              to { opacity: 1; transform: translateY(0); }
-            }
-            @keyframes welcome-card-in {
-              from { opacity: 0; transform: translateX(-12px); }
-              to { opacity: 1; transform: translateX(0); }
-            }
-          `}</style>
-          <div
-            className="bg-bg-secondary border border-border-secondary/80 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
-            style={{
-              animation:
-                "welcome-modal-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
-            }}
-          >
-            {/* Animated Logo Header */}
-            <div className="relative px-6 pt-10 pb-4 text-center overflow-hidden">
-              {/* Background radial glow */}
-              <div
-                className="absolute inset-0 flex items-start justify-center pointer-events-none"
-                style={{ top: "-20px" }}
-              >
-                <div
-                  className="w-64 h-64 rounded-full"
-                  style={{
-                    background:
-                      "radial-gradient(circle, rgba(99,102,241,0.15) 0%, rgba(139,92,246,0.08) 40%, transparent 70%)",
-                    animation:
-                      "welcome-logo-glow-pulse 3s ease-in-out infinite",
-                  }}
-                />
-              </div>
+      <WelcomeModal
+        isOpen={isNewUser}
+        onClose={clearNewUser}
+      />
 
-              {/* Logo container with floating animation */}
-              <div
-                className="relative inline-block mb-5"
-                style={{
-                  animation: "welcome-logo-float 4s ease-in-out infinite",
-                }}
-              >
-                {/* Outer orbiting ring */}
-                <div
-                  className="absolute -inset-5 rounded-full border border-blue-500/20 border-dashed"
-                  style={{ animation: "welcome-ring-spin 12s linear infinite" }}
-                />
-                {/* Inner orbiting ring */}
-                <div
-                  className="absolute -inset-3 rounded-full border border-violet-500/25"
-                  style={{
-                    animation: "welcome-ring-spin-reverse 8s linear infinite",
-                  }}
-                />
+      {/* Token Confirmation Modal */}
+      {showTokenConfirmModal && (() => {
+        const isGeneration = showTokenConfirmModal === "app";
+        const genIntegrationCost = getGenerationIntegrationCost();
+        const editIntCost = getEditIntegrationCost();
+        const appCost = isGeneration ? 2 : 0;
+        const integrationCost = isGeneration ? genIntegrationCost : editIntCost;
+        const appBalance = userData?.appTokens || 0;
+        const integrationBalance = userData?.integrationTokens || 0;
 
-                {/* Orbiting dots on the rings */}
-                <div
-                  className="absolute -inset-5"
-                  style={{ animation: "welcome-ring-spin 12s linear infinite" }}
-                >
-                  <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-400 rounded-full shadow-lg shadow-blue-400/50" />
-                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1 h-1 bg-violet-400 rounded-full shadow-lg shadow-violet-400/50" />
-                </div>
-                <div
-                  className="absolute -inset-3"
-                  style={{
-                    animation: "welcome-ring-spin-reverse 8s linear infinite",
-                  }}
-                >
-                  <div className="absolute top-1/2 right-0 translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-indigo-400 rounded-full shadow-lg shadow-indigo-400/50" />
-                </div>
+        const handleConfirm = () => {
+          if (isGeneration) {
+            setShowTokenConfirmModal(null);
+            startGeneration();
+          } else {
+            proceedWithEdit();
+          }
+        };
 
-                {/* Floating particles */}
-                {[
-                  {
-                    tx: "-30px",
-                    ty: "-40px",
-                    delay: "0s",
-                    dur: "2.5s",
-                    size: "3px",
-                    color: "#60a5fa",
-                  },
-                  {
-                    tx: "35px",
-                    ty: "-25px",
-                    delay: "0.4s",
-                    dur: "3s",
-                    size: "2px",
-                    color: "#a78bfa",
-                  },
-                  {
-                    tx: "-25px",
-                    ty: "35px",
-                    delay: "0.8s",
-                    dur: "2.8s",
-                    size: "2.5px",
-                    color: "#818cf8",
-                  },
-                  {
-                    tx: "40px",
-                    ty: "30px",
-                    delay: "1.2s",
-                    dur: "3.2s",
-                    size: "2px",
-                    color: "#60a5fa",
-                  },
-                  {
-                    tx: "-40px",
-                    ty: "5px",
-                    delay: "1.6s",
-                    dur: "2.6s",
-                    size: "3px",
-                    color: "#c084fc",
-                  },
-                  {
-                    tx: "20px",
-                    ty: "-45px",
-                    delay: "2s",
-                    dur: "2.9s",
-                    size: "2px",
-                    color: "#818cf8",
-                  },
-                ].map((p, i) => (
-                  <div
-                    key={i}
-                    className="absolute top-1/2 left-1/2 rounded-full"
-                    style={
-                      {
-                        width: p.size,
-                        height: p.size,
-                        backgroundColor: p.color,
-                        boxShadow: `0 0 6px ${p.color}`,
-                        "--tx": p.tx,
-                        "--ty": p.ty,
-                        animation: `welcome-particle ${p.dur} ease-out ${p.delay} infinite`,
-                      } as React.CSSProperties
-                    }
-                  />
-                ))}
-
-                {/* The actual logo with glow shadow */}
-                <div
-                  className="relative"
-                  style={{
-                    filter:
-                      "drop-shadow(0 0 20px rgba(99,102,241,0.4)) drop-shadow(0 0 40px rgba(139,92,246,0.2))",
-                  }}
-                >
-                  <Logo size={72} animate />
-                  {/* Shine sweep overlay */}
-                  <div
-                    className="absolute inset-0 overflow-hidden rounded-2xl"
-                    style={{ borderRadius: "18px" }}
-                  >
-                    <div
-                      className="absolute inset-0 w-[200%]"
-                      style={{
-                        background:
-                          "linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.15) 45%, rgba(255,255,255,0.25) 50%, rgba(255,255,255,0.15) 55%, transparent 60%)",
-                        animation:
-                          "welcome-shine-sweep 3s ease-in-out 0.5s infinite",
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <h3
-                className="text-2xl font-bold text-text-primary mb-2"
-                style={{ animation: "welcome-text-in 0.5s ease-out 0.3s both" }}
-              >
-                Welcome to Pocket Dev!
-              </h3>
-              <p
-                className="text-text-tertiary text-sm"
-                style={{ animation: "welcome-text-in 0.5s ease-out 0.5s both" }}
-              >
-                We&apos;ve given you free tokens to get started. Here&apos;s how
-                they work:
-              </p>
-            </div>
-
-            {/* Token Explanation */}
-            <div className="px-6 py-4 space-y-3">
-              {/* App Tokens */}
-              <div
-                className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl"
-                style={{ animation: "welcome-card-in 0.5s ease-out 0.6s both" }}
-              >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500/30 to-blue-600/20 flex items-center justify-center flex-shrink-0 border border-blue-500/20">
-                    <svg
-                      className="w-4 h-4 text-blue-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 4.5v15m7.5-7.5h-15"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-semibold text-text-primary">
-                      App Tokens
-                    </h4>
-                    <p className="text-xs text-blue-400 font-medium">
-                      4 free tokens awarded
-                    </p>
-                  </div>
-                </div>
-                <p className="text-xs text-text-secondary leading-relaxed">
-                  App tokens let you create new projects. Each new project costs{" "}
-                  <span className="text-text-primary font-medium">
-                    2 app tokens
-                  </span>
-                  , so you can create{" "}
-                  <span className="text-text-primary font-medium">
-                    2 projects
-                  </span>{" "}
-                  for free.
-                </p>
-              </div>
-
-              {/* Integration Tokens */}
-              <div
-                className="p-4 bg-violet-500/5 border border-violet-500/20 rounded-xl"
-                style={{
-                  animation: "welcome-card-in 0.5s ease-out 0.75s both",
-                }}
-              >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500/30 to-violet-600/20 flex items-center justify-center flex-shrink-0 border border-violet-500/20">
-                    <svg
-                      className="w-4 h-4 text-violet-400"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-semibold text-text-primary">
-                      Integration Tokens
-                    </h4>
-                    <p className="text-xs text-violet-400 font-medium">
-                      10 free tokens awarded
-                    </p>
-                  </div>
-                </div>
-                <p className="text-xs text-text-secondary leading-relaxed">
-                  Integration tokens let you make AI-powered edits to your
-                  projects. Each edit costs{" "}
-                  <span className="text-text-primary font-medium">
-                    1 integration token
-                  </span>
-                  , so you get{" "}
-                  <span className="text-text-primary font-medium">
-                    10 edits
-                  </span>{" "}
-                  for free.
-                </p>
-              </div>
-
-              {/* Buy More Note */}
-              <p
-                className="text-xs text-text-muted text-center"
-                style={{ animation: "welcome-text-in 0.5s ease-out 0.9s both" }}
-              >
-                Need more? You can buy additional tokens anytime from the
-                sidebar or the Tokens page.
-              </p>
-            </div>
-
-            {/* CTA */}
-            <div
-              className="px-6 pb-6"
-              style={{ animation: "welcome-text-in 0.5s ease-out 1s both" }}
-            >
-              <button
-                onClick={clearNewUser}
-                className="w-full px-5 py-3 bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40"
-              >
-                Got it, let&apos;s go!
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Token Deduction Confirmation Modal */}
-      {showTokenConfirmModal &&
-        (() => {
-          const isGeneration = showTokenConfirmModal === "app";
-          const genIntegrationCost = getGenerationIntegrationCost();
-          const editIntCost = getEditIntegrationCost();
-          const appCost = isGeneration ? 2 : 0;
-          const integrationCost = isGeneration
-            ? genIntegrationCost
-            : editIntCost;
-          const appBalance = userData?.appTokens || 0;
-          const integrationBalance = userData?.integrationTokens || 0;
-
-          return (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-                {/* Header */}
-                <div className="relative px-6 pt-8 pb-4 text-center">
-                  <button
-                    onClick={() => setShowTokenConfirmModal(null)}
-                    className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
-                  >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                  <div
-                    className={`inline-flex items-center justify-center w-14 h-14 mb-4 rounded-2xl ${
-                      isGeneration
-                        ? "bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30"
-                        : "bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30"
-                    }`}
-                  >
-                    <svg
-                      className={`w-7 h-7 ${isGeneration ? "text-blue-400" : "text-violet-400"}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                      />
-                    </svg>
-                  </div>
-                  <h3 className="text-lg font-bold text-text-primary mb-1">
-                    {isGeneration ? "Create New Project" : "Edit Project"}
-                  </h3>
-                  <p className="text-text-tertiary text-sm">
-                    {isGeneration
-                      ? "This action will deduct tokens from your balance."
-                      : "This edit will deduct tokens from your balance."}
-                  </p>
-                </div>
-
-                {/* Token Details */}
-                <div className="px-6 pb-4 space-y-3">
-                  {/* App Tokens section (generation only) */}
-                  {appCost > 0 && (
-                    <div className="p-4 rounded-xl border bg-blue-500/5 border-blue-500/20">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">
-                          App Tokens
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-text-secondary">
-                          Project creation
-                        </span>
-                        <span className="text-sm font-bold text-blue-400">
-                          -{appCost}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                        <span>Balance: {appBalance}</span>
-                        <span>After: {appBalance - appCost}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Integration Tokens section */}
-                  {integrationCost > 0 && (
-                    <div className="p-4 rounded-xl border bg-violet-500/5 border-violet-500/20">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-violet-400 uppercase tracking-wide">
-                          Integration Tokens
-                        </span>
-                      </div>
-                      {isGeneration ? (
-                        <>
-                          {currentAppAuth.includes("username-password") && (
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-text-secondary">
-                                Username & Password auth
-                              </span>
-                              <span className="text-sm font-bold text-violet-400">
-                                -30
-                              </span>
-                            </div>
-                          )}
-                          {currentAppAuth.includes("google") && (
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-text-secondary">
-                                Google OAuth auth
-                              </span>
-                              <span className="text-sm font-bold text-violet-400">
-                                -30
-                              </span>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          {editAppAuth.includes("username-password") && (
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-text-secondary">
-                                Username & Password auth
-                              </span>
-                              <span className="text-sm font-bold text-violet-400">
-                                -30
-                              </span>
-                            </div>
-                          )}
-                          {editAppAuth.includes("google") && (
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-text-secondary">
-                                Google OAuth auth
-                              </span>
-                              <span className="text-sm font-bold text-violet-400">
-                                -30
-                              </span>
-                            </div>
-                          )}
-                          {editAppAuth.length === 0 && (
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-sm text-text-secondary">
-                                Edit changes
-                              </span>
-                              <span className="text-sm font-bold text-violet-400">
-                                -3
-                              </span>
-                            </div>
-                          )}
-                        </>
-                      )}
-                      <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 border-t border-border-secondary/50">
-                        <span>Balance: {integrationBalance}</span>
-                        <span>
-                          After: {integrationBalance - integrationCost}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
-                    <svg
-                      className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                      />
-                    </svg>
-                    <p className="text-xs text-amber-200/80">
-                      Tokens are non-refundable once deducted, even if you
-                      cancel during the process.
-                    </p>
-                  </div>
-                  {!isGeneration && (
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <input
-                        type="checkbox"
-                        checked={skipEditTokenConfirm}
-                        onChange={(e) => {
-                          setSkipEditTokenConfirm(e.target.checked);
-                          localStorage.setItem(
-                            "skipEditTokenConfirm",
-                            String(e.target.checked),
-                          );
-                        }}
-                        className="w-4 h-4 rounded border-text-faint bg-bg-tertiary text-violet-500 focus:ring-violet-500 focus:ring-offset-0 cursor-pointer"
-                      />
-                      <span className="text-xs text-text-tertiary group-hover:text-text-secondary transition">
-                        Don&apos;t show this again for edits
-                      </span>
-                    </label>
-                  )}
-                </div>
-
-                {/* Actions */}
-                <div className="px-6 pb-6 space-y-2">
-                  <button
-                    onClick={() => {
-                      if (isGeneration) {
-                        setShowTokenConfirmModal(null);
-                        startGeneration();
-                      } else {
-                        proceedWithEdit();
-                      }
-                    }}
-                    className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 font-semibold rounded-xl transition-all text-white ${
-                      isGeneration
-                        ? "bg-gradient-to-r from-blue-500 to-violet-500 hover:from-blue-400 hover:to-violet-400"
-                        : "bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400"
-                    }`}
-                  >
-                    {isGeneration ? "Create Project" : "Start Edit"}
-                  </button>
-                  <button
-                    onClick={() => setShowTokenConfirmModal(null)}
-                    className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        return (
+          <TokenConfirmModal
+            isOpen={true}
+            onClose={() => setShowTokenConfirmModal(null)}
+            confirmationType={isGeneration ? "generation" : "edit"}
+            appCost={appCost}
+            integrationCost={integrationCost}
+            appBalance={appBalance}
+            integrationBalance={integrationBalance}
+            skipEditTokenConfirm={skipEditTokenConfirm}
+            onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
+            onConfirm={handleConfirm}
+            currentAppAuth={currentAppAuth}
+            editAppAuth={editAppAuth}
+          />
+        );
+      })()}
 
       {/* Authentication Modal */}
 
@@ -5341,11 +4073,7 @@ ${pdfUrlList}
             if (withinRefundWindow && user) {
               try {
                 const editCost = getEditIntegrationCost();
-                const userRef = doc(db, "users", user.uid);
-                await updateDoc(userRef, {
-                  integrationTokens: increment(editCost),
-                });
-                await refreshUserData();
+                await adjustIntegrationTokens(editCost, "Edit cancelled refund");
               } catch (err) {
                 console.error("Error refunding tokens:", err);
               }
@@ -5445,3 +4173,5 @@ export default function ReactGenerator() {
     </Suspense>
   );
 }
+
+

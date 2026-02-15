@@ -1,7 +1,4 @@
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from './firebase';
-
-const MAINTENANCE_DOC_PATH = 'system/maintenance';
+import type { CompatibleUser } from "@/app/contexts/AuthContext";
 
 export interface MaintenanceStatus {
   enabled: boolean;
@@ -10,83 +7,47 @@ export interface MaintenanceStatus {
   lastUpdatedAt?: Date;
 }
 
-/**
- * Get current maintenance mode status
- */
 export async function getMaintenanceStatus(): Promise<MaintenanceStatus> {
   try {
-    // Check if db is available (may be null during SSR or if Firebase not initialized)
-    if (!db) {
-      console.warn('Firestore not initialized, maintenance mode disabled by default');
+    const response = await fetch("/api/maintenance", { cache: "no-store" });
+    if (!response.ok) {
       return { enabled: false };
     }
-
-    const docRef = doc(db, MAINTENANCE_DOC_PATH);
-    const docSnap = await getDoc(docRef);
-
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      return {
-        enabled: data.enabled || false,
-        message: data.message,
-        lastUpdatedBy: data.lastUpdatedBy,
-        lastUpdatedAt: data.lastUpdatedAt?.toDate(),
-      };
-    }
-
-    // Default: maintenance mode is off
-    return { enabled: false };
+    const data = await response.json();
+    return {
+      enabled: Boolean(data.enabled),
+      message: typeof data.message === "string" ? data.message : undefined,
+      lastUpdatedBy:
+        typeof data.lastUpdatedBy === "string" ? data.lastUpdatedBy : undefined,
+      lastUpdatedAt: data.lastUpdatedAt ? new Date(data.lastUpdatedAt) : undefined,
+    };
   } catch (error) {
-    console.error('Error getting maintenance status:', error);
-    // On error, assume maintenance mode is off to avoid blocking users
+    console.error("Error getting maintenance status:", error);
     return { enabled: false };
   }
 }
 
-/**
- * Set maintenance mode status (admin only)
- */
 export async function setMaintenanceStatus(
   enabled: boolean,
   adminEmail: string,
-  message?: string
+  message?: string,
 ): Promise<void> {
-  try {
-    if (!db) {
-      throw new Error('Firestore is not initialized');
-    }
+  const response = await fetch("/api/maintenance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled, adminEmail, message }),
+  });
 
-    const docRef = doc(db, MAINTENANCE_DOC_PATH);
-    await setDoc(docRef, {
-      enabled,
-      message: message || 'System is currently under maintenance. Please check back soon.',
-      lastUpdatedBy: adminEmail,
-      lastUpdatedAt: new Date(),
-    });
-  } catch (error) {
-    console.error('Error setting maintenance status:', error);
-    throw error;
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to update maintenance mode");
   }
 }
 
-/**
- * Check if user is admin (checks both custom claim and email)
- */
-export async function isUserAdmin(user: any): Promise<boolean> {
+export async function isUserAdmin(
+  user: CompatibleUser | null,
+): Promise<boolean> {
   if (!user) return false;
-
-  try {
-    // First check: Email-based admin (matches DashboardSidebar logic)
-    const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL;
-    if (adminEmail && user.email === adminEmail) {
-      return true;
-    }
-
-    // Second check: Firebase custom claim (if set up)
-    const idTokenResult = await user.getIdTokenResult();
-    return idTokenResult.claims.admin === true;
-  } catch (error) {
-    console.error('Error checking admin status:', error);
-    return false;
-  }
+  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+  return Boolean(adminEmail && user.email === adminEmail);
 }

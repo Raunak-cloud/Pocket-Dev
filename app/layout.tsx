@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "./contexts/AuthContext";
+import { ThemeProvider } from "./contexts/ThemeContext";
 import MaintenanceCheck from "./components/MaintenanceCheck";
 
 const inter = Inter({
@@ -28,12 +30,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${inter.variable} font-sans antialiased bg-slate-950 text-white selection:bg-blue-500/30`}>
-        <AuthProvider>
-          <MaintenanceCheck />
-          {children}
-        </AuthProvider>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('pocket-dev-theme');if(t==='light'){}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})()`,
+          }}
+        />
+      </head>
+      <body className={`${inter.variable} font-sans antialiased bg-bg-primary text-text-primary selection:bg-blue-500/30`}>
+        <ClerkProvider>
+          <ThemeProvider>
+            <AuthProvider>
+              <MaintenanceCheck />
+              {children}
+            </AuthProvider>
+          </ThemeProvider>
+        </ClerkProvider>
       </body>
     </html>
   );

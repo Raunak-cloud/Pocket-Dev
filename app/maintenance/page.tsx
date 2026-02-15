@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
+import { isUserAdmin } from '@/lib/maintenance';
 import { Settings, Clock, Wrench, LogOut } from 'lucide-react';
 
 export default function MaintenancePage() {
@@ -16,8 +17,7 @@ export default function MaintenancePage() {
     // Check if user is admin
     const checkAdminStatus = async () => {
       if (user) {
-        const idTokenResult = await user.getIdTokenResult();
-        const isAdminUser = idTokenResult.claims.admin === true;
+        const isAdminUser = await isUserAdmin(user);
         setIsAdmin(isAdminUser);
 
         // If admin, redirect to dashboard
