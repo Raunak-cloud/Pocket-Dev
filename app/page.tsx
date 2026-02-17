@@ -3,9 +3,7 @@
 import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-import { editReact } from "./react-actions";
 import { generateCodeWithInngest } from "@/lib/inngest-helpers";
-import Logo from "./components/Logo";
 import CodeViewer from "./components/CodeViewer";
 import E2BPreview from "./components/E2BPreview";
 import LoadingScreen from "./components/LoadingScreen";
@@ -16,15 +14,11 @@ import { createSandboxServer } from "./sandbox-actions";
 import { cancelGenerationJob } from "./inngest-actions";
 import { prepareE2BFiles } from "@/lib/e2b-utils";
 import { useAuth } from "./contexts/AuthContext";
-import JSZip from "jszip";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
 import GenerationProgress from "./components/GenerationProgress";
 import MaintenanceToggle from "./components/MaintenanceToggle";
-import {
-  normalizeGeneratedImageSources,
-  persistGeneratedImages,
-} from "@/lib/persist-images";
+import { persistGeneratedImages } from "@/lib/persist-images";
 import { useSupabaseUploads } from "@/lib/supabase-uploads";
 import ThemeToggle from "./components/ThemeToggle";
 import {
@@ -58,6 +52,11 @@ const BASE_GENERATION_APP_COST = 2;
 const BASE_EDIT_APP_COST = 0.1;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
+
+// Helper function to format token values to 2 decimal places
+const formatTokens = (tokens: number): string => {
+  return tokens.toFixed(2);
+};
 
 // E2B preview component with loading state
 function ReactGeneratorContent() {
@@ -101,6 +100,15 @@ function ReactGeneratorContent() {
   const [previewKey, setPreviewKey] = useState(0);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
   const [textEditMode, setTextEditMode] = useState(false);
+  const [imageSelectMode, setImageSelectMode] = useState(false);
+  const [selectedPreviewImage, setSelectedPreviewImage] = useState<{
+    src: string;
+    resolvedSrc?: string;
+    alt: string;
+    occurrence: number;
+  } | null>(null);
+  const [isReplacingSelectedImage, setIsReplacingSelectedImage] = useState(false);
+  const [imageRegenerationPrompt, setImageRegenerationPrompt] = useState("");
   const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
     [],
   );
@@ -158,6 +166,7 @@ function ReactGeneratorContent() {
   const [ticketSubmittedNotice, setTicketSubmittedNotice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
+  const replaceImageInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -173,6 +182,13 @@ function ReactGeneratorContent() {
   );
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
+  const [editClarificationQuestion, setEditClarificationQuestion] = useState("");
+  const [editClarificationSuggestion, setEditClarificationSuggestion] =
+    useState("");
+  const [editClarificationAnswer, setEditClarificationAnswer] = useState("");
+  const [editClarificationHistory, setEditClarificationHistory] = useState<
+    Array<{ question: string; answer: string }>
+  >([]);
   const { startUpload } = useSupabaseUploads();
 
   // Initialize custom hooks for publishing, GitHub export, and editor export
@@ -199,11 +215,9 @@ function ReactGeneratorContent() {
   const {
     isPublishing,
     publishedUrl,
-    deploymentId,
     hasUnpublishedChanges,
     showDomainModal,
     customDomain,
-    setIsPublishing,
     setPublishedUrl,
     setDeploymentId,
     setHasUnpublishedChanges,
@@ -226,9 +240,6 @@ function ReactGeneratorContent() {
     setGithubToken,
     setGithubRepoName,
     setGithubPrivate,
-    setGithubExportStatus,
-    setGithubExportMessage,
-    setGithubRepoUrl,
     exportToGitHub,
     pushToGitHub,
   } = githubExportHook;
@@ -238,7 +249,6 @@ function ReactGeneratorContent() {
     isExporting,
     exportSuccessMessage,
     setShowExportDropdown,
-    setIsExporting,
     setExportSuccessMessage,
     exportToVSCode,
     exportToCursor,
@@ -314,21 +324,40 @@ function ReactGeneratorContent() {
   async function detectEditClarification(
     text: string,
     filePaths: string[],
-  ): Promise<{ needsClarification: boolean; question: string }> {
+    clarificationHistory?: Array<{ question: string; answer: string }>,
+  ): Promise<{
+    needsClarification: boolean;
+    question: string;
+    suggestedInterpretation: string;
+  }> {
     try {
       const res = await fetch("/api/check-edit-clarity", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text, filePaths }),
+        body: JSON.stringify({ prompt: text, filePaths, clarificationHistory }),
       });
-      if (!res.ok) return { needsClarification: false, question: "" };
+      if (!res.ok) {
+        return {
+          needsClarification: false,
+          question: "",
+          suggestedInterpretation: "",
+        };
+      }
       const data = await res.json();
       return {
         needsClarification: data.needsClarification === true,
         question: typeof data.question === "string" ? data.question : "",
+        suggestedInterpretation:
+          typeof data.suggestedInterpretation === "string"
+            ? data.suggestedInterpretation
+            : "",
       };
     } catch {
-      return { needsClarification: false, question: "" };
+      return {
+        needsClarification: false,
+        question: "",
+        suggestedInterpretation: "",
+      };
     }
   }
 
@@ -350,7 +379,7 @@ function ReactGeneratorContent() {
     "A recipe sharing platform with search and categories",
     "A portfolio site with project gallery and blog",
   ];
-  const [typingPlaceholder, setTypingPlaceholder] = useState("");
+  const [, setTypingPlaceholder] = useState("");
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
   const [isTyping, setIsTyping] = useState(true);
   const [charIndex, setCharIndex] = useState(0);
@@ -782,7 +811,7 @@ function ReactGeneratorContent() {
   // Open a saved project
   const openSavedProject = (savedProject: SavedProject) => {
     setProject({
-      files: normalizeGeneratedImageSources(savedProject.files),
+      files: savedProject.files,
       dependencies: savedProject.dependencies || {},
       lintReport: savedProject.lintReport || {
         passed: true,
@@ -1027,7 +1056,7 @@ function ReactGeneratorContent() {
   const getAuthAppCost = (auth: string[]) => auth.length * AUTH_OPTION_APP_COST;
   const getDatabaseAppCost = (db: string[]) =>
     db.length > 0 ? DATABASE_APP_FLAT_COST : 0;
-  const roundToken = (value: number) => Math.round(value * 10) / 10;
+  const roundToken = (value: number) => Math.round(value * 100) / 100;
   const getGenerationAppCost = () =>
     roundToken(
       BASE_GENERATION_APP_COST +
@@ -1079,6 +1108,36 @@ function ReactGeneratorContent() {
       .join("\n")}`;
   };
 
+  const isExplicitImageChangeRequest = (request: string): boolean => {
+    const text = request.toLowerCase();
+    if (!text.trim()) return false;
+
+    const imageIntentRe =
+      /\b(image|images|photo|photos|picture|pictures|hero image|gallery|thumbnail|banner|logo|illustration|background image)\b/;
+    const changeVerbRe =
+      /\b(change|replace|swap|update|regenerate|refresh|new|different|another|remove|edit|modify)\b/;
+
+    return imageIntentRe.test(text) && changeVerbRe.test(text);
+  };
+
+  const clearEditClarificationState = () => {
+    setEditClarificationQuestion("");
+    setEditClarificationSuggestion("");
+    setEditClarificationAnswer("");
+    setEditClarificationHistory([]);
+  };
+
+  const buildClarifiedEditRequest = (
+    basePrompt: string,
+    clarificationHistory: Array<{ question: string; answer: string }>,
+  ): string => {
+    if (clarificationHistory.length === 0) return basePrompt;
+    const details = clarificationHistory
+      .map((entry, idx) => `${idx + 1}. ${entry.question} -> ${entry.answer}`)
+      .join("\n");
+    return `${basePrompt}\n\nUser clarification details:\n${details}`;
+  };
+
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
@@ -1089,6 +1148,7 @@ function ReactGeneratorContent() {
       checkingEditClarity
     )
       return;
+    let resolvedClarificationHistory = [...editClarificationHistory];
     // Block auth/database intent in text prompts; force integration buttons.
     if (editPrompt.trim()) {
       setCheckingAuthIntent(true);
@@ -1107,21 +1167,65 @@ function ReactGeneratorContent() {
     }
     setAuthPromptWarning(null);
 
-    // Ask for clarification before starting edit if request is ambiguous.
+    // Ask for clarification iteratively until request is precise enough.
     if (editPrompt.trim()) {
+      let candidateHistory = [...resolvedClarificationHistory];
+
+      if (editClarificationQuestion) {
+        const clarificationAnswer = editClarificationAnswer.trim();
+        if (!clarificationAnswer) {
+          const suggestionLine = editClarificationSuggestion
+            ? `\nDid you mean: ${editClarificationSuggestion}`
+            : "";
+          setAuthPromptWarning(
+            `Please answer this before I edit:\n${editClarificationQuestion}${suggestionLine}`,
+          );
+          return;
+        }
+
+        const alreadyIncluded = candidateHistory.some(
+          (entry) =>
+            entry.question === editClarificationQuestion &&
+            entry.answer === clarificationAnswer,
+        );
+        if (!alreadyIncluded) {
+          candidateHistory = [
+            ...candidateHistory,
+            { question: editClarificationQuestion, answer: clarificationAnswer },
+          ];
+        }
+      }
+
       setCheckingEditClarity(true);
       const clarity = await detectEditClarification(
-        editPrompt,
+        editPrompt.trim(),
         project.files.map((f) => f.path),
+        candidateHistory,
       );
       setCheckingEditClarity(false);
 
       if (clarity.needsClarification) {
+        setEditClarificationHistory(candidateHistory);
+        setEditClarificationQuestion(clarity.question);
+        setEditClarificationSuggestion(clarity.suggestedInterpretation || "");
+        setEditClarificationAnswer("");
+
+        const suggestionLine = clarity.suggestedInterpretation
+          ? `\nDid you mean: ${clarity.suggestedInterpretation}`
+          : "";
         setAuthPromptWarning(
-          `Before I start editing, I need one detail: ${clarity.question}`,
+          `Before I start editing, I need one detail:\n${clarity.question}${suggestionLine}`,
         );
         return;
       }
+
+      // Clarity resolved: keep the accepted history and clear pending question.
+      setEditClarificationHistory(candidateHistory);
+      resolvedClarificationHistory = candidateHistory;
+      setEditClarificationQuestion("");
+      setEditClarificationSuggestion("");
+      setEditClarificationAnswer("");
+      setAuthPromptWarning(null);
     }
 
     // Check app token balance for edit + integrations
@@ -1130,7 +1234,7 @@ function ReactGeneratorContent() {
     if (appTokenBalance < editCost) {
       const deficit = editCost - appTokenBalance;
       setInsufficientTokenMessage(
-        `This edit needs ${editCost} app tokens but you only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`,
+        `This edit needs ${formatTokens(editCost)} app tokens but you only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more app token${deficit > 1 ? "s" : ""} to continue.`,
       );
       setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
@@ -1139,7 +1243,7 @@ function ReactGeneratorContent() {
 
     // Skip confirmation if user opted out
     if (skipEditTokenConfirm) {
-      proceedWithEdit();
+      proceedWithEdit(resolvedClarificationHistory);
       return;
     }
 
@@ -1166,7 +1270,9 @@ function ReactGeneratorContent() {
   };
 
   // Actually start the edit after user confirms token deduction
-  const proceedWithEdit = async () => {
+  const proceedWithEdit = async (
+    clarificationHistoryOverride?: Array<{ question: string; answer: string }>,
+  ) => {
     if (!project) return;
     setShowTokenConfirmModal(null);
     setIsEditing(true);
@@ -1222,11 +1328,15 @@ function ReactGeneratorContent() {
       authLabels.push("Username/Password authentication");
     if (editAppAuth.includes("google"))
       authLabels.push("Google OAuth authentication");
-    const userRequest = editPrompt.trim()
-      ? editPrompt
+    const baseUserRequest = editPrompt.trim()
+      ? editPrompt.trim()
       : authLabels.length > 0
         ? `Add ${authLabels.join(" and ")} to the app`
         : editPrompt;
+    const userRequest = buildClarifiedEditRequest(
+      baseUserRequest,
+      clarificationHistoryOverride ?? editClarificationHistory,
+    );
 
     let editFullPrompt = `I have an existing React app with the following files:
 
@@ -1244,6 +1354,7 @@ ${userRequest}
 6. DO NOT remove or modify content/features the user didn't mention
 7. Only modify the specific parts needed to fulfill the user's exact request
 8. Keep everything else EXACTLY as it was before
+9. Keep all existing image src URLs unchanged unless the user explicitly requests image changes
 
 ðŸ“¦ PACKAGE CONSTRAINT (CRITICAL - DO NOT VIOLATE):
 The app currently uses ONLY these packages: ${allowedPackagesList}
@@ -1372,35 +1483,42 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     }
 
     try {
-      // Use config-level edit if project has a config (much faster/cheaper)
-      const result = project.config
-        ? await editReact(
-            editPrompt.trim(),
-            project.config,
-            project.files,
-            project.imageCache,
-          )
-        : await generateCodeWithInngest(
-            editFullPrompt,
-            user?.uid || "anonymous",
-            (message) => {
-              setEditProgressMessages((prev) => [...prev, message]);
-            },
-          );
+      const hasUploadedEditImages = editFiles.some((f) =>
+        f.type.startsWith("image/"),
+      );
+      const allowImageChanges =
+        hasUploadedEditImages || isExplicitImageChangeRequest(editPrompt);
+
+      const result = await generateCodeWithInngest(
+        editFullPrompt,
+        user?.uid || "anonymous",
+        (message) => {
+          setEditProgressMessages((prev) => [...prev, message]);
+        },
+      );
 
       // Store projectId for cancellation tracking (if using Inngest)
-      if (!project.config && "projectId" in result && result.projectId) {
+      if ("projectId" in result && result.projectId) {
         setCurrentGenerationProjectId(result.projectId);
       }
 
-      setEditProgressMessages((prev) => [...prev, "ðŸ’¾ Merging changes..."]);
+      setEditProgressMessages((prev) => [
+        ...prev,
+        "[6/7] Merging updated files into your project...",
+      ]);
 
       // AI code generation: persist images and use generated files
-      const persistedFiles = await persistGeneratedImages(result.files);
+      const persistedFiles = await persistGeneratedImages(result.files, {
+        previousFiles: project.files,
+        preserveExistingImages: !allowImageChanges,
+      });
       const mergedProject = { ...result, files: persistedFiles };
 
       setProject(mergedProject);
+      // Force preview sandbox re-init after AI edit to avoid stale iframe/HMR state.
+      setPreviewKey((prev) => prev + 1);
       setEditPrompt("");
+      clearEditClarificationState();
       setEditFiles([]); // Clear edit files after successful edit
       setEditAppAuth([]); // Reset edit auth after successful edit
 
@@ -1546,12 +1664,18 @@ ${pdfUrlList}
         return;
       }
 
-      setProgressMessages((prev) => [...prev, "ðŸ’¾ Saving project..."]);
+      setProgressMessages((prev) => [
+        ...prev,
+        "[6/7] Saving generated project...",
+      ]);
 
       // Check if authentication was generated
       // Auth stack is Supabase-based.
       // Persist generated images to Supabase Storage for stable URLs.
-      setProgressMessages((prev) => [...prev, "Persisting images..."]);
+      setProgressMessages((prev) => [
+        ...prev,
+        "[6/7] Persisting generated images...",
+      ]);
       const persistedFiles = await persistGeneratedImages(result.files);
       result = { ...result, files: persistedFiles };
       setProject(result);
@@ -1637,7 +1761,7 @@ ${pdfUrlList}
     if (appTokenBalance < generationCost) {
       const deficit = generationCost - appTokenBalance;
       setInsufficientTokenMessage(
-        `You need ${generationCost} app tokens to continue but only have ${appTokenBalance}. Please purchase at least ${deficit} more app token${deficit > 1 ? "s" : ""} to continue.`,
+        `You need ${formatTokens(generationCost)} app tokens to continue but only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more app token${deficit > 1 ? "s" : ""} to continue.`,
       );
       setTokenPurchaseAmount(0);
       setShowTokenPurchaseModal(true);
@@ -1792,6 +1916,242 @@ ${pdfUrlList}
     }
   };
 
+  const replaceNthImageSrcInProject = (
+    sourceProject: ReactProject,
+    fromSrc: string,
+    toSrc: string,
+    occurrence: number,
+  ): ReactProject => {
+    if (!fromSrc || !toSrc || fromSrc === toSrc) return sourceProject;
+    const sourceCandidates = new Set<string>([fromSrc]);
+    try {
+      const parsed = new URL(fromSrc);
+      sourceCandidates.add(parsed.pathname + parsed.search);
+      sourceCandidates.add(parsed.pathname);
+      if (parsed.pathname === "/_next/image") {
+        const encoded = parsed.searchParams.get("url");
+        if (encoded) {
+          const decoded = decodeURIComponent(encoded);
+          sourceCandidates.add(decoded);
+          try {
+            const decodedUrl = new URL(decoded);
+            sourceCandidates.add(decodedUrl.pathname + decodedUrl.search);
+            sourceCandidates.add(decodedUrl.pathname);
+          } catch {
+            // Decoded value may be relative.
+          }
+        }
+      }
+    } catch {
+      // Non-absolute input is fine.
+    }
+
+    const files = sourceProject.files.map((f) => ({ ...f }));
+    const mutableExt = /\.(tsx|ts|jsx|js|css|html|md|txt)$/;
+    const srcAttrRe = /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/gi;
+
+    let seen = 0;
+    let replaced = false;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      const nextContent = file.content.replace(
+        srcAttrRe,
+        (match, src: string) => {
+          if (!sourceCandidates.has(src) || replaced) return match;
+          seen++;
+          if (seen !== Math.max(1, occurrence)) return match;
+          replaced = true;
+          return match.replace(src, toSrc);
+        },
+      );
+
+      if (nextContent !== file.content) {
+        files[i] = { ...file, content: nextContent };
+      }
+      if (replaced) return { ...sourceProject, files };
+    }
+
+    // Fallback: replace first exact src if occurrence mapping fails.
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+      const nextContent = file.content.replace(
+        srcAttrRe,
+        (match, src: string) => {
+          if (replaced || !sourceCandidates.has(src)) return match;
+          replaced = true;
+          return match.replace(src, toSrc);
+        },
+      );
+      if (nextContent !== file.content) {
+        files[i] = { ...file, content: nextContent };
+      }
+      if (replaced) break;
+    }
+
+    return replaced ? { ...sourceProject, files } : sourceProject;
+  };
+
+  const handlePreviewImageSelected = (payload: {
+    src: string;
+    resolvedSrc?: string;
+    alt: string;
+    occurrence: number;
+  }) => {
+    setSelectedPreviewImage(payload);
+  };
+
+  const handleSelectedImageReplacement = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const picked = e.target.files?.[0];
+    if (!picked || !selectedPreviewImage || !project || !user) return;
+
+    try {
+      setIsReplacingSelectedImage(true);
+      const uploaded = await startUpload([picked]);
+      if (!uploaded || uploaded.length === 0 || !uploaded[0]?.url) {
+        throw new Error("Failed to upload replacement image");
+      }
+
+      const replacementUrl = uploaded[0].url;
+      const updatedProject = replaceNthImageSrcInProject(
+        project,
+        selectedPreviewImage.resolvedSrc || selectedPreviewImage.src,
+        replacementUrl,
+        selectedPreviewImage.occurrence,
+      );
+      setProject(updatedProject);
+      setSelectedPreviewImage({
+        src: replacementUrl,
+        alt: selectedPreviewImage.alt,
+        occurrence: selectedPreviewImage.occurrence,
+      });
+
+      if (currentProjectId) {
+        await updateProjectInFirestore(currentProjectId, updatedProject);
+        if (publishedUrl) setHasUnpublishedChanges(true);
+      }
+
+      // Show success feedback
+      setTokenToast("Image replaced successfully! The preview will update momentarily.");
+      setTimeout(() => setTokenToast(""), 4000);
+
+      // Exit image select mode after successful replacement
+      setImageSelectMode(false);
+      setSelectedPreviewImage(null);
+      setImageRegenerationPrompt("");
+    } catch (err) {
+      console.error("Failed to replace selected image:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to replace selected image",
+      );
+    } finally {
+      setIsReplacingSelectedImage(false);
+      if (replaceImageInputRef.current) {
+        replaceImageInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleRegenerateSelectedImage = async () => {
+    if (!selectedPreviewImage || !project || !user) return;
+
+    // Validate prompt
+    const promptText = imageRegenerationPrompt.trim();
+    if (!promptText) {
+      setError("Please enter a description for the image you want to generate");
+      return;
+    }
+
+    // Check token balance (0.10 tokens for image regeneration)
+    const IMAGE_REGEN_COST = 0.10;
+    const appTokenBalance = userData?.appTokens || 0;
+    if (appTokenBalance < IMAGE_REGEN_COST) {
+      const deficit = IMAGE_REGEN_COST - appTokenBalance;
+      setInsufficientTokenMessage(
+        `Image regeneration costs ${formatTokens(IMAGE_REGEN_COST)} app tokens but you only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more token${deficit > 1 ? "s" : ""} to continue.`,
+      );
+      setTokenPurchaseAmount(0);
+      setShowTokenPurchaseModal(true);
+      return;
+    }
+
+    const escapeAttr = (value: string) =>
+      value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+
+    const temporaryFiles = [
+      {
+        path: "app/__pocket_image_regen__.html",
+        content: `<img src="REPLICATE_IMG_1" alt="${escapeAttr(promptText.slice(0, 220))}" />`,
+      },
+    ];
+
+    try {
+      setIsReplacingSelectedImage(true);
+
+      // Deduct tokens first
+      const response = await fetch("/api/tokens/adjust", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: -IMAGE_REGEN_COST,
+          reason: "AI image regeneration",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to deduct tokens");
+      }
+
+      // Refresh user data to show updated token balance
+      await refreshUserData();
+
+      const persisted = await persistGeneratedImages(temporaryFiles, {
+        isUserProvidedPrompt: true,
+      });
+      const html = persisted[0]?.content || "";
+      const srcMatch = html.match(/\bsrc\s*=\s*["']([^"']+)["']/i);
+      const regeneratedUrl = srcMatch?.[1];
+
+      if (!regeneratedUrl || /^REPLICATE_IMG_/i.test(regeneratedUrl)) {
+        throw new Error("AI regeneration did not produce a valid image URL");
+      }
+
+      const updatedProject = replaceNthImageSrcInProject(
+        project,
+        selectedPreviewImage.resolvedSrc || selectedPreviewImage.src,
+        regeneratedUrl,
+        selectedPreviewImage.occurrence,
+      );
+      setProject(updatedProject);
+
+      if (currentProjectId) {
+        await updateProjectInFirestore(currentProjectId, updatedProject);
+        if (publishedUrl) setHasUnpublishedChanges(true);
+      }
+
+      // Show success feedback
+      setTokenToast(`Image regenerated successfully! (${formatTokens(IMAGE_REGEN_COST)} tokens used)`);
+      setTimeout(() => setTokenToast(""), 4000);
+
+      // Exit image select mode and clear prompt after successful regeneration
+      setImageSelectMode(false);
+      setSelectedPreviewImage(null);
+      setImageRegenerationPrompt("");
+    } catch (err) {
+      console.error("Failed to regenerate selected image:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to regenerate selected image",
+      );
+    } finally {
+      setIsReplacingSelectedImage(false);
+    }
+  };
+
   // Calculate total unread ticket count
   const unreadTicketCount = supportTickets.reduce(
     (total, ticket) => total + (ticket.unreadAdminMessageCount || 0),
@@ -1816,6 +2176,7 @@ ${pdfUrlList}
                 // Don't reset status if currently editing
                 setStatus("idle");
                 setEditPrompt("");
+                clearEditClarificationState();
               }
               if (section === "support") loadSupportTickets();
               if (section === "admin") loadAdminTickets();
@@ -1851,7 +2212,7 @@ ${pdfUrlList}
                       d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
                     />
                   </svg>
-                  App Tokens: {userData?.appTokens || 0}
+                  App Tokens: {formatTokens(userData?.appTokens || 0)}
                   <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
                     Edits and integrations use app tokens.
                   </span>
@@ -1880,7 +2241,17 @@ ${pdfUrlList}
                 </button>
 
                 <button
-                  onClick={() => setTextEditMode((v) => !v)}
+                  onClick={() =>
+                    setTextEditMode((v) => {
+                      const next = !v;
+                      if (next) {
+                        setImageSelectMode(false);
+                        setSelectedPreviewImage(null);
+                        setImageRegenerationPrompt("");
+                      }
+                      return next;
+                    })
+                  }
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition ${
                     textEditMode
                       ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
@@ -1902,6 +2273,42 @@ ${pdfUrlList}
                     />
                   </svg>
                   Text Edit
+                </button>
+
+                <button
+                  onClick={() =>
+                    setImageSelectMode((v) => {
+                      const next = !v;
+                      if (next) {
+                        setTextEditMode(false);
+                      } else {
+                        setSelectedPreviewImage(null);
+                        setImageRegenerationPrompt("");
+                      }
+                      return next;
+                    })
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition ${
+                    imageSelectMode
+                      ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
+                      : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                  }`}
+                  title="Select a specific image from preview and replace only that image"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3 16.5V6a3 3 0 013-3h12a3 3 0 013 3v10.5m-18 0l4.5-4.5a2.25 2.25 0 013.182 0L15 16.5m-12 0h18M15 10.5h.008v.008H15V10.5z"
+                    />
+                  </svg>
+                  Image Replace
                 </button>
               </div>
 
@@ -2160,6 +2567,7 @@ ${pdfUrlList}
                   onClick={() => {
                     setStatus("idle");
                     setEditPrompt("");
+                    clearEditClarificationState();
                     setPublishedUrl(null);
                     setDeploymentId(null);
                     setCurrentProjectId(null);
@@ -2186,6 +2594,255 @@ ${pdfUrlList}
               </div>
             </div>
           </header>
+
+          {imageSelectMode && (
+            <div className="px-4 py-2.5 border-b border-border-primary bg-orange-500/10">
+              <input
+                ref={replaceImageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleSelectedImageReplacement}
+              />
+              <div className="space-y-3">
+                {!selectedPreviewImage ? (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                    <svg
+                      className="w-4 h-4 text-orange-400 flex-shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span className="text-xs font-medium text-orange-300">
+                      Click any image in the preview to select it for replacement
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gradient-to-r from-orange-500/20 to-orange-600/20 border border-orange-500/30">
+                      <div className="flex-shrink-0">
+                        <div className="w-8 h-8 rounded-md bg-orange-500/30 flex items-center justify-center">
+                          <svg
+                            className="w-4 h-4 text-orange-300"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                            />
+                          </svg>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-orange-200">
+                          Image Selected
+                        </p>
+                        <p className="text-xs text-text-secondary truncate mt-0.5">
+                          {selectedPreviewImage.alt || selectedPreviewImage.src}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setSelectedPreviewImage(null);
+                          setImageRegenerationPrompt("");
+                        }}
+                        className="flex-shrink-0 p-1 rounded-md hover:bg-orange-500/20 transition text-text-secondary hover:text-text-primary"
+                        title="Clear selection"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+
+                    {/* Upload File Option */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => replaceImageInputRef.current?.click()}
+                        disabled={isReplacingSelectedImage}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-md bg-gradient-to-r from-orange-500 to-orange-600 text-white hover:from-orange-400 hover:to-orange-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-orange-500/25"
+                      >
+                        {isReplacingSelectedImage ? (
+                          <>
+                            <svg
+                              className="w-3.5 h-3.5 animate-spin"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              />
+                            </svg>
+                            Uploading...
+                          </>
+                        ) : (
+                          <>
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                              />
+                            </svg>
+                            Upload File
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* AI Regeneration Section */}
+                    <div className="space-y-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <svg
+                            className="w-4 h-4 text-blue-400"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
+                            />
+                          </svg>
+                          <span className="text-xs font-semibold text-blue-300">
+                            AI Regenerate
+                          </span>
+                        </div>
+                        <span className="text-xs font-medium text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">
+                          {formatTokens(0.10)} tokens
+                        </span>
+                      </div>
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={imageRegenerationPrompt}
+                          onChange={(e) => setImageRegenerationPrompt(e.target.value)}
+                          placeholder="Describe the image you want to generate..."
+                          disabled={isReplacingSelectedImage}
+                          className="w-full px-3 py-2 text-xs bg-bg-tertiary/50 border border-blue-500/30 rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey && imageRegenerationPrompt.trim()) {
+                              e.preventDefault();
+                              handleRegenerateSelectedImage();
+                            }
+                          }}
+                        />
+                        {imageRegenerationPrompt.trim() && (
+                          <button
+                            onClick={() => setImageRegenerationPrompt("")}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-primary transition"
+                          >
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M6 18L18 6M6 6l12 12"
+                              />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={handleRegenerateSelectedImage}
+                        disabled={isReplacingSelectedImage || !imageRegenerationPrompt.trim()}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-md bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-500 hover:to-blue-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/25"
+                      >
+                        {isReplacingSelectedImage ? (
+                          <>
+                            <svg
+                              className="w-3.5 h-3.5 animate-spin"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              />
+                            </svg>
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
+                              />
+                            </svg>
+                            Generate with AI
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Main Content Area - Preview + Edit Panel */}
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
@@ -2261,7 +2918,9 @@ ${pdfUrlList}
                       previewKey={previewKey}
                       projectId={currentProjectId}
                       textEditMode={textEditMode}
+                      imageSelectMode={imageSelectMode}
                       onTextEdited={handlePreviewTextEdited}
+                      onImageSelected={handlePreviewImageSelected}
                     />
                   </div>
                 </div>
@@ -2294,7 +2953,7 @@ ${pdfUrlList}
                     </span>
                   </div>
                   <p className="text-xs text-text-tertiary mb-2">
-                    {userData?.appTokens || 0} token
+                    {formatTokens(userData?.appTokens || 0)} token
                     {(userData?.appTokens || 0) !== 1 ? "s" : ""} remaining.
                   </p>
                   <button
@@ -2409,7 +3068,9 @@ ${pdfUrlList}
               {/* Edit Error */}
               {error && (
                 <div className="px-4 py-2 bg-red-50 border-b border-red-300 dark:bg-red-500/10 dark:border-red-500/20">
-                  <p className="text-sm text-red-800 dark:text-red-300">{error}</p>
+                  <p className="text-sm text-red-800 dark:text-red-300">
+                    {error}
+                  </p>
                 </div>
               )}
 
@@ -2509,10 +3170,45 @@ ${pdfUrlList}
                     <p className="text-xs text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
                       {authPromptWarning}
                     </p>
+                    {editClarificationQuestion && (
+                      <div className="mt-3 space-y-2">
+                        <label className="block text-[11px] font-medium text-amber-900 dark:text-amber-100">
+                          Clarification answer
+                        </label>
+                        <textarea
+                          value={editClarificationAnswer}
+                          onChange={(e) => setEditClarificationAnswer(e.target.value)}
+                          rows={2}
+                          placeholder="Type your clarification so the edit is accurate..."
+                          className="w-full rounded-lg border border-amber-300/80 bg-white/70 dark:bg-amber-950/30 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-100 placeholder:text-amber-700/70 dark:placeholder:text-amber-300/70 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          {editClarificationSuggestion && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditClarificationAnswer(
+                                  editClarificationSuggestion,
+                                )
+                              }
+                              className="px-2 py-1 rounded-md text-[11px] font-medium bg-amber-200/70 text-amber-900 hover:bg-amber-200 dark:bg-amber-400/20 dark:text-amber-200 dark:hover:bg-amber-400/30 transition"
+                            >
+                              Use “Did you mean” suggestion
+                            </button>
+                          )}
+                          <span className="text-[11px] text-amber-800/80 dark:text-amber-200/80">
+                            Submit edit again after answering to continue.
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
-                    onClick={() => setAuthPromptWarning(null)}
+                    onClick={() => {
+                      setAuthPromptWarning(null);
+                      clearEditClarificationState();
+                    }}
                     className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition"
                   >
                     <svg
@@ -2671,67 +3367,67 @@ ${pdfUrlList}
                     </p>
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setEditAppAuth(
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditAppAuth(
+                              editAppAuth.includes("username-password")
+                                ? editAppAuth.filter(
+                                    (a) => a !== "username-password",
+                                  )
+                                : [...editAppAuth, "username-password"],
+                            )
+                          }
+                          disabled={isEditing}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                             editAppAuth.includes("username-password")
-                              ? editAppAuth.filter(
-                                  (a) => a !== "username-password",
-                                )
-                              : [...editAppAuth, "username-password"],
-                          )
-                        }
-                        disabled={isEditing}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                          editAppAuth.includes("username-password")
-                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                        } disabled:opacity-50`}
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={1.5}
+                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
+                          } disabled:opacity-50`}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
-                          />
-                        </svg>
-                        Password
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setEditAppAuth(
+                          <svg
+                            className="w-3 h-3"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.5}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                            />
+                          </svg>
+                          Password
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditAppAuth(
+                              editAppAuth.includes("google")
+                                ? editAppAuth.filter((a) => a !== "google")
+                                : [...editAppAuth, "google"],
+                            )
+                          }
+                          disabled={isEditing}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
                             editAppAuth.includes("google")
-                              ? editAppAuth.filter((a) => a !== "google")
-                              : [...editAppAuth, "google"],
-                          )
-                        }
-                        disabled={isEditing}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                          editAppAuth.includes("google")
-                            ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                        } disabled:opacity-50`}
-                      >
-                        <svg
-                          className="w-3 h-3"
-                          viewBox="0 0 24 24"
-                          fill="currentColor"
+                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
+                          } disabled:opacity-50`}
                         >
-                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                        </svg>
-                        Google
-                      </button>
+                          <svg
+                            className="w-3 h-3"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                          >
+                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
+                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                          </svg>
+                          Google
+                        </button>
                       </div>
                       <button
                         type="button"
@@ -3372,7 +4068,6 @@ ${pdfUrlList}
         handleGenerate={handleGenerate}
         setShowDbModal={setShowDbModal}
         setAuthPromptWarning={setAuthPromptWarning}
-        setError={setError}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
       />
     );
@@ -3954,10 +4649,7 @@ ${pdfUrlList}
             if (withinRefundWindow && user) {
               try {
                 const editCost = getEditAppCost();
-                await adjustAppTokens(
-                  editCost,
-                  "Edit cancelled refund",
-                );
+                await adjustAppTokens(editCost, "Edit cancelled refund");
               } catch (err) {
                 console.error("Error refunding tokens:", err);
               }

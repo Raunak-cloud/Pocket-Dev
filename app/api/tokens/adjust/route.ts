@@ -27,7 +27,7 @@ export async function POST(req: Request) {
       if (!fresh) throw new Error("User not found");
 
       const currentBalance = fresh.appTokens;
-      const nextBalance = currentBalance + amount;
+      const nextBalance = Math.round((currentBalance + amount) * 100) / 100;
       if (nextBalance < 0) {
         throw new Error("Insufficient token balance");
       }

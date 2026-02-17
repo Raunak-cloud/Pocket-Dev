@@ -6,15 +6,20 @@ const MODEL = "gemini-3-flash-preview";
 type ClarityResult = {
   needsClarification: boolean;
   question: string;
+  suggestedInterpretation: string;
 };
 
 function fallbackResult(): ClarityResult {
-  return { needsClarification: false, question: "" };
+  return {
+    needsClarification: false,
+    question: "",
+    suggestedInterpretation: "",
+  };
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, filePaths } = await req.json();
+    const { prompt, filePaths, clarificationHistory } = await req.json();
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json(fallbackResult());
@@ -29,6 +34,24 @@ export async function POST(req: NextRequest) {
     const filesSummary = Array.isArray(filePaths)
       ? filePaths.slice(0, 120).join(", ")
       : "";
+    const safeHistory =
+      Array.isArray(clarificationHistory) && clarificationHistory.length > 0
+        ? clarificationHistory
+            .slice(0, 8)
+            .map((entry) => {
+              if (
+                entry &&
+                typeof entry === "object" &&
+                typeof entry.question === "string" &&
+                typeof entry.answer === "string"
+              ) {
+                return `Q: ${entry.question.slice(0, 220)} | A: ${entry.answer.slice(0, 220)}`;
+              }
+              return "";
+            })
+            .filter(Boolean)
+            .join("\n")
+        : "";
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -45,17 +68,21 @@ You are checking if a user edit request is clear enough to implement immediately
 Given the prompt and project file list, return JSON only:
 {
   "needsClarification": boolean,
-  "question": string
+  "question": string,
+  "suggestedInterpretation": string
 }
 
 Rules:
 - needsClarification=true only when required details are missing or ambiguous enough to risk wrong edits.
 - Ask only one concise question when clarification is needed.
-- If the prompt is clear enough, set needsClarification=false and question="".
+- When needsClarification=true, provide a concrete "did you mean" style suggestion in suggestedInterpretation.
+- If the prompt is clear enough, set needsClarification=false and question="" and suggestedInterpretation="".
 - Do not ask for unnecessary details.
 
 Prompt: "${safePrompt}"
 Project files: "${filesSummary}"
+Previous clarification history:
+${safeHistory || "(none)"}
 `);
 
     const text = result.response.text().trim();
@@ -65,6 +92,10 @@ Project files: "${filesSummary}"
       needsClarification: parsed.needsClarification === true,
       question:
         typeof parsed.question === "string" ? parsed.question.slice(0, 300) : "",
+      suggestedInterpretation:
+        typeof parsed.suggestedInterpretation === "string"
+          ? parsed.suggestedInterpretation.slice(0, 280)
+          : "",
     });
   } catch {
     // Fail open so edits are not blocked by classifier errors.

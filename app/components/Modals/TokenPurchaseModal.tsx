@@ -1,5 +1,10 @@
 "use client";
 
+// Helper function to format token values to 2 decimal places
+const formatTokens = (tokens: number): string => {
+  return tokens.toFixed(2);
+};
+
 interface TokenPurchaseModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -104,7 +109,7 @@ export function TokenPurchaseModal({
             </p>
           )}
           <p className="text-text-muted text-xs mt-2">
-            Current balance: {appTokens} tokens
+            Current balance: {formatTokens(appTokens)} tokens
           </p>
         </div>
 

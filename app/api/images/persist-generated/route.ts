@@ -33,8 +33,24 @@ export async function POST(req: Request) {
       );
     }
 
-    const files = (body as { files: GeneratedFile[] }).files;
-    const persistedFiles = await persistGeneratedImagesToStorage(files, userId);
+    const payload = body as {
+      files: GeneratedFile[];
+      previousFiles?: unknown;
+      preserveExistingImages?: unknown;
+      isUserProvidedPrompt?: unknown;
+    };
+    const files = payload.files;
+    const previousFiles = isGeneratedFileArray(payload.previousFiles)
+      ? payload.previousFiles
+      : undefined;
+    const preserveExistingImages = payload.preserveExistingImages === true;
+    const isUserProvidedPrompt = payload.isUserProvidedPrompt === true;
+
+    const persistedFiles = await persistGeneratedImagesToStorage(files, userId, {
+      previousFiles,
+      preserveExistingImages,
+      isUserProvidedPrompt,
+    });
     return NextResponse.json({ files: persistedFiles });
   } catch (error) {
     console.error("[POST /api/images/persist-generated] Error:", error);

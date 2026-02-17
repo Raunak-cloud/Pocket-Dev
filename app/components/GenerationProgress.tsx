@@ -88,30 +88,103 @@ const EDITING_STEPS = [
   },
 ];
 
+const STEP_PATTERN = /\[(\d+)\s*\/\s*(\d+)\]/;
+
+function dedupeConsecutive(messages: string[]): string[] {
+  const output: string[] = [];
+  for (const msg of messages) {
+    if (output.length === 0 || output[output.length - 1] !== msg) {
+      output.push(msg);
+    }
+  }
+  return output;
+}
+
+function normalizeProgressLabel(message: string): string {
+  return message
+    .replace(STEP_PATTERN, "")
+    .replace(/^[^\w]+/, "")
+    .trim();
+}
+
+function inferStepFromMessage(
+  message: string,
+  isEditMode: boolean,
+): { step: number; total: number } {
+  if (!message.trim()) {
+    return { step: 0, total: 7 };
+  }
+
+  const explicit = message.match(STEP_PATTERN);
+  if (explicit) {
+    const step = Number.parseInt(explicit[1], 10);
+    const total = Number.parseInt(explicit[2], 10);
+    if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
+      return { step: Math.min(step, total), total };
+    }
+  }
+
+  const msg = message.toLowerCase();
+  const total = 7;
+  if (msg.includes("queue") || msg.includes("start")) return { step: 0, total };
+  if (msg.includes("analyz")) return { step: 1, total };
+  if (msg.includes("generat")) return { step: 2, total };
+  if (msg.includes("prepar") || msg.includes("parse"))
+    return { step: 3, total };
+  if (
+    msg.includes("syntax") ||
+    msg.includes("mobile") ||
+    msg.includes("navigation")
+  ) {
+    return { step: 4, total };
+  }
+  if (
+    msg.includes("lint") ||
+    msg.includes("quality") ||
+    msg.includes("check")
+  ) {
+    return { step: 5, total };
+  }
+  if (
+    msg.includes("persist") ||
+    msg.includes("save") ||
+    msg.includes("final")
+  ) {
+    return { step: 6, total };
+  }
+  if (msg.includes("complete") || msg.includes("done"))
+    return { step: 7, total };
+
+  if (isEditMode) return { step: 3, total };
+  return { step: 2, total };
+}
 // Map progress messages to appropriate icons
 function getIconForMessage(message: string): string {
   const msg = message.toLowerCase();
 
-  if (msg.includes("analyz") || msg.includes("📝")) {
+  if (msg.includes("analyz")) {
     return "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z";
   }
-  if (msg.includes("generat") || msg.includes("ai") || msg.includes("🤖")) {
+  if (msg.includes("generat") || msg.includes("ai")) {
     return "M13 10V3L4 14h7v7l9-11h-7z";
   }
-  if (msg.includes("prepar") || msg.includes("file") || msg.includes("📦")) {
+  if (msg.includes("prepar") || msg.includes("file") || msg.includes("parse")) {
     return "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z";
   }
-  if (msg.includes("check") || msg.includes("lint") || msg.includes("quality") || msg.includes("🔍")) {
+  if (
+    msg.includes("check") ||
+    msg.includes("lint") ||
+    msg.includes("quality")
+  ) {
     return "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z";
   }
-  if (msg.includes("finali") || msg.includes("complet") || msg.includes("✅")) {
+  if (msg.includes("finali") || msg.includes("complet")) {
     return "M5 13l4 4L19 7";
   }
-  if (msg.includes("sav") || msg.includes("💾")) {
+  if (msg.includes("sav") || msg.includes("persist")) {
     return "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4";
   }
 
-  // Default icon
   return "M13 10V3L4 14h7v7l9-11h-7z";
 }
 
@@ -125,28 +198,38 @@ export default function GenerationProgress({
   const isEditMode = prompt.toLowerCase().startsWith("editing:");
 
   // Use actual progress messages if available, otherwise fallback to hardcoded steps
-  const useRealProgress = progressMessages.length > 0;
+  const cleanedMessages = dedupeConsecutive(progressMessages);
+  const useRealProgress = cleanedMessages.length > 0;
   const steps = useRealProgress
-    ? progressMessages.map((msg, i) => ({
+    ? cleanedMessages.map((msg, i) => ({
         id: `step-${i}`,
-        label: msg,
-        icon: getIconForMessage(msg)
+        label: normalizeProgressLabel(msg),
+        icon: getIconForMessage(msg),
       }))
-    : (isEditMode ? EDITING_STEPS : GENERATION_STEPS);
+    : isEditMode
+      ? EDITING_STEPS
+      : GENERATION_STEPS;
 
-  const currentStep = progressMessages.length;
-  const progress = Math.min((currentStep / 7) * 100, 95);
+  const latestMessage = cleanedMessages[cleanedMessages.length - 1] || "";
+  const inferred = inferStepFromMessage(latestMessage, isEditMode);
+  const currentStep = useRealProgress ? Math.max(1, steps.length) : 1;
+  const rawProgress =
+    inferred.total > 0 ? (inferred.step / inferred.total) * 100 : 0;
+  const progress = Math.min(
+    Math.max(rawProgress, 3),
+    inferred.step >= inferred.total ? 100 : 97,
+  );
   const cleanPrompt = isEditMode
     ? prompt.substring("Editing:".length).trim()
     : prompt;
 
-  // Check if we're currently installing dependencies
-  const isInstallingDeps = progressMessages.some(msg =>
-    msg.toLowerCase().includes("install") && msg.toLowerCase().includes("dependencies")
-  );
-  const latestMessage = progressMessages[progressMessages.length - 1] || "";
-  const showCodeEditor = latestMessage.toLowerCase().includes("install") &&
-                         latestMessage.toLowerCase().includes("dependencies");
+  const stageSummary = latestMessage
+    ? `${normalizeProgressLabel(latestMessage)} (${Math.min(inferred.step, inferred.total)}/${inferred.total})`
+    : "Preparing generation pipeline...";
+
+  const showCodeEditor =
+    latestMessage.toLowerCase().includes("install") &&
+    latestMessage.toLowerCase().includes("dependencies");
 
   const getAppType = () => {
     const lp = cleanPrompt.toLowerCase();
@@ -160,7 +243,7 @@ export default function GenerationProgress({
       return "SaaS Landing Page";
     if (lp.includes("fitness") || lp.includes("workout")) return "Fitness App";
     if (lp.includes("dashboard")) return "Dashboard App";
-    return "Next.js App";
+    return "your App";
   };
 
   // Minimized floating indicator
@@ -255,8 +338,11 @@ export default function GenerationProgress({
               Progress
             </span>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-text-muted">
-                {isEditMode ? "5-7 min" : "~5-7 min"}
+              <span
+                className="text-xs text-text-muted max-w-[260px] truncate"
+                title={stageSummary}
+              >
+                {stageSummary}
               </span>
               <span className="text-sm font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
                 {Math.round(progress)}%
@@ -281,6 +367,12 @@ export default function GenerationProgress({
               />
             </div>
           </div>
+          <p
+            className="mt-2 text-xs text-text-muted truncate"
+            title={latestMessage || "Waiting for updates..."}
+          >
+            {latestMessage || "Waiting for updates..."}
+          </p>
         </div>
 
         {/* Divider */}
@@ -305,7 +397,9 @@ export default function GenerationProgress({
                 {i < steps.length - 1 && (
                   <div
                     className={`absolute left-[27px] top-[36px] w-px h-[calc(100%-20px)] transition-colors duration-500 ${
-                      isCompleted ? "bg-emerald-500/30" : "bg-border-secondary/40"
+                      isCompleted
+                        ? "bg-emerald-500/30"
+                        : "bg-border-secondary/40"
                     }`}
                   />
                 )}

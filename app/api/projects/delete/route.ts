@@ -1,6 +1,11 @@
-﻿import { auth } from '@/lib/supabase-auth/server';
+import { auth } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import {
+  collectGeneratedStorageUrlsFromProjectData,
+  deleteGeneratedStorageUrls,
+  parseGeneratedFiles,
+} from "@/lib/server/image-storage-cleanup";
 
 export async function DELETE(req: Request) {
   try {
@@ -35,6 +40,13 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    const projectFiles = parseGeneratedFiles(existingProject.files);
+    const generatedImageUrls = collectGeneratedStorageUrlsFromProjectData(
+      projectFiles,
+      existingProject.imageCache,
+    );
+    await deleteGeneratedStorageUrls(generatedImageUrls);
+
     // Soft delete project
     await prisma.project.update({
       where: { id: projectId },
@@ -53,5 +65,3 @@ export async function DELETE(req: Request) {
     );
   }
 }
-
-

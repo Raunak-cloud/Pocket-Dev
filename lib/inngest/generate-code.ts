@@ -14,26 +14,21 @@ import ts from "typescript";
 const MODEL = "gemini-3-flash-preview";
 const MAX_TOKENS = 32768;
 const MAX_LINT_REPAIR_ATTEMPTS = 2;
+const MAX_SYNTAX_REPAIR_ATTEMPTS = 2;
+const MAX_JSON_REPAIR_ATTEMPTS = 2;
+const MAX_STRUCTURE_REPAIR_ATTEMPTS = 2;
+const MAX_UX_REPAIR_ATTEMPTS = 3;
+const MAX_FILE_COUNT = 300;
+const MAX_FILE_CONTENT_LENGTH = 300_000;
 
 interface GeneratedFile {
   path: string;
   content: string;
 }
 
-interface AIGeneratedProject {
-  files: GeneratedFile[];
-  dependencies: Record<string, string>;
-  lintReport: {
-    passed: boolean;
-    errors: number;
-    warnings: number;
-  };
-  attempts: number;
-}
-
 interface ParsedAIResponse {
-  files?: GeneratedFile[];
-  dependencies?: Record<string, string>;
+  files?: unknown;
+  dependencies?: unknown;
   _checks?: Record<string, unknown>;
 }
 
@@ -45,7 +40,7 @@ interface LintIssue {
   message: string;
 }
 
-const SYSTEM_PROMPT = `You are a senior Next.js App Router engineer and UI designer.
+const SYSTEM_PROMPT = `You are a principal Next.js App Router engineer and product UI designer.
 
 PLATFORM CONTRACT (strict):
 - Output valid JSON only. No markdown.
@@ -58,23 +53,58 @@ PLATFORM CONTRACT (strict):
     "tailwind_directives_present": true,
     "provider_wraps_children": true,
     "no_apply_variant_utilities": true
+  },
+  "_design": {
+    "visual_direction": "string",
+    "typography_plan": "string"
   }
 }
 - Keep code compatible with Next.js App Router + TypeScript + Tailwind utility classes.
 - Never return lockfiles.
 - Never use Unsplash, Pollinations, Picsum, or other stock-image URLs.
-- For AI-generated images, use placeholders like REPLICATE_IMG_1, REPLICATE_IMG_2, ... and include descriptive alt text.
+- For AI-generated images, use placeholders like REPLICATE_IMG_1, REPLICATE_IMG_2, ... and include DETAILED, SPECIFIC alt text for each image.
+- Each image placeholder must have UNIQUE visual intent - never reuse descriptions or generic terms.
+- Alt text must be detailed and photographic: describe composition, subject, angle, lighting, mood, and specific visual elements.
+- GOOD alt text examples: "Close-up overhead shot of a rustic wood-fired margherita pizza with fresh basil and buffalo mozzarella on a dark slate plate", "Professional headshot of a smiling female doctor in white coat standing in modern clinic, natural window light"
+- BAD alt text examples: "image", "photo", "product photo", "professional picture", "website hero image"
+- For food/restaurant sites: describe the specific dish, plating style, ingredients visible, serving presentation
+- For people: describe profession, setting, expression, clothing, lighting, and context
+- For products: describe the product type, angle, background, lighting, and key features visible
+- For spaces: describe the room type, style, lighting, furniture, and architectural details
+- Required core files: app/layout.tsx, app/page.tsx, app/globals.css.
 - If app/globals.css has @layer base/components/utilities, include matching:
   @tailwind base; @tailwind components; @tailwind utilities;
-- Never use variant utilities inside @apply (examples forbidden: selection:*, hover:*, focus:* in @apply).
+- Do not use @apply in generated CSS. Use explicit utility classes directly in markup.
 - If a hook guard says "must be used within XProvider", ensure XProvider wraps {children} in app/layout.tsx.
-- If authentication is required, use Supabase Auth (@supabase/supabase-js + @supabase/ssr).
-- Use cookie-based server sessions for protected routes and API access.
-- For multi-tenant apps, scope data by tenant/team id in the application database.
+- AUTHENTICATION IMPLEMENTATION:
+  * Only implement auth if the user explicitly requests it (login, user accounts, dashboards, etc.)
+  * Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
+  * CRITICAL: Use ONLY anon key (NEXT_PUBLIC_SUPABASE_ANON_KEY), never service role key
+  * MULTI-TENANT ISOLATION: All apps share Supabase with tenant isolation
+  * After auth.signUp(), insert into user_tenants(user_id, tenant_slug) with NEXT_PUBLIC_POCKET_APP_SLUG
+  * MIDDLEWARE: Verify both authentication AND tenant membership
+  * All user data tables MUST include tenant_slug column with NOT NULL constraint
+  * Enable Row Level Security (RLS) on all user data tables
+  * RLS policies must check: current_tenant_slug() = tenant_slug AND user_belongs_to_tenant()
+  * Set session context: SET LOCAL app.current_tenant = NEXT_PUBLIC_POCKET_APP_SLUG
+  * If user authenticated but not in tenant → redirect to /unauthorized
+  * Create lib/supabase/client.ts for browser client, lib/supabase/server.ts for server client
+  * Use createServerClient with cookie handlers in middleware.ts for route protection
+  * Implement OAuth sign-in (Google/GitHub) in a sign-in component
+  * Store user sessions in httpOnly cookies (handled automatically by @supabase/ssr)
+  * Example middleware pattern: getUser() → check tenant membership → redirect to /sign-in or /unauthorized if invalid
 - Do not output malformed PostCSS config shapes.
+- Navigation must work on desktop and mobile (include hamburger toggle with open/close behavior on small screens).
+- Avoid horizontal overflow on mobile.
+- Keep header/navbar pinned to the top on scroll (sticky/fixed + top-0) and above content (high z-index).
+- Mobile menu/drawer must open from the top layer and should not create independent scrollbar UI on nav/header wrappers.
+- Mobile menu panel must render above all page sections (overlay z-index above content), with a solid/semi-opaque background so links remain clearly visible.
+- Mobile menu panel must occupy full device height on phones (h-screen/min-h-screen/100dvh/inset-y-0), not a short strip.
 
 DESIGN GOALS:
-- Premium, modern look with strong typography, spacing, gradients, and subtle motion.
+- Premium, modern look with a clear art direction (not generic template UI).
+- Strong typography scale, spacing rhythm, and component consistency.
+- Intentional gradients/backgrounds and subtle motion where it improves UX.
 - Mobile-first responsive layout.
 - Accessible contrast and semantic structure.
 - Cohesive visual system with reusable components.
@@ -82,7 +112,8 @@ DESIGN GOALS:
 OUTPUT RULES:
 - Return complete project files needed to run.
 - Escape newlines with \\n and tabs with \\t inside JSON string content.
-- Prefer stable, maintainable code over novelty.`;
+- Prefer stable, maintainable code over novelty.
+- Ensure every file parses without TypeScript/JavaScript syntax errors.`;
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -163,6 +194,108 @@ function getDefaultDependencies(): Record<string, string> {
     clsx: "^2.0.0",
     "tailwind-merge": "^2.2.0",
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeDependencyMap(value: unknown): Record<string, string> {
+  const defaults = getDefaultDependencies();
+  if (!isPlainObject(value)) {
+    return defaults;
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [name, version] of Object.entries(value)) {
+    const pkg = name.trim();
+    if (!pkg || typeof version !== "string") continue;
+    const trimmedVersion = version.trim();
+    if (!trimmedVersion) continue;
+    normalized[pkg] = trimmedVersion;
+  }
+
+  return { ...defaults, ...normalized };
+}
+
+function normalizeFilePath(pathValue: string): string | null {
+  let next = pathValue.trim().replace(/\\/g, "/");
+  next = next.replace(/^\.\/+/, "");
+
+  if (!next) return null;
+  if (next.startsWith("/") || /^[A-Za-z]:\//.test(next)) return null;
+  if (next.includes("..")) return null;
+  if (next.includes("\0")) return null;
+  if (/\r|\n/.test(next)) return null;
+  if (/^(node_modules|\.next)\//.test(next)) return null;
+  if (/package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$/i.test(next)) {
+    return null;
+  }
+
+  return next;
+}
+
+function normalizeGeneratedFilesOrThrow(value: unknown): GeneratedFile[] {
+  if (!Array.isArray(value)) {
+    throw new Error("AI response has invalid shape: files must be an array.");
+  }
+
+  const byPath = new Map<string, string>();
+  for (const item of value) {
+    if (!isPlainObject(item)) continue;
+    if (typeof item.path !== "string" || typeof item.content !== "string") {
+      continue;
+    }
+
+    const normalizedPath = normalizeFilePath(item.path);
+    if (!normalizedPath) continue;
+    if (item.content.length > MAX_FILE_CONTENT_LENGTH) {
+      throw new Error(
+        `AI response has an oversized file: ${normalizedPath} exceeds ${MAX_FILE_CONTENT_LENGTH} characters.`,
+      );
+    }
+
+    byPath.set(normalizedPath, item.content.replace(/^\uFEFF/, ""));
+    if (byPath.size > MAX_FILE_COUNT) {
+      throw new Error(`AI response contains too many files (>${MAX_FILE_COUNT}).`);
+    }
+  }
+
+  const files = Array.from(byPath.entries()).map(([path, content]) => ({
+    path,
+    content,
+  }));
+
+  if (files.length === 0) {
+    throw new Error("AI response did not include any usable files.");
+  }
+
+  return files;
+}
+
+function normalizeParsedProjectOrThrow(parsed: ParsedAIResponse): {
+  files: GeneratedFile[];
+  dependencies: Record<string, string>;
+} {
+  if (!isPlainObject(parsed)) {
+    throw new Error("AI response root must be a JSON object.");
+  }
+
+  const files = normalizeGeneratedFilesOrThrow(parsed.files);
+  const dependencies = normalizeDependencyMap(parsed.dependencies);
+  return { files, dependencies };
+}
+
+function validateProjectStructureOrThrow(files: GeneratedFile[]) {
+  const required = new Set(["app/layout.tsx", "app/page.tsx", "app/globals.css"]);
+  const existing = new Set(files.map((f) => f.path));
+  const missing = Array.from(required).filter((path) => !existing.has(path));
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Generated project is missing required files: ${missing.join(", ")}`,
+    );
+  }
 }
 
 function extractLikelyJSONObject(input: string): string {
@@ -374,6 +507,14 @@ function parseAIGeneratedJSON(text: string): ParsedAIResponse {
   }
 }
 
+function parseAndNormalizeProjectFromTextOrThrow(text: string): {
+  files: GeneratedFile[];
+  dependencies: Record<string, string>;
+} {
+  const parsed = parseAIGeneratedJSON(text);
+  return normalizeParsedProjectOrThrow(parsed);
+}
+
 async function repairMalformedJSONWithGemini(rawText: string): Promise<string> {
   const repairPrompt = `You are a JSON repair utility.
 
@@ -397,6 +538,44 @@ ${rawText}`;
   );
 }
 
+async function repairProjectShapeWithGemini(args: {
+  originalPrompt: string;
+  parseError: string;
+  parsedResponse: ParsedAIResponse;
+}): Promise<string> {
+  const { originalPrompt, parseError, parsedResponse } = args;
+
+  const repairPrompt = `You returned JSON that does not match the required project shape.
+
+Original request:
+${originalPrompt}
+
+Validation error:
+${parseError}
+
+Current response JSON:
+${JSON.stringify(parsedResponse)}
+
+Fix requirements:
+- Return strict JSON only (no markdown).
+- Shape must be:
+{
+  "files": [{ "path": "app/page.tsx", "content": "..." }],
+  "dependencies": { "pkg": "version" },
+  "_checks": { "key": true },
+  "_design": { "visual_direction": "...", "typography_plan": "..." }
+}
+- files must be non-empty and use safe relative paths (no absolute paths, no .. segments).
+- Include app/layout.tsx, app/page.tsx, and app/globals.css.
+- Do not include lockfiles.
+- Ensure all file contents are valid code/text strings.`;
+
+  return generateWithGemini(
+    "Return strict JSON only. No markdown.",
+    repairPrompt,
+  );
+}
+
 async function repairProjectFromLintFeedback(args: {
   originalPrompt: string;
   files: GeneratedFile[];
@@ -404,6 +583,11 @@ async function repairProjectFromLintFeedback(args: {
   lintIssues: LintIssue[];
 }) {
   const { originalPrompt, files, dependencies, lintIssues } = args;
+  const hasNavigationUxIssue = lintIssues.some((issue) =>
+    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|responsive-breakpoints|mobile-overflow-guard)$/.test(
+      issue.rule ?? "",
+    ),
+  );
   const issueList = lintIssues
     .slice(0, 40)
     .map(
@@ -432,14 +616,26 @@ Requirements:
 - Fix only what is needed to resolve the reported errors.
 - Keep app behavior/design unchanged unless required by the fix.
 - Return COMPLETE valid JSON in the required shape with full files + dependencies.
-- Do not include markdown or explanations.`;
+- Do not include markdown or explanations.
+${
+  hasNavigationUxIssue
+    ? `- Navigation quality constraints:
+  - Header/navbar must stay visible and pinned at top on mobile (sticky/fixed + top-0 + high z-index).
+  - Mobile menu must open/close cleanly, anchored from the top layer.
+  - Mobile menu panel must be above page content (not behind hero/cards), using fixed/absolute overlay positioning with strong z-index.
+  - Mobile menu panel must use readable contrast and non-transparent background.
+  - Mobile menu panel must span full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0).
+  - Do not create separate scrollbar UI on nav/header/menu wrappers.
+  - Prevent horizontal overflow on small screens.`
+    : ""
+}`;
 
   const text = await generateWithGemini(SYSTEM_PROMPT, repairPrompt);
-  const parsed = parseAIGeneratedJSON(text);
-
-  const repairedDependencies = parsed.dependencies || dependencies;
-  let repairedFiles = parsed.files || files;
+  const { dependencies: repairedDependencies, files: parsedFiles } =
+    parseAndNormalizeProjectFromTextOrThrow(text);
+  let repairedFiles = parsedFiles;
   repairedFiles = ensureRequiredFiles(repairedFiles, repairedDependencies);
+  validateProjectStructureOrThrow(repairedFiles);
   validateSyntaxOrThrow(repairedFiles);
 
   return { files: repairedFiles, dependencies: repairedDependencies };
@@ -449,21 +645,24 @@ function ensureRequiredFiles(
   files: GeneratedFile[],
   dependencies: Record<string, string>,
 ): GeneratedFile[] {
+  function ensureMobileOverflowGuard(content: string): string {
+    if (/overflow-x\s*:\s*hidden/i.test(content)) {
+      return content;
+    }
+
+    const guardRule = `html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}`;
+
+    return `${content.trim()}\n\n${guardRule}\n`;
+  }
+
   function ensureTailwindLayerDirectives(content: string): string {
     const stripUnsupportedApplyUtilities = (css: string): string =>
-      css.replace(/@apply\s+([^;]+);/g, (_match, utilityGroup: string) => {
-        const utilities = utilityGroup
-          .split(/\s+/)
-          .map((u) => u.trim())
-          .filter(Boolean);
-        const filtered = utilities.filter((u) => !u.startsWith("selection:"));
-
-        if (filtered.length === 0) {
-          return "";
-        }
-
-        return `@apply ${filtered.join(" ")};`;
-      });
+      // Tailwind can hard-fail build on unknown @apply tokens (e.g. custom font-* utilities).
+      // To keep generated projects compile-safe, remove @apply directives entirely.
+      css.replace(/^\s*@apply\s+[^;]+;\s*$/gm, "");
 
     const hasLayerBase = /@layer\s+base\b/.test(content);
     const hasLayerComponents = /@layer\s+components\b/.test(content);
@@ -484,7 +683,7 @@ function ensureRequiredFiles(
 
     const normalized =
       missing.length === 0 ? content : `${missing.join("\n")}\n\n${content}`;
-    return stripUnsupportedApplyUtilities(normalized);
+    return ensureMobileOverflowGuard(stripUnsupportedApplyUtilities(normalized));
   }
 
   const fileMap = new Map(files.map((f) => [f.path, f]));
@@ -563,6 +762,11 @@ export default config;`,
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
   }
+}
+
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
 }`,
     });
   } else {
@@ -578,16 +782,68 @@ export default config;`,
     });
   }
 
+  // Ensure tenant helper exists for multi-tenant apps with auth
+  if (!fileMap.has("lib/supabase/tenant.ts")) {
+    files.push({
+      path: "lib/supabase/tenant.ts",
+      content: `import { createClient } from "./server";
+
+/**
+ * Get the current tenant slug from environment
+ * Each generated app has a unique tenant slug for data isolation
+ */
+export function getTenantSlug(): string {
+  const tenant = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
+  if (!tenant) {
+    throw new Error("NEXT_PUBLIC_POCKET_APP_SLUG is not set");
+  }
+  return tenant;
+}
+
+/**
+ * Get the current authenticated user and verify tenant membership
+ * Returns null if user is not authenticated or not a member of this tenant
+ */
+export async function getCurrentUser() {
+  const supabase = await createClient();
+  const tenant = getTenantSlug();
+
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) return null;
+
+  // Verify tenant membership
+  const { data: membership } = await supabase
+    .from("user_tenants")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("tenant_slug", tenant)
+    .single();
+
+  if (!membership) return null;
+
+  return user;
+}
+
+/**
+ * Check if current user is a member of this tenant
+ */
+export async function isUserTenantMember(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return user !== null;
+}`,
+    });
+  }
+
   files = ensureProviderGuardsForGeneratedFiles(files);
   return files;
 }
 
-function validateSyntaxOrThrow(files: GeneratedFile[]) {
+function collectSyntaxIssues(files: GeneratedFile[]): LintIssue[] {
   const sourceFiles = files.filter((f) =>
     /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
   );
 
-  const syntaxIssues: string[] = [];
+  const syntaxIssues: LintIssue[] = [];
 
   for (const file of sourceFiles) {
     const lower = file.path.toLowerCase();
@@ -615,14 +871,228 @@ function validateSyntaxOrThrow(files: GeneratedFile[]) {
     const message = ts.flattenDiagnosticMessageText(first.messageText, "\n");
     const pos = first.start ?? 0;
     const lineCol = sf.getLineAndCharacterOfPosition(pos);
-    syntaxIssues.push(
-      `${file.path}:${lineCol.line + 1}:${lineCol.character + 1} ${message}`,
-    );
+    syntaxIssues.push({
+      path: file.path,
+      line: lineCol.line + 1,
+      column: lineCol.character + 1,
+      rule: "typescript/parse",
+      message,
+    });
   }
 
+  return syntaxIssues;
+}
+
+function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
+  const sourceFiles = files.filter((f) =>
+    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
+  );
+  const issues: LintIssue[] = [];
+
+  const navFiles = sourceFiles.filter((f) => /<nav[\s>]/i.test(f.content));
+  if (navFiles.length === 0) {
+    issues.push({
+      path: "app/page.tsx",
+      line: 1,
+      column: 1,
+      rule: "ux/navigation-required",
+      message:
+        "Missing navigation section. Add a responsive navbar with desktop links and mobile menu toggle.",
+    });
+  } else {
+    const hasResponsiveVisibility = navFiles.some((f) =>
+      /\b(?:sm|md|lg|xl|2xl):(?:hidden|block|flex|grid)\b/.test(f.content),
+    );
+    const hasMenuToggleLogic = navFiles.some((f) =>
+      /\b(?:aria-expanded|isMenuOpen|menuOpen|setIsMenuOpen|setMenuOpen|toggleMenu)\b/.test(
+        f.content,
+      ),
+    );
+    const hasMenuButton = navFiles.some((f) =>
+      /<button[\s\S]*?(?:menu|nav|open|close|aria-label)/i.test(f.content),
+    );
+
+    if (!hasResponsiveVisibility || !hasMenuToggleLogic || !hasMenuButton) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/mobile-navbar",
+        message:
+          "Navbar is not fully mobile-ready. Add hamburger button, menu open/close state, responsive visibility classes, and accessibility attributes.",
+      });
+    }
+
+    const hasPinnedHeader = navFiles.some(
+      (f) =>
+        /\b(?:sticky|fixed)\b[\s\S]{0,120}\btop-0\b/i.test(f.content) ||
+        /\btop-0\b[\s\S]{0,120}\b(?:sticky|fixed)\b/i.test(f.content),
+    );
+    const hasNavLayering = navFiles.some(
+      (f) =>
+        /\bz-(?:[4-9]\d|[1-9]\d{2,})\b/.test(f.content) ||
+        /\bz-\[\d+\]/.test(f.content) ||
+        /zIndex\s*:\s*(?:[4-9]\d|[1-9]\d{2,})/.test(f.content),
+    );
+    if (!hasPinnedHeader || !hasNavLayering) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/navbar-stacking",
+        message:
+          "Navbar/header must stay pinned at the top and above content. Use sticky/fixed + top-0 and a high z-index to avoid hidden/overlapped nav on mobile.",
+      });
+    }
+
+    const hasNestedMenuScrolling = navFiles.some(
+      (f) =>
+        /className\s*=\s*["'`][^"'`]*(?:mobile-menu|menu|drawer)[^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*["'`]/i.test(
+          f.content,
+        ) ||
+        /className\s*=\s*["'`][^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*(?:mobile-menu|menu|drawer)[^"'`]*["'`]/i.test(
+          f.content,
+        ),
+    );
+    const hasScrollableNavContainer = navFiles.some(
+      (f) =>
+        /<(?:nav|header)[^>]*className\s*=\s*["'`][^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*["'`]/i.test(
+          f.content,
+        ) ||
+        /<(?:nav|header)[^>]*style=\{\{[^}]*overflowY\s*:\s*["'](?:auto|scroll)["']/i.test(
+          f.content,
+        ),
+    );
+    if (hasNestedMenuScrolling || hasScrollableNavContainer) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/navbar-nested-scroll",
+        message:
+          "Avoid independent scrollbar containers in navbar/mobile menu wrappers. Keep nav top-anchored and avoid overflow-y-auto/scroll on header/nav/menu containers.",
+      });
+    }
+
+    const hasMenuOverlayPattern = navFiles.some((f) => {
+      const hasToggle = /\b(?:aria-expanded|isMenuOpen|menuOpen|mobileMenuOpen|openMenu|toggleMenu)\b/.test(
+        f.content,
+      );
+      if (!hasToggle) return false;
+
+      const hasRawOverlayClasses =
+        /(?:fixed|absolute)[\s\S]{0,180}(?:top-0|inset-0|inset-x-0)/i.test(
+          f.content,
+        ) &&
+        /(?:z-(?:[5-9]\d|[1-9]\d{2,})|z-\[\d+\]|zIndex\s*:\s*(?:[5-9]\d|[1-9]\d{2,}))/i.test(
+          f.content,
+        );
+
+      // Accept common overlay abstractions (shadcn/radix/custom portal wrappers)
+      // where fixed positioning/z-index may be encapsulated inside library components.
+      const usesOverlayComponent =
+        /<(?:Sheet|SheetContent|Drawer|DrawerContent|Dialog|DialogContent|Modal|Portal)\b/.test(
+          f.content,
+        ) ||
+        /@radix-ui\/react-(?:dialog|popover|portal)/.test(f.content) ||
+        /\bcreatePortal\s*\(/.test(f.content);
+
+      return hasRawOverlayClasses || usesOverlayComponent;
+    });
+    if (hasMenuToggleLogic && !hasMenuOverlayPattern) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/mobile-menu-overlay",
+        message:
+          "Mobile menu overlay is missing robust layering. Use fixed/absolute top-anchored panel (top-0/inset) with strong z-index so it never renders behind page content.",
+      });
+    }
+
+    const hasMenuReadableBackground = navFiles.some((f) => {
+      const hasExplicitReadableBg =
+        /(?:mobile-menu|menu|drawer|nav-panel|menu-panel)[\s\S]{0,120}(?:bg-[\w\[\]\/-]+|backdrop-blur|style=\{\{[^}]*background)/i.test(
+          f.content,
+        ) ||
+        /(?:fixed|absolute)[\s\S]{0,120}(?:bg-[\w\[\]\/-]+|backdrop-blur)/i.test(
+          f.content,
+        );
+
+      const usesOverlayComponent =
+        /<(?:SheetContent|DrawerContent|DialogContent|Modal)\b/.test(f.content) ||
+        /@radix-ui\/react-(?:dialog|popover|portal)/.test(f.content);
+
+      return hasExplicitReadableBg || usesOverlayComponent;
+    });
+    if (hasMenuToggleLogic && !hasMenuReadableBackground) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/mobile-menu-visibility",
+        message:
+          "Mobile menu needs clear visibility. Add a solid/semi-opaque background and readable contrast so links are visible when menu opens.",
+      });
+    }
+
+    const hasFullHeightMenuPanel = navFiles.some(
+      (f) =>
+        /\b(?:mobile-menu|menu|drawer|nav-panel|menu-panel)\b[\s\S]{0,160}\b(?:h-screen|min-h-screen|h-dvh|min-h-dvh|h-\[100dvh\]|min-h-\[100dvh\]|inset-y-0|top-0\s+bottom-0)\b/i.test(
+          f.content,
+        ) ||
+        /(?:fixed|absolute)[\s\S]{0,180}\b(?:h-screen|min-h-screen|h-dvh|min-h-dvh|h-\[100dvh\]|min-h-\[100dvh\]|inset-y-0|top-0\s+bottom-0)\b/i.test(
+          f.content,
+        ) ||
+        /<SheetContent[^>]*\bside=["'](?:left|right)["']/i.test(f.content),
+    );
+    if (hasMenuToggleLogic && !hasFullHeightMenuPanel) {
+      issues.push({
+        path: navFiles[0].path,
+        line: 1,
+        column: 1,
+        rule: "ux/mobile-menu-height",
+        message:
+          "Mobile menu should occupy full phone height. Use h-screen/min-h-screen/100dvh or inset-y-0 so users do not need awkward inner scrolling.",
+      });
+    }
+  }
+
+  const hasResponsiveClasses = sourceFiles.some((f) =>
+    /\b(?:sm|md|lg|xl|2xl):/.test(f.content),
+  );
+  if (!hasResponsiveClasses) {
+    issues.push({
+      path: "app/page.tsx",
+      line: 1,
+      column: 1,
+      rule: "ux/responsive-breakpoints",
+      message:
+        "No responsive breakpoint classes detected. Add mobile-first responsive classes for key sections.",
+    });
+  }
+
+  const globals = files.find((f) => f.path === "app/globals.css");
+  if (globals && !/overflow-x\s*:\s*hidden/i.test(globals.content)) {
+    issues.push({
+      path: "app/globals.css",
+      line: 1,
+      column: 1,
+      rule: "ux/mobile-overflow-guard",
+      message:
+        "Add mobile overflow guard (html, body { max-width: 100%; overflow-x: hidden; }) to prevent horizontal scrolling.",
+    });
+  }
+
+  return issues;
+}
+
+function validateSyntaxOrThrow(files: GeneratedFile[]) {
+  const syntaxIssues = collectSyntaxIssues(files);
   if (syntaxIssues.length > 0) {
+    const first = syntaxIssues[0];
     throw new Error(
-      `Generated code contains syntax errors. First issue: ${syntaxIssues[0]}`,
+      `Generated code contains syntax errors. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
     );
   }
 }
@@ -727,7 +1197,7 @@ export const generateCodeFunction = inngest.createFunction(
   },
   { event: "app/generate.code" },
   async ({ event, step }) => {
-    const { prompt, userId, projectId } = event.data;
+    const { prompt, projectId } = event.data;
 
     // Check if cancelled before starting
     if (await checkIfCancelled(projectId)) {
@@ -736,7 +1206,10 @@ export const generateCodeFunction = inngest.createFunction(
     }
 
     // Step 1: Build user prompt
-    await sendProgress(projectId, "📝 Analyzing your requirements...");
+    await sendProgress(
+      projectId,
+      "[1/7] Analyzing requirements and planning project structure...",
+    );
     const userPrompt = await step.run("build-prompt", async () => {
       return `Build a production-ready, visually premium Next.js website for this request:
 ${prompt}
@@ -744,17 +1217,40 @@ ${prompt}
 STRICT IMPLEMENTATION RULES:
 - Keep output compatible with Next.js App Router + TypeScript.
 - Use Tailwind utility classes for styling.
+- Return a complete, runnable project with app/layout.tsx, app/page.tsx, and app/globals.css.
 - In app/globals.css, if any @layer base/components/utilities is present, include matching @tailwind directives.
-- Never use variant classes inside @apply (forbidden examples: selection:*, hover:*, focus:* in @apply).
+- Do not use @apply in generated CSS; always use explicit utility classes directly in markup.
 - If code contains a guard like "must be used within XProvider", ensure app/layout.tsx wraps {children} with XProvider.
-- If auth is implemented, use Supabase Auth and tenant-scope app data at the database layer.
-- Preserve accessibility and responsive behavior.
+- AUTHENTICATION RULES:
+  * Only add auth if the user's request implies user accounts (e.g., "dashboard", "user profile", "login")
+  * If auth is needed, use Supabase Auth (@supabase/supabase-js v2 + @supabase/ssr)
+  * Create proper client/server separation with cookie-based sessions
+  * Protect routes with middleware checking supabase.auth.getUser()
+  * Use Row Level Security (RLS) policies if database tables are involved
+- Preserve accessibility, semantic HTML, and responsive behavior.
+- Do not output lockfiles or unsafe file paths.
+- All returned code must parse without TypeScript/JavaScript syntax errors.
+- CRITICAL IMAGE REQUIREMENTS:
+  * Each image must have DETAILED, SPECIFIC, PHOTOGRAPHIC alt text (minimum 10 words)
+  * Describe exact visual composition: subject, angle, lighting, setting, mood, specific details
+  * Never use generic terms like "image", "photo", "hero image", "professional picture"
+  * For food: specify dish name, plating style, ingredients, serving context, photography angle
+  * For people: specify role, setting, expression, clothing, lighting style, composition
+  * For products: specify product type, angle, background, lighting, material, key features
+  * Each image must be visually distinct with unique composition and subject matter
+- Navbar must be fully functional with mobile menu toggle and accessibility attributes.
+- Ensure mobile-first responsiveness and no horizontal scrolling.
+- Keep header/navbar pinned at the top while scrolling, with proper z-index layering above content.
+- Mobile menu must appear from the top layer without creating an extra visible scrollbar inside nav/header/menu wrappers.
+- Mobile menu panel must never render behind page content; use top-anchored overlay positioning with clear background contrast.
+- Mobile menu panel must fill full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0), not just a small top section.
 
 DESIGN DIRECTION:
-- Bold hero section, clear hierarchy, strong spacing rhythm.
-- Modern gradient accents and subtle motion.
-- High contrast and readable typography.
-- Professional, cohesive sections and CTA flow.`;
+- Clear visual direction with intentional typography scale and spacing rhythm.
+- Premium color system, polished gradients/background depth, and subtle motion.
+- High contrast and readable typography across desktop and mobile.
+- Cohesive section flow: hero, value props, social proof, CTA, and footer.
+- Reusable components, not one giant page file.`;
     });
 
     // Check if cancelled after building prompt
@@ -768,7 +1264,7 @@ DESIGN DIRECTION:
     // Step 2: Generate with Gemini
     await sendProgress(
       projectId,
-      "🤖 AI is generating your code (this takes 20-50 seconds)...",
+      "[2/7] Generating your website code with AI (usually 20-50s)...",
     );
     const generatedText = await step.run("generate-with-gemini", async () => {
       console.log("Using Gemini 3 Flash Preview...");
@@ -796,18 +1292,43 @@ DESIGN DIRECTION:
     }
 
     // Step 3: Parse and prepare files
-    await sendProgress(projectId, "📦 Preparing project files...");
+    await sendProgress(
+      projectId,
+      "[3/7] Parsing AI output and preparing project files...",
+    );
     const parsedProject = await step.run(
       "parse-generated-code",
       async () => {
         console.log("Parsing AI response, length:", generatedText.length);
 
-        let parsed;
-        try {
-          parsed = parseAIGeneratedJSON(generatedText);
-        } catch (parseError) {
-          console.error("Failed to parse AI response:", parseError);
-          // Save the failed response for debugging
+        let normalizedProject: {
+          files: GeneratedFile[];
+          dependencies: Record<string, string>;
+        } | null = null;
+        let workingText = generatedText;
+        let lastParseError: unknown;
+
+        for (let attempt = 1; attempt <= MAX_JSON_REPAIR_ATTEMPTS + 1; attempt++) {
+          try {
+            normalizedProject = parseAndNormalizeProjectFromTextOrThrow(workingText);
+            break;
+          } catch (parseError) {
+            lastParseError = parseError;
+            console.error(
+              `[Parse] Attempt ${attempt} failed:`,
+              parseError instanceof Error ? parseError.message : parseError,
+            );
+
+            if (attempt > MAX_JSON_REPAIR_ATTEMPTS) {
+              break;
+            }
+
+            console.warn(`[Parse] Attempting AI JSON repair pass ${attempt}...`);
+            workingText = await repairMalformedJSONWithGemini(workingText);
+          }
+        }
+
+        if (!normalizedProject) {
           console.log(
             "Raw response first 1000 chars:",
             generatedText.substring(0, 1000),
@@ -816,36 +1337,119 @@ DESIGN DIRECTION:
             "Raw response last 500 chars:",
             generatedText.substring(Math.max(0, generatedText.length - 500)),
           );
+          const reason =
+            lastParseError instanceof Error
+              ? lastParseError.message
+              : String(lastParseError ?? "unknown parse error");
+          throw new Error(`Unable to parse and normalize AI response: ${reason}`);
+        }
 
-          // Check for common issues
-          if (!generatedText.includes("{")) {
-            throw new Error(
-              "AI response doesn't contain JSON (no opening brace)",
-            );
-          }
-          if (!generatedText.includes("}")) {
-            throw new Error(
-              "AI response doesn't contain valid JSON (no closing brace)",
-            );
-          }
-          console.warn("Attempting AI JSON repair pass...");
+        let files = ensureRequiredFiles(
+          normalizedProject.files,
+          normalizedProject.dependencies,
+        );
+        let dependencies = normalizedProject.dependencies;
+
+        for (let attempt = 1; attempt <= MAX_STRUCTURE_REPAIR_ATTEMPTS + 1; attempt++) {
           try {
-            const repairedText = await repairMalformedJSONWithGemini(generatedText);
-            parsed = parseAIGeneratedJSON(repairedText);
-            console.log("AI JSON repair succeeded.");
-          } catch (repairError) {
-            console.error("AI JSON repair failed:", repairError);
-            throw parseError;
+            validateProjectStructureOrThrow(files);
+            break;
+          } catch (shapeError) {
+            if (attempt > MAX_STRUCTURE_REPAIR_ATTEMPTS) {
+              throw shapeError;
+            }
+
+            console.warn(
+              `[ShapeRepair] Attempt ${attempt} failed: ${
+                shapeError instanceof Error ? shapeError.message : String(shapeError)
+              }`,
+            );
+            const repairedShapeText = await repairProjectShapeWithGemini({
+              originalPrompt: prompt,
+              parseError:
+                shapeError instanceof Error ? shapeError.message : String(shapeError),
+              parsedResponse: {
+                files,
+                dependencies,
+                _checks: { shape_repair: true, attempt },
+              },
+            });
+
+            const repairedProject =
+              parseAndNormalizeProjectFromTextOrThrow(repairedShapeText);
+            files = ensureRequiredFiles(
+              repairedProject.files,
+              repairedProject.dependencies,
+            );
+            dependencies = repairedProject.dependencies;
           }
         }
 
-        let files: GeneratedFile[] = parsed.files || [];
-        const dependencies = parsed.dependencies || getDefaultDependencies();
+        for (let attempt = 1; attempt <= MAX_SYNTAX_REPAIR_ATTEMPTS + 1; attempt++) {
+          const syntaxIssues = collectSyntaxIssues(files);
+          if (syntaxIssues.length === 0) {
+            break;
+          }
 
-        console.log(`Parsed ${files.length} files successfully`);
-        files = ensureRequiredFiles(files, dependencies);
+          if (attempt > MAX_SYNTAX_REPAIR_ATTEMPTS) {
+            const first = syntaxIssues[0];
+            throw new Error(
+              `Syntax repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+            );
+          }
+
+          console.warn(
+            `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
+          );
+          await sendProgress(
+            projectId,
+            `[4/7] Resolving ${syntaxIssues.length} syntax issue(s) (pass ${attempt}/${MAX_SYNTAX_REPAIR_ATTEMPTS})...`,
+          );
+
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: syntaxIssues,
+          });
+          files = repaired.files;
+          dependencies = repaired.dependencies;
+        }
+
+        for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS + 1; attempt++) {
+          const uxIssues = collectResponsiveAndNavIssues(files);
+          if (uxIssues.length === 0) {
+            break;
+          }
+
+          if (attempt > MAX_UX_REPAIR_ATTEMPTS) {
+            const first = uxIssues[0];
+            console.warn(
+              `[UXRepair] Max attempts reached. Skipping remaining UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
+            );
+            break; // Skip UX errors instead of throwing
+          }
+
+          console.warn(
+            `[UXRepair] Attempt ${attempt} - ${uxIssues.length} responsive/navigation issue(s).`,
+          );
+          await sendProgress(
+            projectId,
+            `[4/7] Improving mobile layout and navigation (pass ${attempt}/${MAX_UX_REPAIR_ATTEMPTS})...`,
+          );
+
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: uxIssues,
+          });
+          files = repaired.files;
+          dependencies = repaired.dependencies;
+        }
+
         validateSyntaxOrThrow(files);
-
+        console.log(`Parsed ${files.length} files successfully`);
         return { files, dependencies };
       },
     );
@@ -853,7 +1457,10 @@ DESIGN DIRECTION:
     let dependencies = parsedProject.dependencies;
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(projectId, "🔍 Running quality checks on all files...");
+    await sendProgress(
+      projectId,
+      "[5/7] Running lint and quality checks on all files...",
+    );
     const { fixedFiles, lintReport } = await step.run(
       "lint-and-repair",
       async () => {
@@ -878,7 +1485,7 @@ DESIGN DIRECTION:
           );
           await sendProgress(
             projectId,
-            `🛠️ Fixing ${lintResult.lintReport.errors} code issue(s) (pass ${attempt}/${MAX_LINT_REPAIR_ATTEMPTS})...`,
+            `[5/7] Fixing ${lintResult.lintReport.errors} code issue(s) (pass ${attempt}/${MAX_LINT_REPAIR_ATTEMPTS})...`,
           );
 
           const repaired = await repairProjectFromLintFeedback({
@@ -908,7 +1515,10 @@ DESIGN DIRECTION:
       },
     );
     // Step 5: Notify completion via API
-    await sendProgress(projectId, "✅ Finalizing your project...");
+    await sendProgress(
+      projectId,
+      "[6/7] Finalizing generated files and saving results...",
+    );
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
@@ -944,6 +1554,8 @@ DESIGN DIRECTION:
       console.log("[Inngest] Notification successful:", result);
       return result;
     });
+
+    await sendProgress(projectId, "[7/7] Generation complete.");
 
     return {
       files: fixedFiles,

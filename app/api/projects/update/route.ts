@@ -1,6 +1,11 @@
-﻿import { auth } from '@/lib/supabase-auth/server';
+import { auth } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import {
+  collectGeneratedStorageUrlsFromProjectData,
+  deleteGeneratedStorageUrls,
+  parseGeneratedFiles,
+} from "@/lib/server/image-storage-cleanup";
 
 export async function PUT(req: Request) {
   try {
@@ -35,6 +40,25 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    const previousFiles = parseGeneratedFiles(existingProject.files);
+    const nextFiles = parseGeneratedFiles(files);
+    const previousUrls = collectGeneratedStorageUrlsFromProjectData(
+      previousFiles,
+      existingProject.imageCache,
+    );
+    const nextUrls = collectGeneratedStorageUrlsFromProjectData(nextFiles, imageCache);
+
+    const removedUrls: string[] = [];
+    for (const url of previousUrls) {
+      if (!nextUrls.has(url)) {
+        removedUrls.push(url);
+      }
+    }
+
+    if (removedUrls.length > 0) {
+      await deleteGeneratedStorageUrls(removedUrls);
+    }
+
     // Update project
     await prisma.project.update({
       where: { id: projectId },
@@ -57,5 +81,3 @@ export async function PUT(req: Request) {
     );
   }
 }
-
-

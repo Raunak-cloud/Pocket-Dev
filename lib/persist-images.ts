@@ -3,21 +3,27 @@ interface GeneratedFile {
   content: string;
 }
 
-export function normalizeGeneratedImageSources(
-  files: GeneratedFile[],
-): GeneratedFile[] {
-  return files;
+interface PersistGeneratedImagesOptions {
+  previousFiles?: GeneratedFile[];
+  preserveExistingImages?: boolean;
+  isUserProvidedPrompt?: boolean;
 }
 
 export async function persistGeneratedImages(
   files: GeneratedFile[],
+  options?: PersistGeneratedImagesOptions,
 ): Promise<GeneratedFile[]> {
   if (files.length === 0) return files;
 
   const response = await fetch("/api/images/persist-generated", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({
+      files,
+      previousFiles: options?.previousFiles,
+      preserveExistingImages: options?.preserveExistingImages ?? false,
+      isUserProvidedPrompt: options?.isUserProvidedPrompt ?? false,
+    }),
   });
 
   if (!response.ok) {

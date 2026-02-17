@@ -20,7 +20,9 @@
       "Bash(npx tsx test-inngest.ts)",
       "Bash(npx prisma db push:*)",
       "Bash(npx prisma generate:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npm test:*)",
+      "Bash(npx tsx:*)"
     ]
   }
 }

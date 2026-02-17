@@ -58,19 +58,8 @@ export async function createSandboxServer(
 
   const normalizeGlobalsCss = (content: string): string => {
     const stripUnsupportedApplyUtilities = (css: string): string =>
-      css.replace(/@apply\s+([^;]+);/g, (_match, utilityGroup: string) => {
-        const utilities = utilityGroup
-          .split(/\s+/)
-          .map((u) => u.trim())
-          .filter(Boolean);
-        const filtered = utilities.filter((u) => !u.startsWith("selection:"));
-
-        if (filtered.length === 0) {
-          return "";
-        }
-
-        return `@apply ${filtered.join(" ")};`;
-      });
+      // Compile safety: unknown @apply utilities can crash Tailwind build.
+      css.replace(/^\s*@apply\s+[^;]+;\s*$/gm, "");
 
     const hasLayerBase = /@layer\s+base\b/.test(content);
     const hasLayerComponents = /@layer\s+components\b/.test(content);
@@ -145,14 +134,18 @@ import { useEffect, useRef } from "react";
 declare global {
   interface Window {
     __pocketTextEditMode?: boolean;
+    __pocketImageSelectMode?: boolean;
   }
 }
 
 export default function PocketTextEditBridge() {
   const selectedRef = useRef<HTMLElement | null>(null);
+  const selectedImageRef = useRef<HTMLImageElement | null>(null);
   const originalTextRef = useRef<string>("");
   const previousRootCursorRef = useRef<string>("");
   const previousBodyCursorRef = useRef<string>("");
+  const modeOverlayRef = useRef<HTMLDivElement | null>(null);
+  const styleElementRef = useRef<HTMLStyleElement | null>(null);
 
   useEffect(() => {
     const clearSelectionStyles = () => {
@@ -165,12 +158,151 @@ export default function PocketTextEditBridge() {
       originalTextRef.current = "";
     };
 
+    const clearImageSelectionStyles = () => {
+      if (!selectedImageRef.current) return;
+      selectedImageRef.current.style.outline = "";
+      selectedImageRef.current.style.outlineOffset = "";
+      selectedImageRef.current.style.cursor = "";
+      selectedImageRef.current.style.transform = "";
+      selectedImageRef.current.style.transition = "";
+      selectedImageRef.current = null;
+    };
+
+    const createImageSelectOverlay = () => {
+      if (modeOverlayRef.current) return;
+
+      const overlay = document.createElement("div");
+      overlay.id = "pocket-image-select-overlay";
+      overlay.innerHTML = \`
+        <div style="
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 999999;
+          background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+          color: white;
+          padding: 12px 20px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          font-size: 14px;
+          font-weight: 500;
+          box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
+          animation: slideDown 0.3s ease-out;
+        ">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <span>Image Selection Mode Active</span>
+          <span style="opacity: 0.9; font-size: 13px; font-weight: 400;">Click any image to replace it</span>
+          <div style="
+            margin-left: auto;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+          ">
+            <kbd style="
+              background: rgba(255, 255, 255, 0.3);
+              padding: 2px 6px;
+              border-radius: 3px;
+              font-family: monospace;
+              font-size: 11px;
+            ">ESC</kbd>
+            to cancel
+          </div>
+        </div>
+      \`;
+
+      const style = document.createElement("style");
+      style.textContent = \`
+        @keyframes slideDown {
+          from {
+            transform: translateY(-100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateY(0);
+            opacity: 1;
+          }
+        }
+        @keyframes imageSelect {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(0.95); }
+        }
+        @keyframes borderPulse {
+          0%, 100% {
+            outline-color: #f97316;
+            outline-width: 4px;
+            box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7);
+          }
+          50% {
+            outline-color: #fb923c;
+            outline-width: 5px;
+            box-shadow: 0 0 0 8px rgba(249, 115, 22, 0);
+          }
+        }
+      \`;
+      document.head.appendChild(style);
+      document.body.appendChild(overlay);
+      modeOverlayRef.current = overlay;
+
+      // Adjust body padding to prevent content jump
+      document.body.style.paddingTop = "44px";
+    };
+
+    const removeImageSelectOverlay = () => {
+      if (modeOverlayRef.current) {
+        modeOverlayRef.current.remove();
+        modeOverlayRef.current = null;
+      }
+      document.body.style.paddingTop = "";
+    };
+
+    const addImageHoverStyles = () => {
+      if (styleElementRef.current) return;
+
+      const style = document.createElement("style");
+      style.id = "pocket-image-hover-styles";
+      style.textContent = \`
+        img {
+          transition: all 0.2s ease !important;
+        }
+        img:hover {
+          outline: 3px solid #f97316 !important;
+          outline-offset: 3px !important;
+          transform: scale(1.02) !important;
+          box-shadow: 0 8px 24px rgba(249, 115, 22, 0.3) !important;
+          cursor: crosshair !important;
+          filter: brightness(1.05) !important;
+        }
+      \`;
+      document.head.appendChild(style);
+      styleElementRef.current = style;
+    };
+
+    const removeImageHoverStyles = () => {
+      if (styleElementRef.current) {
+        styleElementRef.current.remove();
+        styleElementRef.current = null;
+      }
+    };
+
     const setModeCursor = (enabled: boolean) => {
       if (enabled) {
         previousRootCursorRef.current = document.documentElement.style.cursor;
         previousBodyCursorRef.current = document.body.style.cursor;
-        document.documentElement.style.cursor = "text";
-        document.body.style.cursor = "text";
+        const cursor = window.__pocketImageSelectMode ? "crosshair" : "text";
+        document.documentElement.style.cursor = cursor;
+        document.body.style.cursor = cursor;
         return;
       }
       document.documentElement.style.cursor = previousRootCursorRef.current || "";
@@ -218,19 +350,132 @@ export default function PocketTextEditBridge() {
       return null;
     };
 
+    const findImageTarget = (target: EventTarget | null): HTMLImageElement | null => {
+      let el = target as HTMLElement | null;
+      while (el && el !== document.body) {
+        if (el instanceof HTMLImageElement) {
+          return el;
+        }
+        el = el.parentElement;
+      }
+      return null;
+    };
+
+    const getImageOccurrence = (target: HTMLImageElement, rawSrc: string): number => {
+      const images = Array.from(document.querySelectorAll("img[src]"));
+      let occurrence = 1;
+      for (const img of images) {
+        if (img === target) break;
+        const siblingSrc = img.getAttribute("src") || (img as HTMLImageElement).src || "";
+        if (siblingSrc === rawSrc) occurrence++;
+      }
+      return occurrence;
+    };
+
+    const resolveOriginalImageSrc = (rawSrc: string): string => {
+      if (!rawSrc) return rawSrc;
+      try {
+        const parsed = new URL(rawSrc, window.location.origin);
+        if (parsed.pathname === "/_next/image") {
+          const encoded = parsed.searchParams.get("url");
+          if (encoded) {
+            return decodeURIComponent(encoded);
+          }
+        }
+        return rawSrc;
+      } catch {
+        return rawSrc;
+      }
+    };
+
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "pocket:set-text-edit-mode") {
         window.__pocketTextEditMode = Boolean(data.enabled);
-        setModeCursor(window.__pocketTextEditMode);
+        setModeCursor(Boolean(window.__pocketTextEditMode || window.__pocketImageSelectMode));
         if (!window.__pocketTextEditMode) {
           commitEdit(false);
+        }
+      }
+      if (data.type === "pocket:set-image-select-mode") {
+        window.__pocketImageSelectMode = Boolean(data.enabled);
+        setModeCursor(Boolean(window.__pocketTextEditMode || window.__pocketImageSelectMode));
+        if (window.__pocketImageSelectMode) {
+          createImageSelectOverlay();
+          addImageHoverStyles();
+        } else {
+          removeImageSelectOverlay();
+          removeImageHoverStyles();
+          clearImageSelectionStyles();
         }
       }
     };
 
     const onClick = (event: MouseEvent) => {
+      if (window.__pocketImageSelectMode) {
+        const imageTarget = findImageTarget(event.target);
+        if (!imageTarget) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        clearSelectionStyles();
+        clearImageSelectionStyles();
+
+        selectedImageRef.current = imageTarget;
+
+        // Add selection animation with pulsing border
+        selectedImageRef.current.style.transition = "all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)";
+        selectedImageRef.current.style.outline = "4px solid #f97316";
+        selectedImageRef.current.style.outlineOffset = "4px";
+        selectedImageRef.current.style.cursor = "pointer";
+        selectedImageRef.current.style.transform = "scale(1.05)";
+        selectedImageRef.current.style.boxShadow = "0 12px 32px rgba(249, 115, 22, 0.4)";
+        selectedImageRef.current.style.filter = "brightness(1.1)";
+        selectedImageRef.current.style.animation = "imageSelect 0.3s ease-out, borderPulse 2s ease-in-out infinite";
+
+        const rawSrc =
+          imageTarget.getAttribute("src") ||
+          imageTarget.currentSrc ||
+          imageTarget.src ||
+          "";
+        const resolvedSrc = resolveOriginalImageSrc(rawSrc);
+        const alt = imageTarget.getAttribute("alt") || "";
+        const occurrence = getImageOccurrence(imageTarget, rawSrc);
+
+        // Show success feedback in overlay
+        if (modeOverlayRef.current) {
+          const overlay = modeOverlayRef.current.querySelector("div");
+          if (overlay) {
+            const originalHTML = overlay.innerHTML;
+            overlay.innerHTML = \`
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+              <span>Image Selected!</span>
+              <span style="opacity: 0.9; font-size: 13px; font-weight: 400;">Upload a new image to replace it</span>
+            \`;
+            setTimeout(() => {
+              if (overlay) overlay.innerHTML = originalHTML;
+            }, 2000);
+          }
+        }
+
+        window.parent.postMessage(
+          {
+            type: "pocket:image-selected",
+            src: rawSrc,
+            resolvedSrc,
+            alt,
+            occurrence,
+          },
+          "*"
+        );
+        return;
+      }
+
       if (!window.__pocketTextEditMode) return;
       const target = findEditableTarget(event.target);
       if (!target) return;
@@ -253,6 +498,15 @@ export default function PocketTextEditBridge() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (window.__pocketImageSelectMode) {
+          clearImageSelectionStyles();
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+
       if (!window.__pocketTextEditMode || !selectedRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
@@ -284,6 +538,9 @@ export default function PocketTextEditBridge() {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusout", onFocusOut, true);
       commitEdit(false);
+      clearImageSelectionStyles();
+      removeImageSelectOverlay();
+      removeImageHoverStyles();
       setModeCursor(false);
     };
   }, []);
@@ -303,8 +560,25 @@ export default function PocketAuthPreviewBridge() {
 
     const openOutsideFrame = (href: string) => {
       try {
+        // Modify the auth redirect URL to point back to the parent page
+        let modifiedHref = href;
+        try {
+          const url = new URL(href);
+          const redirectTo = url.searchParams.get('redirect_to');
+          if (redirectTo && window.top) {
+            // Replace the iframe's callback URL with the parent page URL
+            const parentOrigin = window.top.location.origin;
+            const parentPath = window.top.location.pathname + window.top.location.search;
+            url.searchParams.set('redirect_to', parentOrigin + parentPath);
+            modifiedHref = url.toString();
+          }
+        } catch (e) {
+          // If URL parsing fails, use original href
+          console.warn('Failed to modify auth redirect URL:', e);
+        }
+
         // Prefer breaking out of iframe in the same tab.
-        window.top!.location.href = href;
+        window.top!.location.href = modifiedHref;
       } catch {
         window.open(href, "_blank", "noopener,noreferrer");
       }
@@ -576,16 +850,40 @@ export default function PocketAuthPreviewBridge() {
 
   if (!ready) {
     console.error(`[Sandbox] Dev server failed to start after ${maxAttempts} seconds`);
-    // Try to get logs from the sandbox for debugging
+
+    // Try to get detailed error information
+    let errorDetails = '';
     try {
-      const logsResult = await sandbox.commands.run('tail -n 50 ~/.npm/_logs/npm-debug.log', {
+      // Check if dev server is still running
+      const psResult = await sandbox.commands.run('ps aux | grep "next dev"', {
         timeoutMs: 5000,
       });
-      console.error('[Sandbox] npm debug logs:', logsResult.stdout || logsResult.stderr);
-    } catch {
-      console.error('[Sandbox] Could not fetch debug logs');
+      appendSandboxStartupLog(jobId, `Process check: ${psResult.stdout}`);
+
+      // Try to get npm logs
+      const logsResult = await sandbox.commands.run('tail -n 50 ~/.npm/_logs/*.log 2>/dev/null || echo "No npm logs found"', {
+        timeoutMs: 5000,
+      });
+      if (logsResult.stdout && logsResult.stdout.trim() !== "No npm logs found") {
+        errorDetails += `\n\nNPM Logs:\n${logsResult.stdout}`;
+        appendSandboxStartupLog(jobId, `NPM error logs: ${logsResult.stdout}`);
+      }
+
+      // Try to check if there's a Next.js build error log
+      const nextLogsResult = await sandbox.commands.run('cat /home/user/.next/trace 2>/dev/null || echo "No Next.js trace found"', {
+        timeoutMs: 5000,
+      });
+      if (nextLogsResult.stdout && nextLogsResult.stdout.trim() !== "No Next.js trace found") {
+        errorDetails += `\n\nNext.js trace:\n${nextLogsResult.stdout.slice(0, 500)}`;
+      }
+
+      console.error('[Sandbox] Debug info:', errorDetails);
+    } catch (debugErr) {
+      console.error('[Sandbox] Could not fetch debug logs:', debugErr);
     }
-    const timeoutError = `Dev server timeout after ${maxAttempts} seconds. Check sandbox logs for errors.`;
+
+    const timeoutError = `Dev server failed to start within ${maxAttempts} seconds. The generated code may have build errors or dependency issues. Please try regenerating with a simpler prompt.${errorDetails ? '\n\nError details: ' + errorDetails.slice(0, 500) : ''}`;
+    appendSandboxStartupLog(jobId, timeoutError);
     failSandboxStartupStatus(jobId, timeoutError);
     throw new Error(timeoutError);
   }

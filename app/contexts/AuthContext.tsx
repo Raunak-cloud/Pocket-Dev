@@ -93,8 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [authLoaded, isSignedIn, authUser, fetchUserData]);
 
   const signInWithGoogle = async () => {
+    // Preserve current URL for redirect after auth
+    const currentUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
     await openSignIn({
-      redirectUrl: '/',
+      redirectUrl: currentUrl,
     });
   };
 

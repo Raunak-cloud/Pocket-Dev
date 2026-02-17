@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 interface CodeEditorLoadingProps {
   message?: string;
 }
@@ -9,18 +7,9 @@ interface CodeEditorLoadingProps {
 export default function CodeEditorLoading({
   message = "Installing dependencies...",
 }: CodeEditorLoadingProps) {
-  const [dots, setDots] = useState(".");
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDots((prev) => (prev.length >= 3 ? "." : prev + "."));
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, []);
-
   const codeLines = [
     "$ npm install",
+    `# ${message}`,
     "",
     "⠋ reify:framer-motion: timing reifyNode:node_modules/framer-motion",
     "⠙ reify:react-scroll-parallax: timing reifyNode:node_modules/react",
@@ -34,9 +23,6 @@ export default function CodeEditorLoading({
     "",
     "found 0 vulnerabilities",
   ];
-
-  console.log("[CodeEditorLoading] Rendering with", codeLines.length, "lines");
-  console.log("[CodeEditorLoading] Message:", message);
 
   return (
     <div className="w-full border-t border-border-secondary bg-bg-secondary/95 backdrop-blur-xl rounded-lg">

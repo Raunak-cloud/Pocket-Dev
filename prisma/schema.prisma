@@ -13,7 +13,7 @@ datasource db {
 // User model - migrated from Firebase Auth + Firestore users collection
 model User {
   id                  String              @id @default(cuid())
-  authUserId          String              @unique @map("clerkUserId") // Supabase auth user ID
+  authUserId          String              @unique @map("authUserId") // Supabase auth user ID
   email               String?
   displayName         String?
   photoURL            String?
@@ -28,7 +28,7 @@ model User {
   supportTickets      SupportTicket[]
   tokenTransactions   TokenTransaction[]
 
-  @@index([authUserId], map: "users_clerkUserId_idx")
+  @@index([authUserId], map: "users_authUserId_idx")
   @@map("users")
 }
 

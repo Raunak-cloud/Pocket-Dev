@@ -37,8 +37,6 @@ export function getSupabaseEnvBundle() {
   const publishable =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const secret =
-    process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (url) {
     bundle.NEXT_PUBLIC_SUPABASE_URL = url;
@@ -48,11 +46,11 @@ export function getSupabaseEnvBundle() {
     bundle.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = publishable;
     bundle.NEXT_PUBLIC_SUPABASE_ANON_KEY = publishable;
   }
-  if (secret) {
-    // Expose both names for compatibility with legacy/generated code.
-    bundle.SUPABASE_SECRET_KEY = secret;
-    bundle.SUPABASE_SERVICE_ROLE_KEY = secret;
-  }
+
+  // SECURITY: Never expose service role key to generated apps
+  // Multi-tenant architecture uses Row-Level Security (RLS) for data isolation
+  // Service role key bypasses RLS and would allow cross-tenant data access
+  // Generated apps should only use the anon key (NEXT_PUBLIC_SUPABASE_ANON_KEY)
 
   return bundle;
 }

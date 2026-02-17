@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
         throw new Error("User not found");
       }
 
-      const newBalance = user.appTokens + tokensAmount;
+      const newBalance = Math.round((user.appTokens + tokensAmount) * 100) / 100;
 
       await tx.user.update({
         where: { id: user.id },

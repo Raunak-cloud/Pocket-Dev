@@ -75,6 +75,7 @@ async function pollForCompletion<T>(
     }, timeoutMs);
 
     let lastProgressCount = 0;
+    let lastForwardedMessage = "";
 
     const interval = setInterval(async () => {
       try {
@@ -98,7 +99,10 @@ async function pollForCompletion<T>(
 
             // Send new progress messages to callback
             newProgress.forEach((msg: string) => {
-              onProgress?.(msg);
+              if (msg !== lastForwardedMessage) {
+                onProgress?.(msg);
+                lastForwardedMessage = msg;
+              }
             });
           }
 
@@ -127,12 +131,12 @@ export async function generateCodeWithInngest(
 ): Promise<GenerateCodeResult> {
   const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  onProgress?.("Starting code generation...");
+  onProgress?.("[0/7] Queueing generation job...");
 
   // Trigger workflow
   await triggerCodeGenerationAction(prompt, userId, projectId);
 
-  onProgress?.("AI is generating your code...");
+  onProgress?.("[0/7] Generation started. Waiting for first update...");
 
   const configuredGenerateTimeout = Number(
     process.env.NEXT_PUBLIC_INNGEST_GENERATE_TIMEOUT_MS
@@ -150,7 +154,7 @@ export async function generateCodeWithInngest(
     onProgress
   );
 
-  onProgress?.("Code generation complete!");
+  onProgress?.("[7/7] Generation complete.");
 
   // Include projectId in result for tracking
   return { ...result, projectId };

@@ -6,6 +6,11 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import Logo from "./Logo";
 import ThemeToggle from "./ThemeToggle";
 
+// Helper function to format token values to 2 decimal places
+const formatTokens = (tokens: number): string => {
+  return tokens.toFixed(2);
+};
+
 interface DashboardSidebarProps {
   activeSection: string;
   onSectionChange: (section: string) => void;
@@ -376,7 +381,7 @@ export default function DashboardSidebar({
                 <span
                   className={`text-lg font-bold tabular-nums ${appTokens > 0 ? "text-blue-400" : "text-red-400"}`}
                 >
-                  {appTokens}
+                  {formatTokens(appTokens)}
                 </span>
               </div>
             </div>

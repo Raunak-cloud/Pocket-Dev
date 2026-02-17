@@ -1,8 +1,7 @@
-import { useRef, useCallback, useEffect } from "react";
 import Logo from "../Logo";
 import GenerationProgress from "../GenerationProgress";
 import type { CompatibleUser } from "@/app/contexts/AuthContext";
-import type { ReactProject, UploadedFile } from "@/app/types";
+import type { UploadedFile } from "@/app/types";
 
 const EXAMPLES = [
   {
@@ -79,7 +78,6 @@ interface CreateContentProps {
   handleGenerate: (e: React.FormEvent) => void;
   setShowDbModal: (val: boolean) => void;
   setAuthPromptWarning: (val: string | null) => void;
-  setError: (val: string) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
 }
 
@@ -113,7 +111,6 @@ export default function CreateContent({
   handleGenerate,
   setShowDbModal,
   setAuthPromptWarning,
-  setError,
   textareaRef,
 }: CreateContentProps) {
   if (status === "loading" && !isGenerationMinimized) {
