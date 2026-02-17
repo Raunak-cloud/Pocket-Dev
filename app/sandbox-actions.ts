@@ -1,6 +1,6 @@
 ﻿'use server';
 
-import { Sandbox } from '@e2b/code-interpreter';
+import { Sandbox } from '@vercel/sandbox';
 import {
   appendSandboxStartupLog,
   completeSandboxStartupStatus,
@@ -11,6 +11,16 @@ import {
 import { ensureProviderGuardsForFileMap } from "@/lib/provider-guards";
 import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
 import { getSupabaseEnvBundle } from "@/lib/supabase/env";
+
+function getVercelAuth(): Record<string, string> {
+  const token = process.env.VERCEL_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const projectId = process.env.VERCEL_PROJECT_ID;
+  if (token && teamId && projectId) {
+    return { token, teamId, projectId };
+  }
+  return {};
+}
 
 export async function createSandboxServer(
   files: Record<string, string>,
@@ -631,17 +641,19 @@ export default function PocketAuthPreviewBridge() {
 
   try {
     const sandbox = await Sandbox.create({
-      apiKey: process.env.E2B_API_KEY!,
-      timeoutMs: 60 * 60 * 1000, // 60 min auto-cleanup
+      ...getVercelAuth(),
+      runtime: "node22",
+      timeout: 45 * 60 * 1000, // 45 min auto-cleanup
+      ports: [3000],
     });
     appendSandboxStartupLog(jobId, `Sandbox created: ${sandbox.sandboxId}`);
 
   // Upload all files at once
   const fileEntries = Object.entries(patchedFiles).map(([path, content]) => ({
-    path: `/home/user/${path}`,
-    data: content,
+    path,
+    content: Buffer.from(content),
   }));
-  await sandbox.files.write(fileEntries);
+  await sandbox.writeFiles(fileEntries);
   appendSandboxStartupLog(jobId, `Uploaded ${fileEntries.length} files`);
 
   // Install dependencies with a deterministic strategy and non-interactive flags.
@@ -650,43 +662,49 @@ export default function PocketAuthPreviewBridge() {
   appendSandboxStartupLog(jobId, "Installing dependencies...");
   try {
     const hasPackageLock = typeof patchedFiles["package-lock.json"] === "string";
-    const primaryInstallCmd = hasPackageLock
-      ? "npm ci --include=dev --no-audit --no-fund --progress=false"
-      : "npm install --include=dev --no-audit --no-fund --progress=false";
+    const primaryInstallArgs = hasPackageLock
+      ? ["ci", "--include=dev", "--no-audit", "--no-fund", "--progress=false"]
+      : ["install", "--include=dev", "--no-audit", "--no-fund", "--progress=false"];
 
-    let installResult = await sandbox.commands.run(primaryInstallCmd, {
-      cwd: '/home/user',
-      timeoutMs: 12 * 60 * 1000, // 12 minutes timeout for dependency install
-      envs: {
+    let installResult = await sandbox.runCommand({
+      cmd: "npm",
+      args: primaryInstallArgs,
+      cwd: "/vercel/sandbox",
+      env: {
         CI: "true",
         npm_config_update_notifier: "false",
       },
-      onStdout: (data: string) => appendSandboxStartupLog(jobId, data),
-      onStderr: (data: string) => appendSandboxStartupLog(jobId, `[npm] ${data}`),
+      signal: AbortSignal.timeout(12 * 60 * 1000),
     });
+
+    const installStdout = await installResult.stdout();
+    const installStderr = await installResult.stderr();
+    if (installStdout) appendSandboxStartupLog(jobId, installStdout);
+    if (installStderr) appendSandboxStartupLog(jobId, `[npm] ${installStderr}`);
 
     // If lockfile-based install fails, fallback to npm install for resilience.
     if (installResult.exitCode !== 0 && hasPackageLock) {
       console.warn("[Sandbox] npm ci failed, retrying with npm install...");
       appendSandboxStartupLog(jobId, "npm ci failed, retrying with npm install...");
-      installResult = await sandbox.commands.run(
-        "npm install --include=dev --no-audit --no-fund --progress=false",
-        {
-          cwd: "/home/user",
-          timeoutMs: 12 * 60 * 1000,
-          envs: {
-            CI: "true",
-            npm_config_update_notifier: "false",
-          },
-          onStdout: (data: string) => appendSandboxStartupLog(jobId, data),
-          onStderr: (data: string) =>
-            appendSandboxStartupLog(jobId, `[npm] ${data}`),
-        }
-      );
+      installResult = await sandbox.runCommand({
+        cmd: "npm",
+        args: ["install", "--include=dev", "--no-audit", "--no-fund", "--progress=false"],
+        cwd: "/vercel/sandbox",
+        env: {
+          CI: "true",
+          npm_config_update_notifier: "false",
+        },
+        signal: AbortSignal.timeout(12 * 60 * 1000),
+      });
+
+      const retryStdout = await installResult.stdout();
+      const retryStderr = await installResult.stderr();
+      if (retryStdout) appendSandboxStartupLog(jobId, retryStdout);
+      if (retryStderr) appendSandboxStartupLog(jobId, `[npm] ${retryStderr}`);
     }
 
     if (installResult.exitCode !== 0) {
-      const errorOutput = installResult.stderr || installResult.stdout || "Unknown install error";
+      const errorOutput = (await installResult.stderr()) || (await installResult.stdout()) || "Unknown install error";
       console.error('[Sandbox] dependency install failed:', errorOutput);
       throw new Error(`Dependency install failed with exit code ${installResult.exitCode}: ${errorOutput}`);
     }
@@ -694,13 +712,12 @@ export default function PocketAuthPreviewBridge() {
     appendSandboxStartupLog(jobId, "Dependencies installed successfully");
 
     // Verify Tailwind resolution and self-heal if missing.
-    const tailwindCheck = await sandbox.commands.run(
-      "node -e \"require.resolve('tailwindcss/package.json'); console.log('tailwindcss-ok')\"",
-      {
-        cwd: "/home/user",
-        timeoutMs: 30_000,
-      }
-    );
+    const tailwindCheck = await sandbox.runCommand({
+      cmd: "node",
+      args: ["-e", "require.resolve('tailwindcss/package.json'); console.log('tailwindcss-ok')"],
+      cwd: "/vercel/sandbox",
+      signal: AbortSignal.timeout(30_000),
+    });
 
     if (tailwindCheck.exitCode !== 0) {
       appendSandboxStartupLog(
@@ -708,23 +725,19 @@ export default function PocketAuthPreviewBridge() {
         "Tailwind not found after install. Running dependency self-heal..."
       );
 
-      const heal = await sandbox.commands.run(
-        "npm install --include=dev tailwindcss@^3 postcss autoprefixer --no-audit --no-fund --progress=false",
-        {
-          cwd: "/home/user",
-          timeoutMs: 4 * 60 * 1000,
-          envs: {
-            CI: "true",
-            npm_config_update_notifier: "false",
-          },
-          onStdout: (data: string) => appendSandboxStartupLog(jobId, data),
-          onStderr: (data: string) =>
-            appendSandboxStartupLog(jobId, `[heal] ${data}`),
-        }
-      );
+      const heal = await sandbox.runCommand({
+        cmd: "npm",
+        args: ["install", "--include=dev", "tailwindcss@^3", "postcss", "autoprefixer", "--no-audit", "--no-fund", "--progress=false"],
+        cwd: "/vercel/sandbox",
+        env: {
+          CI: "true",
+          npm_config_update_notifier: "false",
+        },
+        signal: AbortSignal.timeout(4 * 60 * 1000),
+      });
 
       if (heal.exitCode !== 0) {
-        const healError = heal.stderr || heal.stdout || "Dependency self-heal failed";
+        const healError = (await heal.stderr()) || (await heal.stdout()) || "Dependency self-heal failed";
         throw new Error(`Tailwind self-heal failed: ${healError}`);
       }
 
@@ -743,20 +756,20 @@ export default function PocketAuthPreviewBridge() {
   console.log('[Sandbox] Starting Next.js dev server...');
   setSandboxStartupPhase(jobId, "starting");
   appendSandboxStartupLog(jobId, "Starting development server...");
-  const devProcess = await sandbox.commands.run('npm run dev', {
-    cwd: '/home/user',
-    background: true,
-    envs: {
+  const devProcess = await sandbox.runCommand({
+    cmd: "npm",
+    args: ["run", "dev"],
+    cwd: "/vercel/sandbox",
+    env: {
       CI: "true",
       NEXT_TELEMETRY_DISABLED: "1",
       PORT: "3000",
       HOSTNAME: "0.0.0.0",
       ...authPreviewEnvs,
     },
-    onStdout: (data: string) => appendSandboxStartupLog(jobId, data),
-    onStderr: (data: string) => appendSandboxStartupLog(jobId, `[dev] ${data}`),
+    detached: true,
   });
-  appendSandboxStartupLog(jobId, `Dev server PID: ${devProcess.pid}`);
+  appendSandboxStartupLog(jobId, `Dev server started (cmd: ${devProcess.cmdId})`);
 
   // Track early process exit so we can surface startup/build errors quickly.
   const devState: {
@@ -768,11 +781,11 @@ export default function PocketAuthPreviewBridge() {
   };
   void devProcess
     .wait()
-    .then((result) => {
-      devState.result = result as {
-        exitCode?: number;
-        stdout?: string;
-        stderr?: string;
+    .then(async (result) => {
+      devState.result = {
+        exitCode: result.exitCode ?? undefined,
+        stdout: await result.stdout().catch(() => ""),
+        stderr: await result.stderr().catch(() => ""),
       };
     })
     .catch((err) => {
@@ -780,13 +793,13 @@ export default function PocketAuthPreviewBridge() {
     });
 
   // Get URL and wait for server to be ready
-  const url = sandbox.getHost(3000);
+  const url = sandbox.domain(3000);
 
   // Poll URL until responding (increased to 5 minutes)
   let ready = false;
   const maxAttempts = 420; // 7 minutes
 
-  console.log(`[Sandbox] Waiting for dev server at https://${url}...`);
+  console.log(`[Sandbox] Waiting for dev server at ${url}...`);
 
   for (let i = 0; i < maxAttempts; i++) {
     // If the dev process already exited, fail fast with useful logs.
@@ -814,7 +827,7 @@ export default function PocketAuthPreviewBridge() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const res = await fetch(`https://${url}`, {
+      const res = await fetch(url, {
         method: 'HEAD',
         signal: controller.signal,
       }).finally(() => clearTimeout(timeoutId));
@@ -855,26 +868,23 @@ export default function PocketAuthPreviewBridge() {
     let errorDetails = '';
     try {
       // Check if dev server is still running
-      const psResult = await sandbox.commands.run('ps aux | grep "next dev"', {
-        timeoutMs: 5000,
-      });
-      appendSandboxStartupLog(jobId, `Process check: ${psResult.stdout}`);
+      const psResult = await sandbox.runCommand("ps", ["aux"], { signal: AbortSignal.timeout(5000) });
+      const psOut = await psResult.stdout();
+      appendSandboxStartupLog(jobId, `Process check: ${psOut}`);
 
       // Try to get npm logs
-      const logsResult = await sandbox.commands.run('tail -n 50 ~/.npm/_logs/*.log 2>/dev/null || echo "No npm logs found"', {
-        timeoutMs: 5000,
-      });
-      if (logsResult.stdout && logsResult.stdout.trim() !== "No npm logs found") {
-        errorDetails += `\n\nNPM Logs:\n${logsResult.stdout}`;
-        appendSandboxStartupLog(jobId, `NPM error logs: ${logsResult.stdout}`);
+      const logsResult = await sandbox.runCommand("bash", ["-c", 'tail -n 50 ~/.npm/_logs/*.log 2>/dev/null || echo "No npm logs found"'], { signal: AbortSignal.timeout(5000) });
+      const logsOut = await logsResult.stdout();
+      if (logsOut && logsOut.trim() !== "No npm logs found") {
+        errorDetails += `\n\nNPM Logs:\n${logsOut}`;
+        appendSandboxStartupLog(jobId, `NPM error logs: ${logsOut}`);
       }
 
       // Try to check if there's a Next.js build error log
-      const nextLogsResult = await sandbox.commands.run('cat /home/user/.next/trace 2>/dev/null || echo "No Next.js trace found"', {
-        timeoutMs: 5000,
-      });
-      if (nextLogsResult.stdout && nextLogsResult.stdout.trim() !== "No Next.js trace found") {
-        errorDetails += `\n\nNext.js trace:\n${nextLogsResult.stdout.slice(0, 500)}`;
+      const nextLogsResult = await sandbox.runCommand("bash", ["-c", 'cat /vercel/sandbox/.next/trace 2>/dev/null || echo "No Next.js trace found"'], { signal: AbortSignal.timeout(5000) });
+      const nextLogsOut = await nextLogsResult.stdout();
+      if (nextLogsOut && nextLogsOut.trim() !== "No Next.js trace found") {
+        errorDetails += `\n\nNext.js trace:\n${nextLogsOut.slice(0, 500)}`;
       }
 
       console.error('[Sandbox] Debug info:', errorDetails);
@@ -888,13 +898,12 @@ export default function PocketAuthPreviewBridge() {
     throw new Error(timeoutError);
   }
 
-  const finalUrl = `https://${url}`;
   completeSandboxStartupStatus(jobId, {
     sandboxId: sandbox.sandboxId,
-    url: finalUrl,
+    url,
   });
 
-    return { sandboxId: sandbox.sandboxId, url: finalUrl };
+    return { sandboxId: sandbox.sandboxId, url };
   } catch (err) {
     failSandboxStartupStatus(
       jobId,
@@ -909,30 +918,26 @@ export async function updateSandboxFiles(
   filesToWrite: Array<{ path: string; data: string }>,
   filesToDelete: string[]
 ) {
-  const sandbox = await Sandbox.connect(sandboxId, {
-    apiKey: process.env.E2B_API_KEY!,
-  });
+  const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
   if (filesToWrite.length > 0) {
-    await sandbox.files.write(
+    await sandbox.writeFiles(
       filesToWrite.map(f => ({
-        path: `/home/user/${f.path}`,
-        data: f.data
+        path: f.path,
+        content: Buffer.from(f.data),
       }))
     );
   }
 
-  for (const path of filesToDelete) {
-    await sandbox.files.remove(`/home/user/${path}`);
+  for (const p of filesToDelete) {
+    await sandbox.runCommand("rm", ["-rf", p]);
   }
 }
 
 export async function keepAliveSandbox(sandboxId: string) {
   try {
-    const sandbox = await Sandbox.connect(sandboxId, {
-      apiKey: process.env.E2B_API_KEY!,
-    });
-    await sandbox.setTimeout(60 * 60 * 1000); // Reset to 60 min from now
+    const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
+    await sandbox.extendTimeout(45 * 60 * 1000); // Extend by 45 min
   } catch (err) {
     console.error('Error extending sandbox timeout:', err);
   }
@@ -943,13 +948,10 @@ export async function ensureSandboxHealthy(
   options?: { projectId?: string },
 ) {
   try {
-    const sandbox = await Sandbox.connect(sandboxId, {
-      apiKey: process.env.E2B_API_KEY!,
-    });
+    const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
-    await sandbox.setTimeout(60 * 60 * 1000);
-    const host = sandbox.getHost(3000);
-    const url = `https://${host}`;
+    await sandbox.extendTimeout(45 * 60 * 1000);
+    const url = sandbox.domain(3000);
 
     const isReachable = async () => {
       try {
@@ -969,15 +971,18 @@ export async function ensureSandboxHealthy(
       return { ok: true, url };
     }
 
-    await sandbox.commands.run("pkill -f \"next dev\" || true", {
-      cwd: "/home/user",
-      timeoutMs: 10_000,
+    await sandbox.runCommand({
+      cmd: "bash",
+      args: ["-c", 'pkill -f "next dev" || true'],
+      cwd: "/vercel/sandbox",
+      signal: AbortSignal.timeout(10_000),
     });
 
-    await sandbox.commands.run("npm run dev", {
-      cwd: "/home/user",
-      background: true,
-      envs: {
+    await sandbox.runCommand({
+      cmd: "npm",
+      args: ["run", "dev"],
+      cwd: "/vercel/sandbox",
+      env: {
         CI: "true",
         NEXT_TELEMETRY_DISABLED: "1",
         PORT: "3000",
@@ -991,6 +996,7 @@ export async function ensureSandboxHealthy(
             }
           : {}),
       },
+      detached: true,
     });
 
     for (let i = 0; i < 60; i++) {
@@ -1009,10 +1015,8 @@ export async function ensureSandboxHealthy(
 
 export async function closeSandbox(sandboxId: string) {
   try {
-    const sandbox = await Sandbox.connect(sandboxId, {
-      apiKey: process.env.E2B_API_KEY!,
-    });
-    await sandbox.kill();
+    const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
+    await sandbox.stop();
   } catch (err) {
     // Sandbox might already be closed or timed out
     console.error('Error closing sandbox:', err);

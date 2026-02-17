@@ -229,7 +229,6 @@ async function testEnvironmentVariables() {
     "STRIPE_SECRET_KEY",
     "RESEND_API_KEY",
     "INNGEST_EVENT_KEY",
-    "E2B_API_KEY",
   ];
 
   let allRequired = true;

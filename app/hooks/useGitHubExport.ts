@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { prepareE2BFiles } from "@/lib/e2b-utils";
+import { prepareSandboxFiles } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
 type ExportStatus = "idle" | "exporting" | "success" | "error";
@@ -90,7 +90,7 @@ export function useGitHubExport({ project, setError }: UseGitHubExportProps) {
       setGithubExportMessage("Preparing files...");
 
       // Build all project files
-      const allFiles = prepareE2BFiles(project);
+      const allFiles = prepareSandboxFiles(project);
 
       allFiles[".gitignore"] =
         `node_modules\n.next\nout\nbuild\n.DS_Store\n*.pem\nnpm-debug.log*\n.env*.local\n.vercel\n*.tsbuildinfo\nnext-env.d.ts\n`;

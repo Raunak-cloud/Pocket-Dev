@@ -29,7 +29,7 @@ export async function triggerCodeGeneration(
 }
 
 /**
- * Trigger E2B sandbox creation workflow
+ * Trigger sandbox creation workflow
  */
 export async function triggerSandboxCreation(
   files: Record<string, string>,

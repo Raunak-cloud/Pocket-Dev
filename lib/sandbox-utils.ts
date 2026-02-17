@@ -8,7 +8,7 @@ export interface ReactProject {
   dependencies: Record<string, string>;
 }
 
-export interface E2BFiles {
+export interface SandboxFiles {
   [path: string]: string;
 }
 
@@ -21,8 +21,8 @@ export function hasAuthentication(project: ReactProject): boolean {
   );
 }
 
-export function prepareE2BFiles(project: ReactProject): E2BFiles {
-  const files: E2BFiles = {};
+export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
+  const files: SandboxFiles = {};
 
   const managedConfigFiles = new Set([
     "package.json",
@@ -243,6 +243,11 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
 }`;
   }
 
+  // Ensure a loading screen exists for route transitions.
+  if (!files["app/loading.tsx"]) {
+    files["app/loading.tsx"] = `"use client";\nexport default function Loading() {\n  return (\n    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">\n      <div className="flex flex-col items-center gap-4">\n        <div className="h-10 w-10 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />\n        <p className="text-sm text-muted-foreground animate-pulse">Loading...</p>\n      </div>\n    </div>\n  );\n}\n`;
+  }
+
   const hasAuthIntegration = project.files.some(
     (f) =>
       f.content.includes("@supabase/supabase-js") ||
@@ -289,4 +294,3 @@ export function computeFileDiff(
 
   return { toWrite, toDelete };
 }
-

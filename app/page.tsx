@@ -12,7 +12,7 @@ import SettingsContent from "./components/Settings";
 import ProjectsContent from "./components/Projects";
 import { createSandboxServer } from "./sandbox-actions";
 import { cancelGenerationJob } from "./inngest-actions";
-import { prepareE2BFiles } from "@/lib/e2b-utils";
+import { prepareSandboxFiles } from "@/lib/sandbox-utils";
 import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
@@ -1848,7 +1848,7 @@ ${pdfUrlList}
       );
     }
 
-    const files = prepareE2BFiles(project);
+    const files = prepareSandboxFiles(project);
 
     try {
       const { url } = await createSandboxServer(files, undefined, {

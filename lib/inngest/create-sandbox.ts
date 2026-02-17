@@ -1,12 +1,22 @@
 /**
- * Inngest Function: E2B Sandbox Creation
+ * Inngest Function: Sandbox Creation
  *
- * Creates and configures E2B cloud sandboxes for Next.js preview
+ * Creates and configures Vercel Sandbox cloud environments for Next.js preview
  * Handles file uploads, npm install, and dev server startup
  */
 
 import { inngest } from "@/lib/inngest-client";
-import { Sandbox } from "@e2b/code-interpreter";
+import { Sandbox } from "@vercel/sandbox";
+
+function getVercelAuth(): Record<string, string> {
+  const token = process.env.VERCEL_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const projectId = process.env.VERCEL_PROJECT_ID;
+  if (token && teamId && projectId) {
+    return { token, teamId, projectId };
+  }
+  return {};
+}
 
 async function sendProgress(projectId: string, message: string) {
   try {
@@ -27,7 +37,7 @@ async function sendProgress(projectId: string, message: string) {
 export const createSandboxFunction = inngest.createFunction(
   {
     id: "create-sandbox",
-    name: "Create E2B Sandbox",
+    name: "Create Sandbox",
     retries: 2,
   },
   { event: "app/sandbox.create" },
@@ -38,8 +48,10 @@ export const createSandboxFunction = inngest.createFunction(
     await sendProgress(projectId, "🚀 Creating cloud sandbox environment...");
     const sandboxId = await step.run("create-sandbox", async () => {
       const sandbox = await Sandbox.create({
-        apiKey: process.env.E2B_API_KEY!,
-        timeoutMs: 15 * 60 * 1000, // 15 minutes
+        ...getVercelAuth(),
+        runtime: "node22",
+        timeout: 15 * 60 * 1000, // 15 minutes
+        ports: [3000],
       });
 
       console.log(`Sandbox created: ${sandbox.sandboxId}`);
@@ -49,30 +61,33 @@ export const createSandboxFunction = inngest.createFunction(
     // Step 2: Upload files
     await sendProgress(projectId, "📁 Uploading project files to sandbox...");
     await step.run("upload-files", async () => {
-      const sandbox = await Sandbox.connect(sandboxId, {
-        apiKey: process.env.E2B_API_KEY!,
-      });
+      const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
       const fileEntries = Object.entries(files).map(([path, content]) => ({
-        path: `/home/user/${path}`,
-        data: content as string,
+        path,
+        content: Buffer.from(content as string),
       }));
 
-      await sandbox.files.write(fileEntries);
+      await sandbox.writeFiles(fileEntries);
       console.log(`Uploaded ${fileEntries.length} files`);
     });
 
     // Step 3: Install dependencies
     await sendProgress(projectId, "📦 Installing dependencies (this might take 1-2 minutes)...");
     await step.run("install-dependencies", async () => {
-      const sandbox = await Sandbox.connect(sandboxId, {
-        apiKey: process.env.E2B_API_KEY!,
+      const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
+
+      const result = await sandbox.runCommand({
+        cmd: "npm",
+        args: ["install"],
+        cwd: "/vercel/sandbox",
+        signal: AbortSignal.timeout(10 * 60 * 1000),
       });
 
-      await sandbox.commands.run("npm install", {
-        cwd: "/home/user",
-        timeoutMs: 10 * 60 * 1000, // 10 minutes timeout for npm install
-      });
+      if (result.exitCode !== 0) {
+        const err = (await result.stderr()) || (await result.stdout());
+        throw new Error(`npm install failed (exit ${result.exitCode}): ${err}`);
+      }
 
       console.log("Dependencies installed");
     });
@@ -80,13 +95,13 @@ export const createSandboxFunction = inngest.createFunction(
     // Step 4: Start dev server
     await sendProgress(projectId, "⚡ Starting development server...");
     await step.run("start-dev-server", async () => {
-      const sandbox = await Sandbox.connect(sandboxId, {
-        apiKey: process.env.E2B_API_KEY!,
-      });
+      const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
-      await sandbox.commands.run("npm run dev", {
-        cwd: "/home/user",
-        background: true,
+      await sandbox.runCommand({
+        cmd: "npm",
+        args: ["run", "dev"],
+        cwd: "/vercel/sandbox",
+        detached: true,
       });
 
       console.log("Dev server started");
@@ -95,12 +110,9 @@ export const createSandboxFunction = inngest.createFunction(
     // Step 5: Wait for server to be ready
     await sendProgress(projectId, "🔄 Waiting for server to be ready...");
     const url = await step.run("wait-for-ready", async () => {
-      const sandbox = await Sandbox.connect(sandboxId, {
-        apiKey: process.env.E2B_API_KEY!,
-      });
+      const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
-      const host = sandbox.getHost(3000);
-      const url = `https://${host}`;
+      const url = sandbox.domain(3000);
 
       // Poll until server responds
       let ready = false;

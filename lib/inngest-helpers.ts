@@ -161,7 +161,7 @@ export async function generateCodeWithInngest(
 }
 
 /**
- * Trigger E2B sandbox creation workflow
+ * Trigger sandbox creation workflow
  */
 export async function createSandboxWithInngest(
   files: Record<string, string>,

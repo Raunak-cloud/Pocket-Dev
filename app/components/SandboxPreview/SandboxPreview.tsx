@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
-interface E2BPreviewProps {
+interface SandboxPreviewProps {
   project: ReactProject | null;
   previewKey: number;
   projectId?: string | null;
@@ -31,7 +31,7 @@ interface E2BPreviewProps {
   onSyncStateChange?: (isSyncing: boolean) => void;
 }
 
-export default function E2BPreview({
+export default function SandboxPreview({
   project,
   previewKey,
   projectId = null,
@@ -40,7 +40,7 @@ export default function E2BPreview({
   onTextEdited,
   onImageSelected,
   onSyncStateChange,
-}: E2BPreviewProps) {
+}: SandboxPreviewProps) {
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [startupId, setStartupId] = useState<string | null>(null);
@@ -54,19 +54,59 @@ export default function E2BPreview({
   const latestProjectRef = useRef<ReactProject | null>(project);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const recoveringRef = useRef(false);
+  // Hard lock: prevent concurrent sandbox creation calls
+  const creatingRef = useRef(false);
+  // Track current sandboxId in a ref so useCallback can access it without re-renders
+  const sandboxIdRef = useRef<string | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
   const hasAuthPreviewHint = project ? hasAuthentication(project) : false;
 
   useEffect(() => {
     latestProjectRef.current = project;
   }, [project]);
 
+  // Keep refs in sync with state for use inside useCallback
+  useEffect(() => {
+    sandboxIdRef.current = sandboxId;
+  }, [sandboxId]);
+  useEffect(() => {
+    previewUrlRef.current = previewUrl;
+  }, [previewUrl]);
+
   const startSandbox = useCallback(
     async (opts?: { previousSandboxId?: string | null }) => {
       const currentProject = latestProjectRef.current;
       if (!currentProject) return null;
 
+      // Hard lock: only one creation at a time
+      if (creatingRef.current) {
+        console.log("[SandboxPreview] Sandbox creation already in progress, skipping");
+        return null;
+      }
+      creatingRef.current = true;
+
       let phaseTimer: NodeJS.Timeout | null = null;
       try {
+        // Fix 2: Reuse — if we already have a sandbox and this isn't a forced
+        // recreation (previousSandboxId signals the old one is dead), check if
+        // the existing sandbox is still healthy before spinning up a new one.
+        const existingId = sandboxIdRef.current;
+        if (existingId && !opts?.previousSandboxId) {
+          try {
+            const health = await ensureSandboxHealthy(existingId, {
+              projectId: projectId || undefined,
+            });
+            if (health.ok && health.url) {
+              console.log("[SandboxPreview] Existing sandbox is healthy, reusing:", existingId);
+              setPreviewUrl(health.url);
+              setLoadingState("ready");
+              return { sandboxId: existingId, url: health.url };
+            }
+          } catch {
+            // Existing sandbox is gone — fall through to create new
+          }
+        }
+
         setLoadingState("creating");
         setError(null);
         setStartupLogs([]);
@@ -125,6 +165,8 @@ export default function E2BPreview({
           err instanceof Error ? err.message : "Failed to create sandbox",
         );
         return null;
+      } finally {
+        creatingRef.current = false;
       }
     },
     [projectId],
@@ -282,15 +324,20 @@ export default function E2BPreview({
             setPreviewVersion((prev) => prev + 1);
           }, 1800);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error updating sandbox files:", err);
+        // Sandbox expired — recreate it automatically.
+        if (err?.message === "SANDBOX_EXPIRED") {
+          console.log("[SandboxPreview] Sandbox expired, recreating...");
+          startSandbox({ previousSandboxId: sandboxId });
+        }
       } finally {
         onSyncStateChange?.(false);
       }
     };
 
     update();
-  }, [project, sandboxId, onSyncStateChange]);
+  }, [project, sandboxId, onSyncStateChange, startSandbox]);
 
   // Effect 3: Keep sandbox alive while user is on the preview
   useEffect(() => {
@@ -479,7 +526,7 @@ export default function E2BPreview({
             {error && error.includes("Dev server") && (
               <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-left">
                 <p className="text-xs font-semibold text-blue-300 mb-2">
-                  💡 Quick Fixes:
+                  Quick Fixes:
                 </p>
                 <ul className="text-xs text-text-secondary space-y-1 list-disc list-inside">
                   <li>
@@ -509,23 +556,20 @@ export default function E2BPreview({
         />
       )}
 
-      {/* Auth hint: iframe preview stays available; open tab is optional for OAuth flows */}
+      {/* Auth hint: small bottom-right toast so it doesn't block the preview */}
       {previewUrl && loadingState === "ready" && hasAuthPreviewHint && (
-        <div className="pointer-events-none absolute top-50 right-3 z-20 max-w-sm">
-          <div className="pointer-events-auto rounded-xl border border-border-primary bg-bg-secondary/95 backdrop-blur-md p-3 shadow-xl">
-            <h3 className="text-sm font-semibold text-text-primary mb-1">
-              Auth Testing Tip
-            </h3>
-            <p className="text-xs text-text-tertiary mb-2 leading-relaxed">
-              Preview works here. For Google/OAuth sign-in flows, use a new tab.
-            </p>
+        <div className="absolute bottom-3 right-3 z-20 max-w-xs pointer-events-auto">
+          <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-bg-secondary/95 backdrop-blur-md px-3 py-2 shadow-lg text-xs">
+            <span className="text-text-tertiary truncate">
+              OAuth flows?
+            </span>
             <button
               onClick={() =>
                 window.open(previewUrl, "_blank", "noopener,noreferrer")
               }
-              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition"
+              className="shrink-0 rounded-md bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-500 transition"
             >
-              Open In New Tab
+              Open in New Tab
             </button>
           </div>
         </div>

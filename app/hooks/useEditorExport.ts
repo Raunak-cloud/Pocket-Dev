@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { prepareE2BFiles } from "@/lib/e2b-utils";
+import { prepareSandboxFiles } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 import JSZip from "jszip";
 
@@ -58,7 +58,7 @@ export function useEditorExport({ project, setError }: UseEditorExportProps) {
       setShowExportDropdown(false);
 
       try {
-        const files = prepareE2BFiles(project);
+        const files = prepareSandboxFiles(project);
         files[".gitignore"] = GITIGNORE_CONTENT;
 
         // Try File System Access API to write files directly to a folder
