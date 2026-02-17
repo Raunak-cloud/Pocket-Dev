@@ -1251,12 +1251,14 @@ STRICT IMPLEMENTATION RULES:
 - Mobile menu panel must fill full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0), not just a small top section.
 
 IMAGE CONTEXT REMINDER:
-- Remember the user's main request: "${userPrompt}"
-- ALL images must visually represent THIS specific use case
-- If the prompt mentions "cooking", "food", "restaurant" → show relevant food, chefs, kitchen scenes
-- If the prompt mentions "fitness", "workout", "gym" → show relevant exercise, trainers, equipment
-- If the prompt mentions "real estate", "property" → show relevant homes, agents, architecture
-- AVOID generic business/corporate stock photography unless specifically requested
+- ALL images must visually represent the SPECIFIC use case described in the user's prompt
+- Analyze the user's request for keywords about industry/domain (e.g., "cooking", "fitness", "real estate")
+- If the prompt mentions "cooking", "food", "restaurant", "chef" → show relevant food, chefs, kitchen scenes, NOT generic business
+- If the prompt mentions "fitness", "workout", "gym", "trainer" → show relevant exercise, trainers, equipment, NOT generic health
+- If the prompt mentions "real estate", "property", "homes" → show relevant homes, agents, architecture, NOT generic business
+- If the prompt mentions "technology", "software", "app" → show relevant tech, coding, digital interfaces, NOT generic office
+- AVOID generic business/corporate stock photography unless the user specifically requests a corporate/business site
+- Every image should pass this test: "Does this image clearly relate to what the user asked me to build?"
 
 DESIGN DIRECTION:
 - Clear visual direction with intentional typography scale and spacing rhythm.
