@@ -1231,19 +1231,32 @@ STRICT IMPLEMENTATION RULES:
 - Do not output lockfiles or unsafe file paths.
 - All returned code must parse without TypeScript/JavaScript syntax errors.
 - CRITICAL IMAGE REQUIREMENTS:
-  * Each image must have DETAILED, SPECIFIC, PHOTOGRAPHIC alt text (minimum 10 words)
-  * Describe exact visual composition: subject, angle, lighting, setting, mood, specific details
-  * Never use generic terms like "image", "photo", "hero image", "professional picture"
-  * For food: specify dish name, plating style, ingredients, serving context, photography angle
-  * For people: specify role, setting, expression, clothing, lighting style, composition
-  * For products: specify product type, angle, background, lighting, material, key features
-  * Each image must be visually distinct with unique composition and subject matter
+  * Each image alt text must DIRECTLY RELATE to the user's prompt and website purpose
+  * Alt text must be DETAILED, SPECIFIC, PHOTOGRAPHIC (minimum 15 words, maximum 40 words)
+  * Include exact visual composition: subject, angle, lighting, setting, mood, specific details
+  * CONTEXT MATTERS: If building a "food delivery platform", show food, chefs, customers, delivery - NOT generic business photos
+  * CONTEXT MATTERS: If building a "fitness app", show workouts, trainers, equipment - NOT generic health images
+  * Never use generic terms like "image", "photo", "hero image", "professional picture", "stock photo"
+  * For food: specify exact dish name, plating style, visible ingredients, serving presentation, photography style
+  * For people: specify exact role/profession, realistic setting, natural expression, appropriate clothing, lighting
+  * For products: specify exact product type, product angle, background style, lighting setup, material details
+  * Each image must have UNIQUE visual intent - review all images to ensure no repetition or similarity
+  * BAD EXAMPLE: "Professional business meeting photo" → TOO GENERIC
+  * GOOD EXAMPLE: "Overhead shot of hands arranging fresh pasta ingredients on marble counter in professional kitchen, natural daylight from left"
 - Navbar must be fully functional with mobile menu toggle and accessibility attributes.
 - Ensure mobile-first responsiveness and no horizontal scrolling.
 - Keep header/navbar pinned at the top while scrolling, with proper z-index layering above content.
 - Mobile menu must appear from the top layer without creating an extra visible scrollbar inside nav/header/menu wrappers.
 - Mobile menu panel must never render behind page content; use top-anchored overlay positioning with clear background contrast.
 - Mobile menu panel must fill full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0), not just a small top section.
+
+IMAGE CONTEXT REMINDER:
+- Remember the user's main request: "${userPrompt}"
+- ALL images must visually represent THIS specific use case
+- If the prompt mentions "cooking", "food", "restaurant" → show relevant food, chefs, kitchen scenes
+- If the prompt mentions "fitness", "workout", "gym" → show relevant exercise, trainers, equipment
+- If the prompt mentions "real estate", "property" → show relevant homes, agents, architecture
+- AVOID generic business/corporate stock photography unless specifically requested
 
 DESIGN DIRECTION:
 - Clear visual direction with intentional typography scale and spacing rhythm.

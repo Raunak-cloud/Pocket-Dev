@@ -22,7 +22,10 @@
       "Bash(npx prisma generate:*)",
       "Bash(npm run build:*)",
       "Bash(npm test:*)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Bash(ls:*)",
+      "Bash(npx prisma migrate deploy:*)",
+      "Bash(npx dotenv:*)"
     ]
   }
 }

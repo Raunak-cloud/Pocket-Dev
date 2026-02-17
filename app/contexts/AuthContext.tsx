@@ -56,12 +56,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const data = await response.json();
         setUserData(data);
 
-        // Check if user was just created (based on createdAt being very recent)
+        // Check if user was just created AND hasn't dismissed the welcome modal
         const createdAt = new Date(data.createdAt);
         const now = new Date();
         const diffInMinutes = (now.getTime() - createdAt.getTime()) / 1000 / 60;
 
-        if (diffInMinutes < 1) {
+        // Only show welcome modal if account is less than 1 minute old AND user hasn't dismissed it
+        const hasDismissed = typeof window !== 'undefined'
+          ? localStorage.getItem(`welcome_dismissed_${authUser.id}`) === 'true'
+          : false;
+
+        if (diffInMinutes < 1 && !hasDismissed) {
           setIsNewUser(true);
         }
       } else {
@@ -108,7 +113,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearNewUser = useCallback(() => {
     setIsNewUser(false);
-  }, []);
+    // Persist that user has dismissed the welcome modal
+    if (typeof window !== 'undefined' && authUser) {
+      localStorage.setItem(`welcome_dismissed_${authUser.id}`, 'true');
+    }
+  }, [authUser]);
 
   const refreshUserData = useCallback(async () => {
     if (!authUser || !isSignedIn) return;
