@@ -28,7 +28,7 @@ const REPLICATE_MODEL = (
 // Using 1024x1024 for better quality while staying fast
 const DEFAULT_IMAGE_WIDTH = 1024;
 const DEFAULT_IMAGE_HEIGHT = 1024;
-const DEFAULT_PROMPT = "High-quality professional photograph, sharp focus, studio lighting";
+const DEFAULT_PROMPT = "High-quality, professional, well-lit, clean composition";
 const RATE_LIMIT_RETRY_DELAY_MS = 10_000; // 10 seconds as requested
 const MAX_RATE_LIMIT_RETRIES = 5; // Increased retries to ensure images are generated
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|svg|avif)(?:$|\?)/i;
@@ -48,19 +48,19 @@ const GENERIC_IMAGE_PROMPT_RE =
 
 function getThemeDefaultPrompt(theme: SiteTheme): string {
   if (theme === "food") {
-    return "Professional food photography, beautifully plated dish, restaurant quality presentation, appetizing composition, natural window light, shallow depth of field, macro detail, culinary magazine style";
+    return "Beautifully plated dish, restaurant quality, appetizing, well-presented, natural lighting, culinary magazine style";
   }
   if (theme === "fashion") {
-    return "High-end fashion photography, editorial style, professional model, studio lighting setup, clean minimal background, sharp focus on product, commercial quality, Vogue magazine aesthetic";
+    return "High-end fashion, editorial style, stylish, clean minimal background, commercial quality, elegant";
   }
   if (theme === "interior") {
-    return "Architectural interior photography, professionally designed space, natural daylight flooding in, wide-angle perspective, real estate magazine quality, balanced exposure, clean modern aesthetic";
+    return "Professionally designed interior space, natural daylight, modern aesthetic, spacious, clean design";
   }
   if (theme === "automotive") {
-    return "Professional automotive photography, luxury car showcase, dramatic lighting with reflections, showroom quality, three-quarter front angle, shallow depth of field, commercial grade";
+    return "Luxury car, sleek design, dramatic lighting, showroom quality, modern, dynamic angle";
   }
   if (theme === "people") {
-    return "Professional portrait photography, natural expressions, studio quality lighting setup, shallow depth of field, authentic skin tones, editorial magazine style, clean background";
+    return "Natural portrait, authentic expression, well-lit, editorial style, clean background";
   }
   return DEFAULT_PROMPT;
 }
@@ -133,41 +133,61 @@ function resolvePrompt(
   altText?: string,
   contextHint?: string,
   siteTheme: SiteTheme = "generic",
+  isUserProvided: boolean = false,
 ): string {
   const trimmedAlt = trimPrompt(altText || "");
   const trimmedContext = trimPrompt(contextHint || "");
   const themeDefault = getThemeDefaultPrompt(siteTheme);
 
-  // If we have good specific alt text, use it
-  if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt)) {
+  // If this is a user-provided prompt, use it directly without length requirements
+  if (isUserProvided && trimmedAlt) {
+    console.log(`[resolvePrompt] Using user-provided prompt directly: "${trimmedAlt}"`);
+    return trimmedAlt;
+  }
+
+  // PRIORITY 1: Use alt text if it's specific (minimum 10 words for quality)
+  // Even if it contains some generic words, if it's detailed enough, use it
+  if (trimmedAlt && trimmedAlt.split(/\s+/).length >= 10) {
+    console.log(`[resolvePrompt] Using detailed alt text (${trimmedAlt.split(/\s+/).length} words): "${trimmedAlt}"`);
+    return trimmedAlt;
+  }
+
+  // PRIORITY 2: If alt text is specific but shorter, still use it if not generic
+  if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt) && trimmedAlt.length >= 15) {
     console.log(`[resolvePrompt] Using specific alt text: "${trimmedAlt}"`);
     return trimmedAlt;
   }
 
-  // If we have strong contextual information (like article headings), prioritize it
+  // PRIORITY 3: Use contextual information from headings
   if (trimmedContext && trimmedContext.length >= 10) {
-    // For blog articles and tech content, use the context directly
-    if (siteTheme === "generic") {
-      console.log(`[resolvePrompt] Using context for generic theme: "${trimmedContext}"`);
-      return trimmedContext;
+    console.log(`[resolvePrompt] Using context hint: "${trimmedContext}"`);
+
+    // For food-related context, add photography style
+    if (/\b(food|dish|meal|cook|chef|restaurant|kitchen|recipe)\b/i.test(trimmedContext)) {
+      return `${trimmedContext}, food photography, appetizing presentation`;
     }
 
-    // Only apply theme-specific styling for actual theme-specific sites
-    if (siteTheme === "food" && /\b(food|dish|meal|cook|chef|restaurant)\b/i.test(trimmedContext)) {
-      return `${trimmedContext}, food photography`;
+    // For learning/education context, add relevant photography style
+    if (/\b(course|learning|student|teacher|education|study|lesson|mentor)\b/i.test(trimmedContext)) {
+      return `${trimmedContext}, educational setting, students engaged in learning, modern classroom or study environment`;
     }
 
-    // For other themes, combine context with theme if context seems relevant
-    console.log(`[resolvePrompt] Using context: "${trimmedContext}"`);
     return trimmedContext;
   }
 
-  // Fallback to alt text even if generic
-  if (trimmedAlt) return trimmedAlt;
+  // PRIORITY 4: Fallback to alt text even if generic, better than nothing
+  if (trimmedAlt && trimmedAlt.length >= 5) {
+    console.log(`[resolvePrompt] Using fallback alt text: "${trimmedAlt}"`);
+    return trimmedAlt;
+  }
 
-  // Use theme defaults only for actual placeholders
-  if (PLACEHOLDER_RE.test(source)) return themeDefault;
+  // PRIORITY 5: Use theme defaults only for actual placeholders
+  if (PLACEHOLDER_RE.test(source)) {
+    console.log(`[resolvePrompt] Using theme default for placeholder: "${themeDefault}"`);
+    return themeDefault;
+  }
 
+  // LAST RESORT: Try to extract from URL
   return promptFromUrl(source);
 }
 
@@ -311,6 +331,54 @@ function getCompositionGuidance(siteTheme: SiteTheme): string {
   return "balanced composition, subject prominence, professional framing, clear focal point";
 }
 
+function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
+  const text = base.toLowerCase();
+
+  // Tech/digital content - NO photography terms
+  if (/\b(AI|artificial intelligence|machine learning|algorithm|data|code|programming|software|technology|digital|cyber|network)\b/i.test(text)) {
+    return "modern, clean design, minimalist, contemporary";
+  }
+
+  if (/\b(design|UI|UX|interface|workspace|productivity|creativity|minimal)\b/i.test(text)) {
+    return "clean, modern, minimalist, professional environment";
+  }
+
+  // Product photography - focus on the product
+  if (/\b(shoe|sneaker|watch|bag|handbag|purse|bottle|perfume|cosmetic|jewelry|ring|necklace)\b/.test(text)) {
+    return "clean background, well-lit, centered, catalog style";
+  }
+
+  // Food - focus on the dish
+  if (/\b(food|dish|meal|cuisine|dessert|plate|bowl)\b/.test(text)) {
+    return "appetizing, well-presented, natural lighting, overhead view";
+  }
+
+  // People - focus on the person
+  if (/\b(person|people|man|woman|model|portrait)\b/.test(text)) {
+    return "natural, authentic expression, soft lighting";
+  }
+
+  // Theme-based hints (only if content matches)
+  if (siteTheme === "food" && /\b(food|dish|meal|cook|chef|restaurant|cuisine)\b/i.test(text)) {
+    return "appetizing, beautifully plated, warm tones";
+  }
+  if (siteTheme === "fashion" && /\b(fashion|clothing|apparel|style|outfit)\b/i.test(text)) {
+    return "stylish, elegant, modern fashion";
+  }
+  if (siteTheme === "interior" && /\b(interior|room|space|furniture|home)\b/i.test(text)) {
+    return "spacious, well-lit, modern design";
+  }
+  if (siteTheme === "automotive" && /\b(car|vehicle|automotive|motorcycle)\b/i.test(text)) {
+    return "sleek, modern, dynamic angle";
+  }
+  if (siteTheme === "people" && /\b(person|people|portrait|team|staff)\b/i.test(text)) {
+    return "natural, candid moment, authentic";
+  }
+
+  // Default - keep it simple
+  return "clean, modern, professional";
+}
+
 function buildGenerationPrompt(
   source: string,
   prompt: string,
@@ -318,33 +386,37 @@ function buildGenerationPrompt(
   siteTheme: SiteTheme = "generic",
   isUserProvided: boolean = false,
 ): string {
+  // If this is a user-provided prompt (from image regeneration), use it with minimal additions
+  if (isUserProvided) {
+    const userPrompt = trimPrompt(prompt);
+    if (!userPrompt) {
+      // Fallback if somehow empty
+      return `${getThemeDefaultPrompt(siteTheme)}, high quality, photorealistic`;
+    }
+    // Only add minimal quality terms
+    const minimalPrompt = `${userPrompt}, high quality, photorealistic`;
+    console.log(`[buildGenerationPrompt] User-provided prompt: "${userPrompt}" -> "${minimalPrompt}"`);
+    return minimalPrompt.slice(0, 400);
+  }
+
+  // For auto-generated placeholders, sanitize to remove UI/web terms
   const base = sanitizeVisualSubjectPrompt(
     trimPrompt(prompt) || getThemeDefaultPrompt(siteTheme),
   );
 
-  // If this is a user-provided prompt (from image regeneration), keep it simple and clean
-  // Don't add photography jargon that confuses the AI
-  if (isUserProvided) {
-    // Only add minimal professional quality terms
-    const minimalPrompt = `${base}, professional photography, high quality, sharp focus, photorealistic`;
-    console.log(`[buildGenerationPrompt] User-provided prompt: "${base}" -> "${minimalPrompt}"`);
-    return minimalPrompt.slice(0, 400);
-  }
-
-  // For auto-generated placeholders, use the full photography guidance
+  // SIMPLIFIED: Just use the base prompt with minimal style guidance
+  // No camera jargon that confuses the AI
   const placeholderNumber = extractPlaceholderNumber(source);
   const variationSeed = placeholderNumber ?? index;
-  const styleDirection = getStyleDirection(base, siteTheme);
-  const photographyTechnique = getPhotographyTechnique(siteTheme);
-  const compositionGuidance = getCompositionGuidance(siteTheme);
 
-  // Build a clean, professional prompt structure for z-image-turbo
+  // Get simple style hints without photography jargon
+  const simpleStyle = getSimpleStyleHint(base, siteTheme);
+
+  // Build a clean, simple prompt structure
   const promptParts = [
     base,
-    styleDirection,
-    photographyTechnique,
-    compositionGuidance,
-    `professional photography, sharp focus, realistic, photorealistic`,
+    simpleStyle,
+    `high quality, photorealistic`,
     `variation ${variationSeed}`,
   ];
 
@@ -380,21 +452,25 @@ function inferStyleHint(base: string, siteTheme: SiteTheme = "generic"): string 
 function sanitizeVisualSubjectPrompt(input: string): string {
   let text = input;
 
-  // Remove UI/website-related terms that would confuse the image generator
-  const uiTerms = [
-    /\b(?:website|webpage|landing page|homepage|web page)\b/gi,
-    /\b(?:dashboard|admin panel|control panel)\b/gi,
-    /\b(?:UI|UX|interface|user interface)\b/gi,
+  // ONLY remove very specific UI/tech terms that would create literal screenshots
+  // Keep domain-specific terms like "learning", "platform", "course", "student", etc.
+  const literalUITerms = [
     /\b(?:screenshot|screen capture|screen grab)\b/gi,
     /\b(?:mockup|wireframe|prototype)\b/gi,
-    /\b(?:app screen|mobile app|web app)\b/gi,
-    /\b(?:hero section|banner|header image)\b/gi,
-    /\b(?:template|layout|design system)\b/gi,
+    /\b(?:hero section|banner section|header section)\b/gi,
   ];
 
-  for (const re of uiTerms) {
+  for (const re of literalUITerms) {
     text = text.replace(re, "");
   }
+
+  // Replace UI-specific words with more photographic equivalents
+  text = text.replace(/\bwebsite\b/gi, "professional setting");
+  text = text.replace(/\bwebpage\b/gi, "professional setting");
+  text = text.replace(/\b(?:dashboard|admin panel|control panel)\b/gi, "workspace");
+  text = text.replace(/\b(?:UI|UX|interface|user interface)\b/gi, "");
+  text = text.replace(/\b(?:app screen)\b/gi, "");
+  text = text.replace(/\b(?:landing page|homepage)\b/gi, "");
 
   // Clean up extra whitespace
   text = text.replace(/\s+/g, " ").trim();
@@ -544,6 +620,7 @@ function shouldReplaceSource(source: string, supabaseHost: string | null): boole
 function collectImageSources(
   files: GeneratedFile[],
   siteTheme: SiteTheme,
+  isUserProvided: boolean = false,
 ): Map<string, string> {
   const refs = new Map<string, string>();
   const supabaseHost = getSupabaseHost();
@@ -563,7 +640,7 @@ function collectImageSources(
           const contextHint = extractContextHint(content, tagMatch.index);
           refs.set(
             source,
-            resolvePrompt(source, altMatch?.[1], contextHint, siteTheme),
+            resolvePrompt(source, altMatch?.[1], contextHint, siteTheme, isUserProvided),
           );
         }
       }
@@ -582,6 +659,7 @@ function collectImageSources(
             undefined,
             extractContextHint(content, cssMatch.index),
             siteTheme,
+            isUserProvided,
           ),
         );
       }
@@ -600,6 +678,7 @@ function collectImageSources(
             undefined,
             extractContextHint(content, placeholderMatch.index),
             siteTheme,
+            isUserProvided,
           ),
         );
       }
@@ -618,6 +697,7 @@ function collectImageSources(
             undefined,
             extractContextHint(content, urlMatch.index),
             siteTheme,
+            isUserProvided,
           ),
         );
       }
@@ -913,8 +993,9 @@ export async function persistGeneratedImagesToStorage(
   }
 
   const siteTheme = detectSiteTheme(nextFiles);
-  console.log(`[persistGeneratedImagesToStorage] Detected site theme: "${siteTheme}"`);
-  const refs = collectImageSources(nextFiles, siteTheme);
+  const isUserProvided = options?.isUserProvidedPrompt ?? false;
+  console.log(`[persistGeneratedImagesToStorage] Detected site theme: "${siteTheme}", isUserProvided: ${isUserProvided}`);
+  const refs = collectImageSources(nextFiles, siteTheme, isUserProvided);
   if (refs.size === 0) return nextFiles;
   console.log(`[persistGeneratedImagesToStorage] Found ${refs.size} images to generate`);
 
@@ -948,7 +1029,6 @@ export async function persistGeneratedImagesToStorage(
 
   // First pass: Try to generate all images
   let index = 0;
-  const isUserProvided = options?.isUserProvidedPrompt ?? false;
   for (const [source, prompt] of refs) {
     index++;
     try {

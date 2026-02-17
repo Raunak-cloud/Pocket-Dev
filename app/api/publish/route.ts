@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execSync } from "child_process";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -9,7 +9,90 @@ interface ProjectFile {
   content: string;
 }
 
+type ProjectFileWithNormalizedPath = ProjectFile & { normalizedPath: string };
+
 // ── Helpers ─────────────────────────────────────────────────────
+
+function normalizeProjectPath(path: string): string {
+  let normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (normalized.startsWith("src/")) normalized = normalized.slice(4);
+  return normalized;
+}
+
+function withNormalizedPaths(files: ProjectFile[]): ProjectFileWithNormalizedPath[] {
+  return files.map((file) => ({ ...file, normalizedPath: normalizeProjectPath(file.path) }));
+}
+
+function fileDir(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? "" : path.slice(0, idx);
+}
+
+function resolveRelativeImport(baseFilePath: string, importPath: string): string {
+  if (!importPath.startsWith(".")) return importPath;
+
+  const baseParts = fileDir(baseFilePath).split("/").filter(Boolean);
+  const importParts = importPath.split("/");
+  for (const part of importParts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      baseParts.pop();
+      continue;
+    }
+    baseParts.push(part);
+  }
+  return baseParts.join("/");
+}
+
+function findFileByCandidates(
+  files: ProjectFileWithNormalizedPath[],
+  candidates: string[],
+): ProjectFileWithNormalizedPath | undefined {
+  const candidateSet = new Set(candidates.map(normalizeProjectPath));
+  return files.find((f) => candidateSet.has(f.normalizedPath));
+}
+
+function findFirstFileByRegex(
+  files: ProjectFileWithNormalizedPath[],
+  re: RegExp,
+): ProjectFileWithNormalizedPath | undefined {
+  return files.find((f) => re.test(f.normalizedPath));
+}
+
+function getImportMap(pageCode: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re = /import\s+(\w+)\s+from\s+["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(pageCode)) !== null) {
+    map.set(m[1], m[2]);
+  }
+  return map;
+}
+
+function findComponentFile(
+  files: ProjectFileWithNormalizedPath[],
+  pageFile: ProjectFileWithNormalizedPath,
+  componentName: string,
+): ProjectFileWithNormalizedPath | undefined {
+  const importMap = getImportMap(pageFile.content);
+  const importPath = importMap.get(componentName);
+  const exts = ["tsx", "jsx", "ts", "js"];
+
+  if (importPath?.startsWith(".")) {
+    const resolved = resolveRelativeImport(pageFile.normalizedPath, importPath);
+    const candidates = [
+      ...exts.map((ext) => `${resolved}.${ext}`),
+      ...exts.map((ext) => `${resolved}/index.${ext}`),
+    ];
+    const byImport = findFileByCandidates(files, candidates);
+    if (byImport) return byImport;
+  }
+
+  return findFileByCandidates(files, [
+    ...exts.map((ext) => `app/components/${componentName}.${ext}`),
+    ...exts.map((ext) => `app/components/${componentName.toLowerCase()}.${ext}`),
+  ]);
+}
 
 function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -17,7 +100,7 @@ function escHtml(s: string): string {
 
 /** Strip imports, exports, "use client", and basic TypeScript syntax from a component file */
 function cleanComponent(code: string): string {
-  let cleaned = code
+  const cleaned = code
     // Remove "use client" directive
     .replace(/^["']use client["'];?\s*\n?/m, "")
     // Remove all import statements
@@ -58,16 +141,6 @@ function extractComponentNames(pageCode: string): string[] {
   return names;
 }
 
-/** Detect which CDN deps are needed by scanning code */
-function detectDeps(allCode: string) {
-  return {
-    lucide: /lucide-react/.test(allCode),
-    inView: /useInView/.test(allCode),
-    countUp: /CountUp/.test(allCode),
-    motion: /framer-motion/.test(allCode),
-  };
-}
-
 /** Strip @tailwind directives (CDN handles them) but keep custom CSS */
 function cleanCss(css: string): string {
   return css.replace(/@tailwind\s+\w+;?\s*/g, "").trim();
@@ -83,10 +156,9 @@ function buildPageHtml(opts: {
   sectionCodes: { name: string; code: string }[];
   pageCode: string | null; // null for home (sections rendered directly), string for sub-pages
   sectionNames: string[];
-  deps: ReturnType<typeof detectDeps>;
   isDark: boolean;
 }): string {
-  const { title, globalsCss, navbarCode, footerCode, sectionCodes, pageCode, sectionNames, deps, isDark } = opts;
+  const { title, globalsCss, navbarCode, footerCode, sectionCodes, pageCode, sectionNames, isDark } = opts;
 
   // Combine all component code
   const allCode = [
@@ -642,10 +714,11 @@ function deployCfPages(
         },
       );
       console.log(`[cf] Project created: ${projectName}`);
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e as { stderr?: string };
       // Ignore if already exists
-      if (!e?.stderr?.includes("already exists")) {
-        console.warn(`[cf] Project create warning:`, e?.stderr || e);
+      if (!err?.stderr?.includes("already exists")) {
+        console.warn(`[cf] Project create warning:`, err?.stderr || e);
       }
     }
 
@@ -707,27 +780,39 @@ export async function POST(request: NextRequest) {
 
     // ── Extract key files ──────────────────────────────────────
 
-    const globalsCss = files.find((f) => f.path === "app/globals.css")?.content || "";
-    const navbarFile = files.find((f) => f.path === "app/components/Navbar.tsx");
-    const footerFile = files.find((f) => f.path === "app/components/Footer.tsx");
-    const homePageFile = files.find((f) => f.path === "app/page.tsx");
+    const normalizedFiles = withNormalizedPaths(files);
+    const globalsCss =
+      findFileByCandidates(normalizedFiles, ["app/globals.css"])?.content || "";
+    const homePageFile =
+      findFileByCandidates(normalizedFiles, [
+        "app/page.tsx",
+        "app/page.jsx",
+        "app/page.ts",
+        "app/page.js",
+      ]) || findFirstFileByRegex(normalizedFiles, /^app\/page\.(tsx|jsx|ts|js)$/);
+    const navbarFile = homePageFile
+      ? findComponentFile(normalizedFiles, homePageFile, "Navbar")
+      : undefined;
+    const footerFile = homePageFile
+      ? findComponentFile(normalizedFiles, homePageFile, "Footer")
+      : undefined;
 
-    if (!navbarFile || !footerFile || !homePageFile) {
-      throw new Error("Missing essential files (Navbar, Footer, or homepage)");
+    if (!homePageFile) {
+      throw new Error("Missing essential files: homepage");
     }
 
-    const navbarCode = cleanComponent(navbarFile.content);
-    const footerCode = cleanComponent(footerFile.content);
+    const navbarCode = navbarFile
+      ? cleanComponent(navbarFile.content)
+      : "function Navbar() { return null; }";
+    const footerCode = footerFile
+      ? cleanComponent(footerFile.content)
+      : "function Footer() { return null; }";
 
     // Detect theme (dark/light) from globals or navbar
-    const isDark = navbarFile.content.includes("bg-gray-950") || navbarFile.content.includes("bg-gray-900");
-
-    // Detect npm dependencies from all component code
-    const allComponentContent = files
-      .filter((f) => f.path.endsWith(".tsx") && f.path.startsWith("app/"))
-      .map((f) => f.content)
-      .join("\n");
-    const deps = detectDeps(allComponentContent);
+    const isDark =
+      navbarFile?.content.includes("bg-gray-950") ||
+      navbarFile?.content.includes("bg-gray-900") ||
+      false;
 
     // ── Build home page ────────────────────────────────────────
 
@@ -735,7 +820,7 @@ export async function POST(request: NextRequest) {
     const homeSectionCodes = homeComponentNames
       .filter((n) => n !== "Navbar" && n !== "Footer")
       .map((name) => {
-        const file = files.find((f) => f.path === `app/components/${name}.tsx`);
+        const file = findComponentFile(normalizedFiles, homePageFile, name);
         return file ? { name, code: cleanComponent(file.content) } : null;
       })
       .filter(Boolean) as { name: string; code: string }[];
@@ -748,7 +833,6 @@ export async function POST(request: NextRequest) {
       sectionCodes: homeSectionCodes,
       pageCode: null,
       sectionNames: homeSectionCodes.map((c) => c.name),
-      deps,
       isDark,
     });
 
@@ -757,12 +841,14 @@ export async function POST(request: NextRequest) {
 
     // ── Build sub-page HTMLs ───────────────────────────────────
 
-    const subPages = files.filter(
-      (f) => f.path.match(/^app\/.+\/page\.tsx$/) && f.path !== "app/page.tsx",
+    const subPages = normalizedFiles.filter(
+      (f) =>
+        f.normalizedPath.match(/^app\/.+\/page\.(tsx|jsx|ts|js)$/) &&
+        f.normalizedPath !== homePageFile.normalizedPath,
     );
 
     for (const sp of subPages) {
-      const pathMatch = sp.path.match(/^app\/(.+)\/page\.tsx$/);
+      const pathMatch = sp.normalizedPath.match(/^app\/(.+)\/page\.(tsx|jsx|ts|js)$/);
       if (!pathMatch) continue;
       const pagePath = pathMatch[1]; // e.g. "about", "menu"
 
@@ -770,7 +856,7 @@ export async function POST(request: NextRequest) {
       const pageSectionCodes = pageComponentNames
         .filter((n) => n !== "Navbar" && n !== "Footer")
         .map((name) => {
-          const file = files.find((f) => f.path === `app/components/${name}.tsx`);
+          const file = findComponentFile(normalizedFiles, sp, name);
           return file ? { name, code: cleanComponent(file.content) } : null;
         })
         .filter(Boolean) as { name: string; code: string }[];
@@ -785,7 +871,6 @@ export async function POST(request: NextRequest) {
         sectionCodes: pageSectionCodes,
         pageCode,
         sectionNames: pageSectionCodes.map((c) => c.name),
-        deps,
         isDark,
       });
 

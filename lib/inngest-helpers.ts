@@ -27,6 +27,9 @@ interface GenerateCodeResult {
   };
   model: string;
   projectId?: string; // Include projectId for cancellation tracking
+  sandboxId?: string;
+  sandboxUrl?: string;
+  sandboxCreatedAt?: number;
 }
 
 interface CreateSandboxResult {

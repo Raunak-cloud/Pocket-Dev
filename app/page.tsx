@@ -10,7 +10,7 @@ import LoadingScreen from "./components/LoadingScreen";
 import BackgroundEffects from "./components/BackgroundEffects";
 import SettingsContent from "./components/Settings";
 import ProjectsContent from "./components/Projects";
-import { createSandboxServer } from "./sandbox-actions";
+import { createSandboxServer, checkSandboxHealth } from "./sandbox-actions";
 import { cancelGenerationJob } from "./inngest-actions";
 import { prepareSandboxFiles } from "@/lib/sandbox-utils";
 import { useAuth } from "./contexts/AuthContext";
@@ -1680,6 +1680,44 @@ ${pdfUrlList}
       result = { ...result, files: persistedFiles };
       setProject(result);
 
+      // Trigger background sandbox creation and poll for info
+      if (result.projectId && user) {
+        setProgressMessages((prev) => [
+          ...prev,
+          "[7/7] Creating preview sandbox in background...",
+        ]);
+
+        try {
+          // Import the trigger function
+          const { triggerSandboxCreation } = await import("./inngest-actions");
+
+          // Prepare files for sandbox
+          const sandboxFiles = prepareSandboxFiles(result);
+
+          // Trigger sandbox creation in background
+          await triggerSandboxCreation(sandboxFiles, user.uid, result.projectId);
+
+          // Poll for sandbox info (with reasonable timeout)
+          const sandboxInfo = await pollForSandboxInfo(result.projectId, 90000); // 90s timeout
+
+          if (sandboxInfo) {
+            result = {
+              ...result,
+              sandboxId: sandboxInfo.sandboxId,
+              sandboxUrl: sandboxInfo.url,
+              sandboxCreatedAt: Date.now(),
+            };
+            setProject(result);
+            console.log("[Sandbox] ✨ Preview will be instant - sandbox already created!");
+          } else {
+            console.log("[Sandbox] Sandbox creation in progress, will be ready soon");
+          }
+        } catch (sandboxError) {
+          console.error("[Sandbox] Error creating background sandbox:", sandboxError);
+          // Don't fail the whole generation if sandbox creation fails
+        }
+      }
+
       // Save project to Firestore
       if (user) {
         try {
@@ -1838,6 +1876,41 @@ ${pdfUrlList}
     setIsRecording(false);
   };
 
+  /**
+   * Poll Inngest status API for sandbox info after code generation
+   * Returns sandbox data if available within timeout
+   */
+  const pollForSandboxInfo = async (
+    projectId: string,
+    timeoutMs: number = 90000 // 90 seconds max
+  ): Promise<{ sandboxId: string; url: string } | null> => {
+    const startTime = Date.now();
+    const pollInterval = 2000; // Poll every 2 seconds
+
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        const res = await fetch(
+          `/api/inngest/status?projectId=${encodeURIComponent(projectId)}&event=sandbox.ready`
+        );
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.sandboxId && data.url) {
+            console.log(`[Sandbox] Found pre-created sandbox: ${data.sandboxId}`);
+            return { sandboxId: data.sandboxId, url: data.url };
+          }
+        }
+      } catch (err) {
+        console.error("[Sandbox] Error polling for sandbox info:", err);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+
+    console.log("[Sandbox] Timeout waiting for sandbox info");
+    return null;
+  };
+
   const openInE2BSandbox = async () => {
     if (!project) return;
 
@@ -1848,12 +1921,59 @@ ${pdfUrlList}
       );
     }
 
-    const files = prepareSandboxFiles(project);
-
     try {
-      const { url } = await createSandboxServer(files, undefined, {
+      // Check if we have an existing sandbox (within 25 minute TTL)
+      const SANDBOX_TTL = 25 * 60 * 1000; // 25 minutes (less than 30 min timeout)
+      const now = Date.now();
+      const sandboxAge = project.sandboxCreatedAt ? now - project.sandboxCreatedAt : Infinity;
+
+      if (project.sandboxId && project.sandboxUrl && sandboxAge < SANDBOX_TTL) {
+        console.log(`[Preview] Checking existing sandbox ${project.sandboxId}...`);
+
+        // Quick health check
+        const healthyUrl = await checkSandboxHealth(project.sandboxId);
+
+        if (healthyUrl) {
+          console.log(`[Preview] Reusing healthy sandbox - instant preview! ✨`);
+          if (previewWindow && !previewWindow.closed) {
+            previewWindow.location.href = healthyUrl;
+          } else if (!previewWindow) {
+            window.location.href = healthyUrl;
+          } else {
+            window.open(healthyUrl, "_blank");
+          }
+          return;
+        } else {
+          console.log(`[Preview] Existing sandbox is not healthy, creating new one...`);
+        }
+      } else if (project.sandboxId) {
+        console.log(`[Preview] Sandbox expired (age: ${Math.round(sandboxAge / 1000)}s), creating new one...`);
+      }
+
+      // No healthy sandbox, create a new one
+      const files = prepareSandboxFiles(project);
+      const { url, sandboxId } = await createSandboxServer(files, undefined, {
         projectId: currentProjectId || undefined,
       });
+
+      // Store the new sandbox info in the project
+      const updatedProject = {
+        ...project,
+        sandboxId,
+        sandboxUrl: url,
+        sandboxCreatedAt: Date.now(),
+      };
+      setProject(updatedProject);
+
+      // Save to Firestore if this is a saved project
+      if (currentProjectId && user) {
+        try {
+          await updateProjectInFirestore(currentProjectId, updatedProject);
+        } catch (err) {
+          console.error("Failed to save sandbox info:", err);
+        }
+      }
+
       if (previewWindow && !previewWindow.closed) {
         previewWindow.location.href = url;
       } else if (!previewWindow) {

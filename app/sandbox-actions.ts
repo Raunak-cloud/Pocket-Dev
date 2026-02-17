@@ -935,12 +935,9 @@ export async function updateSandboxFiles(
 }
 
 export async function keepAliveSandbox(sandboxId: string) {
-  try {
-    const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
-    await sandbox.extendTimeout(45 * 60 * 1000); // Extend by 45 min
-  } catch (err) {
-    console.error('Error extending sandbox timeout:', err);
-  }
+  // No longer extending timeout - let sandbox use its initial timeout
+  // Health checks will handle recreation if sandbox expires
+  return;
 }
 
 export async function ensureSandboxHealthy(
@@ -950,7 +947,6 @@ export async function ensureSandboxHealthy(
   try {
     const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
 
-    await sandbox.extendTimeout(45 * 60 * 1000);
     const url = sandbox.domain(3000);
 
     const isReachable = async () => {
@@ -1020,6 +1016,41 @@ export async function closeSandbox(sandboxId: string) {
   } catch (err) {
     // Sandbox might already be closed or timed out
     console.error('Error closing sandbox:', err);
+  }
+}
+
+/**
+ * Check if a sandbox is still alive and healthy
+ * Returns the sandbox URL if healthy, null otherwise
+ */
+export async function checkSandboxHealth(sandboxId: string): Promise<string | null> {
+  try {
+    const sandbox = await Sandbox.get({ sandboxId, ...getVercelAuth() });
+    const url = sandbox.domain(3000);
+
+    // Quick health check
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const res = await fetch(url, {
+        method: "HEAD",
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.status > 0) {
+        console.log(`[Sandbox] Sandbox ${sandboxId} is healthy at ${url}`);
+        return url;
+      }
+    } catch {
+      clearTimeout(timeoutId);
+    }
+
+    return null;
+  } catch (err) {
+    console.error(`[Sandbox] Sandbox ${sandboxId} is not available:`, err);
+    return null;
   }
 }
 

@@ -50,7 +50,7 @@ export const createSandboxFunction = inngest.createFunction(
       const sandbox = await Sandbox.create({
         ...getVercelAuth(),
         runtime: "node22",
-        timeout: 15 * 60 * 1000, // 15 minutes
+        timeout: 30 * 60 * 1000, // 30 minutes
         ports: [3000],
       });
 
