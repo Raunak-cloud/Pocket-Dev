@@ -508,28 +508,6 @@ export default function E2BPreview({
           title="Next.js Preview"
         />
       )}
-
-      {/* Auth hint: iframe preview stays available; open tab is optional for OAuth flows */}
-      {previewUrl && loadingState === "ready" && hasAuthPreviewHint && (
-        <div className="pointer-events-none absolute top-50 right-3 z-20 max-w-sm">
-          <div className="pointer-events-auto rounded-xl border border-border-primary bg-bg-secondary/95 backdrop-blur-md p-3 shadow-xl">
-            <h3 className="text-sm font-semibold text-text-primary mb-1">
-              Auth Testing Tip
-            </h3>
-            <p className="text-xs text-text-tertiary mb-2 leading-relaxed">
-              Preview works here. For Google/OAuth sign-in flows, use a new tab.
-            </p>
-            <button
-              onClick={() =>
-                window.open(previewUrl, "_blank", "noopener,noreferrer")
-              }
-              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition"
-            >
-              Open In New Tab
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

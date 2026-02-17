@@ -102,7 +102,8 @@ export default function DeploymentPreview({
               No Live Preview Yet
             </h3>
             <p className="text-sm text-text-tertiary mb-4">
-              Deploy this project to Vercel to render production-accurate preview.
+              Deploy this project to Vercel to render production-accurate
+              preview.
             </p>
             {onPublish && (
               <button
@@ -144,27 +145,6 @@ export default function DeploymentPreview({
             <span className="text-sm text-text-secondary">
               Deploying latest preview to Vercel...
             </span>
-          </div>
-        </div>
-      )}
-
-      {previewUrl && iframeLoaded && hasAuthPreviewHint && (
-        <div className="pointer-events-none absolute top-3 right-3 z-20 max-w-sm">
-          <div className="pointer-events-auto rounded-xl border border-border-primary bg-bg-secondary/95 backdrop-blur-md p-3 shadow-xl">
-            <h3 className="text-sm font-semibold text-text-primary mb-1">
-              Auth Testing Tip
-            </h3>
-            <p className="text-xs text-text-tertiary mb-2 leading-relaxed">
-              For OAuth redirects, open preview in a new tab.
-            </p>
-            <button
-              onClick={() =>
-                window.open(previewUrl, "_blank", "noopener,noreferrer")
-              }
-              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition"
-            >
-              Open In New Tab
-            </button>
           </div>
         </div>
       )}
