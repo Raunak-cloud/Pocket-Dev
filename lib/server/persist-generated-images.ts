@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import Replicate from "replicate";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SiteTheme } from "@/app/types";
 
 interface GeneratedFile {
   path: string;
@@ -11,9 +12,9 @@ interface PersistImageOptions {
   previousFiles?: GeneratedFile[];
   preserveExistingImages?: boolean;
   isUserProvidedPrompt?: boolean;
+  originalPrompt?: string;
+  detectedTheme?: SiteTheme;
 }
-
-type SiteTheme = "food" | "fashion" | "interior" | "automotive" | "people" | "generic";
 
 type UrlOutput = {
   url: () => string | URL;
@@ -992,9 +993,12 @@ export async function persistGeneratedImagesToStorage(
     nextFiles = lockExistingImageSourcesOnEdit(nextFiles, options.previousFiles);
   }
 
-  const siteTheme = detectSiteTheme(nextFiles);
+  // Prioritize AI-detected theme from prompt, fall back to code analysis
+  const siteTheme = (options?.detectedTheme as SiteTheme) || detectSiteTheme(nextFiles);
   const isUserProvided = options?.isUserProvidedPrompt ?? false;
-  console.log(`[persistGeneratedImagesToStorage] Detected site theme: "${siteTheme}", isUserProvided: ${isUserProvided}`);
+  const promptContext = options?.originalPrompt || "";
+
+  console.log(`[Image Generation] Theme: "${siteTheme}" (${options?.detectedTheme ? 'from prompt' : 'from code'}), isUserProvided: ${isUserProvided}`);
   const refs = collectImageSources(nextFiles, siteTheme, isUserProvided);
   if (refs.size === 0) return nextFiles;
   console.log(`[persistGeneratedImagesToStorage] Found ${refs.size} images to generate`);

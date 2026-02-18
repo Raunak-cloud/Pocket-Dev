@@ -71,12 +71,16 @@ PLATFORM CONTRACT (strict):
 - For people: describe profession, setting, expression, clothing, lighting, and context
 - For products: describe the product type, angle, background, lighting, and key features visible
 - For spaces: describe the room type, style, lighting, furniture, and architectural details
-- Required core files: app/layout.tsx, app/page.tsx, app/globals.css.
+- Required core files: app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css.
 - If app/globals.css has @layer base/components/utilities, include matching:
   @tailwind base; @tailwind components; @tailwind utilities;
 - Do not use @apply in generated CSS. Use explicit utility classes directly in markup.
 - If a hook guard says "must be used within XProvider", ensure XProvider wraps {children} in app/layout.tsx.
 - AUTHENTICATION IMPLEMENTATION:
+  * CRITICAL: NEVER generate login, sign up, sign in, get started, or authentication-related buttons/links/CTAs UNLESS the user explicitly requests authentication features
+  * NEVER add "Login", "Sign In", "Sign Up", "Get Started", "Create Account", "Register", or similar CTAs by default
+  * Authentication CTAs should ONLY appear when the user's request explicitly mentions: "login", "user accounts", "sign in", "authentication", "user management", "dashboard", "user profiles", or similar auth-related functionality
+  * If the user does NOT mention authentication, build a fully functional public website WITHOUT any auth CTAs
   * Only implement auth if the user explicitly requests it (login, user accounts, dashboards, etc.)
   * Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
   * CRITICAL: Use ONLY anon key (NEXT_PUBLIC_SUPABASE_ANON_KEY), never service role key
@@ -115,12 +119,73 @@ OUTPUT RULES:
 - Prefer stable, maintainable code over novelty.
 - Ensure every file parses without TypeScript/JavaScript syntax errors.`;
 
+type SiteTheme = "food" | "fashion" | "interior" | "automotive" | "people" | "generic";
+
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY not found");
   }
   return new GoogleGenerativeAI(apiKey);
+}
+
+function isValidSiteTheme(value: string): value is SiteTheme {
+  return ["food", "fashion", "interior", "automotive", "people", "generic"].includes(value);
+}
+
+async function detectThemeWithGemini(userPrompt: string): Promise<SiteTheme> {
+  const systemPrompt = `You are a website theme classifier. Analyze the user's website request and determine its PRIMARY visual theme.
+
+THEMES:
+- food: Restaurants, cafes, recipes, culinary, food delivery, catering
+- fashion: Clothing, apparel, boutiques, jewelry, fashion brands
+- interior: Furniture, home decor, architecture, interior design
+- automotive: Cars, dealerships, auto services, vehicle sales
+- people: Fitness, health, wellness, professional services, personal trainers, consultants
+- generic: Tech, blogs, SaaS, e-commerce, business sites, anything else
+
+Return ONLY one word (the theme name). No explanation.`;
+
+  const gemini = getGeminiClient();
+  const model = gemini.getGenerativeModel({
+    model: MODEL,
+    generationConfig: {
+      maxOutputTokens: 10,
+      temperature: 0.1,
+    },
+  });
+
+  const result = await model.generateContent({
+    contents: [{
+      role: "user",
+      parts: [{ text: `${systemPrompt}\n\nUser request: "${userPrompt}"\n\nTheme:` }]
+    }],
+  });
+
+  const text = result.response.text().trim().toLowerCase();
+
+  // Validate response is a valid theme
+  if (isValidSiteTheme(text)) {
+    return text;
+  }
+
+  throw new Error(`Invalid theme returned: ${text}`);
+}
+
+async function extractThemeFromPrompt(prompt: string): Promise<SiteTheme> {
+  try {
+    // Use AI detection with Gemini
+    const aiTheme = await detectThemeWithGemini(prompt);
+    if (aiTheme && isValidSiteTheme(aiTheme)) {
+      console.log(`[Theme] AI detected: ${aiTheme}`);
+      return aiTheme;
+    }
+  } catch (error) {
+    console.warn('[Theme] AI detection failed, will use code analysis fallback:', error);
+  }
+
+  // Will fall back to code analysis later in the pipeline
+  return "generic";
 }
 
 async function generateWithGemini(systemPrompt: string, userPrompt: string) {
@@ -287,7 +352,7 @@ function normalizeParsedProjectOrThrow(parsed: ParsedAIResponse): {
 }
 
 function validateProjectStructureOrThrow(files: GeneratedFile[]) {
-  const required = new Set(["app/layout.tsx", "app/page.tsx", "app/globals.css"]);
+  const required = new Set(["app/layout.tsx", "app/page.tsx", "app/loading.tsx", "app/globals.css"]);
   const existing = new Set(files.map((f) => f.path));
   const missing = Array.from(required).filter((path) => !existing.has(path));
 
@@ -782,6 +847,46 @@ html, body {
     });
   }
 
+  if (!fileMap.has("app/loading.tsx")) {
+    files.push({
+      path: "app/loading.tsx",
+      content: `export default function Loading() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      {/* Background effects */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-violet-500/5 rounded-full blur-3xl" />
+      </div>
+
+      {/* Loading spinner */}
+      <div className="text-center relative z-10">
+        <div className="relative w-16 h-16 mx-auto mb-4">
+          {/* Outer ring */}
+          <div className="absolute inset-0 border-4 border-blue-500/10 rounded-full"></div>
+          {/* Spinning gradient ring */}
+          <div className="absolute inset-0 border-4 border-transparent border-t-blue-500 border-r-violet-500 rounded-full animate-spin"></div>
+          {/* Middle ring */}
+          <div
+            className="absolute inset-2 border-4 border-transparent border-b-blue-400 border-l-violet-400 rounded-full animate-spin"
+            style={{
+              animationDirection: "reverse",
+              animationDuration: "1.5s",
+            }}
+          ></div>
+          {/* Inner dot */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse"></div>
+          </div>
+        </div>
+        <p className="text-sm text-foreground/60">Loading...</p>
+      </div>
+    </div>
+  );
+}`,
+    });
+  }
+
   // Ensure tenant helper exists for multi-tenant apps with auth
   if (!fileMap.has("lib/supabase/tenant.ts")) {
     files.push({
@@ -1217,11 +1322,14 @@ ${prompt}
 STRICT IMPLEMENTATION RULES:
 - Keep output compatible with Next.js App Router + TypeScript.
 - Use Tailwind utility classes for styling.
-- Return a complete, runnable project with app/layout.tsx, app/page.tsx, and app/globals.css.
+- Return a complete, runnable project with app/layout.tsx, app/page.tsx, app/loading.tsx, and app/globals.css.
 - In app/globals.css, if any @layer base/components/utilities is present, include matching @tailwind directives.
 - Do not use @apply in generated CSS; always use explicit utility classes directly in markup.
 - If code contains a guard like "must be used within XProvider", ensure app/layout.tsx wraps {children} with XProvider.
 - AUTHENTICATION RULES:
+  * CRITICAL: NEVER generate "Login", "Sign In", "Sign Up", "Get Started", "Register", or similar authentication CTAs UNLESS the user explicitly requests authentication
+  * Do NOT add authentication buttons, forms, or CTAs by default - only add them when the user specifically mentions: "login", "authentication", "user accounts", "sign in", "user management", "dashboard", "user profiles"
+  * If the user does NOT mention authentication, create a fully functional public website WITHOUT any auth-related UI elements
   * Only add auth if the user's request implies user accounts (e.g., "dashboard", "user profile", "login")
   * If auth is needed, use Supabase Auth (@supabase/supabase-js v2 + @supabase/ssr)
   * Create proper client/server separation with cookie-based sessions
@@ -1266,6 +1374,11 @@ DESIGN DIRECTION:
 - High contrast and readable typography across desktop and mobile.
 - Cohesive section flow: hero, value props, social proof, CTA, and footer.
 - Reusable components, not one giant page file.`;
+    });
+
+    // Step 1.5: Extract theme from prompt
+    const detectedTheme = await step.run("extract-theme-from-prompt", async () => {
+      return await extractThemeFromPrompt(prompt);
     });
 
     // Check if cancelled after building prompt
@@ -1553,6 +1666,8 @@ DESIGN DIRECTION:
             dependencies,
             lintReport,
             model: "gemini",
+            originalPrompt: prompt,
+            detectedTheme: detectedTheme,
           },
         }),
       });
@@ -1577,6 +1692,8 @@ DESIGN DIRECTION:
       dependencies,
       lintReport,
       model: "gemini",
+      originalPrompt: prompt,
+      detectedTheme: detectedTheme,
     };
   },
 );

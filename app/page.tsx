@@ -107,7 +107,8 @@ function ReactGeneratorContent() {
     alt: string;
     occurrence: number;
   } | null>(null);
-  const [isReplacingSelectedImage, setIsReplacingSelectedImage] = useState(false);
+  const [isReplacingSelectedImage, setIsReplacingSelectedImage] =
+    useState(false);
   const [imageRegenerationPrompt, setImageRegenerationPrompt] = useState("");
   const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
     [],
@@ -180,9 +181,11 @@ function ReactGeneratorContent() {
   const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(
     null,
   );
+  const [blockedPromptWords, setBlockedPromptWords] = useState<string[]>([]);
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
-  const [editClarificationQuestion, setEditClarificationQuestion] = useState("");
+  const [editClarificationQuestion, setEditClarificationQuestion] =
+    useState("");
   const [editClarificationSuggestion, setEditClarificationSuggestion] =
     useState("");
   const [editClarificationAnswer, setEditClarificationAnswer] = useState("");
@@ -254,18 +257,68 @@ function ReactGeneratorContent() {
     exportToCursor,
   } = editorExportHook;
 
-  async function detectIntegrationIntent(
-    text: string,
-  ): Promise<{ hasAuthIntent: boolean; hasDatabaseIntent: boolean }> {
-    const lower = text.toLowerCase();
-    const localAuthIntent =
-      /\bauth\b|\bauthentication\b|\blog[\s-]?in\b|\bsign[\s-]?in\b|\bsign[\s-]?up\b|\bregister\b|\bpassword\b|\boauth\b|\bsso\b|\bsession\b/.test(
-        lower,
-      );
-    const localDatabaseIntent =
-      /\bdatabase\b|\bdb\b|\bsql\b|\bnosql\b|\bpostgres\b|\bmysql\b|\bmongodb\b|\bredis\b|\bsupabase\b|\bprisma\b|\bschema\b|\btable\b|\bquery\b|\bcrud\b|\bpersist\b|\bdata model\b/.test(
-        lower,
-      );
+  const AUTH_INTENT_PATTERNS = [
+    /\bauth\b/i,
+    /\bauthentication\b/i,
+    /\blog[\s-]?in\b/i,
+    /\bsign[\s-]?in\b/i,
+    /\bsign[\s-]?up\b/i,
+    /\bregister\b/i,
+    /\bpassword\b/i,
+    /\boauth\b/i,
+    /\bsso\b/i,
+    /\bsession\b/i,
+  ];
+
+  const DATABASE_INTENT_PATTERNS = [
+    /\bdatabase\b/i,
+    /\bdb\b/i,
+    /\bsql\b/i,
+    /\bnosql\b/i,
+    /\bpostgres\b/i,
+    /\bmysql\b/i,
+    /\bmongodb\b/i,
+    /\bredis\b/i,
+    /\bsupabase\b/i,
+    /\bprisma\b/i,
+    /\bschema\b/i,
+    /\btable\b/i,
+    /\bquery\b/i,
+    /\bcrud\b/i,
+    /\bpersist\b/i,
+    /\bdata model\b/i,
+  ];
+
+  const findMatchedKeywords = (text: string, patterns: RegExp[]): string[] => {
+    const unique = new Map<string, string>();
+    for (const pattern of patterns) {
+      const flags = pattern.flags.includes("i") ? "gi" : "g";
+      const re = new RegExp(pattern.source, flags);
+      for (const match of text.matchAll(re)) {
+        const keyword = (match[0] || "").trim();
+        if (!keyword) continue;
+        const key = keyword.toLowerCase();
+        if (!unique.has(key)) unique.set(key, keyword);
+      }
+    }
+    return Array.from(unique.values()).slice(0, 8);
+  };
+
+  async function detectIntegrationIntent(text: string): Promise<{
+    hasAuthIntent: boolean;
+    hasDatabaseIntent: boolean;
+    matchedAuthKeywords: string[];
+    matchedDatabaseKeywords: string[];
+  }> {
+    const localAuthIntent = AUTH_INTENT_PATTERNS.some((re) => re.test(text));
+    const localDatabaseIntent = DATABASE_INTENT_PATTERNS.some((re) =>
+      re.test(text),
+    );
+    const matchedAuthKeywords = findMatchedKeywords(text, AUTH_INTENT_PATTERNS);
+    const matchedDatabaseKeywords = findMatchedKeywords(
+      text,
+      DATABASE_INTENT_PATTERNS,
+    );
 
     try {
       const res = await fetch("/api/check-integration-intent", {
@@ -277,6 +330,8 @@ function ReactGeneratorContent() {
         return {
           hasAuthIntent: localAuthIntent,
           hasDatabaseIntent: localDatabaseIntent,
+          matchedAuthKeywords,
+          matchedDatabaseKeywords,
         };
       }
       const data = await res.json();
@@ -284,25 +339,31 @@ function ReactGeneratorContent() {
         hasAuthIntent: data.hasAuthIntent === true || localAuthIntent,
         hasDatabaseIntent:
           data.hasDatabaseIntent === true || localDatabaseIntent,
+        matchedAuthKeywords,
+        matchedDatabaseKeywords,
       };
     } catch {
       return {
         hasAuthIntent: localAuthIntent,
         hasDatabaseIntent: localDatabaseIntent,
+        matchedAuthKeywords,
+        matchedDatabaseKeywords,
       };
     }
   }
 
   function showIntegrationBlockedFeedback(args: {
-    hasAuthIntent: boolean;
-    hasDatabaseIntent: boolean;
+    hasBlockedAuth: boolean;
+    hasBlockedDatabase: boolean;
+    blockedKeywords: string[];
     source: "generation" | "edit";
   }) {
-    const { hasAuthIntent, hasDatabaseIntent, source } = args;
+    const { hasBlockedAuth, hasBlockedDatabase, blockedKeywords, source } =
+      args;
     const blocked =
-      hasAuthIntent && hasDatabaseIntent
+      hasBlockedAuth && hasBlockedDatabase
         ? "authentication and database"
-        : hasAuthIntent
+        : hasBlockedAuth
           ? "authentication (login features)"
           : "database";
     const message =
@@ -310,13 +371,14 @@ function ReactGeneratorContent() {
         ? `This request is paused.\n${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using the buttons.\nUse Add Auth and Database below the prompt.`
         : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using buttons. Use Add Auth and Database in the edit panel.`;
 
+    setBlockedPromptWords(blockedKeywords.slice(0, 8));
     setAuthPromptWarning(message);
     setError(message);
 
-    if (hasAuthIntent) {
+    if (hasBlockedAuth) {
       setShowAuthModal(true);
     }
-    if (hasDatabaseIntent) {
+    if (hasBlockedDatabase) {
       setShowDbModal(true);
     }
   }
@@ -1152,19 +1214,33 @@ function ReactGeneratorContent() {
     // Block auth/database intent in text prompts; force integration buttons.
     if (editPrompt.trim()) {
       setCheckingAuthIntent(true);
-      const { hasAuthIntent, hasDatabaseIntent } =
-        await detectIntegrationIntent(editPrompt);
+      const {
+        hasAuthIntent,
+        hasDatabaseIntent,
+        matchedAuthKeywords,
+        matchedDatabaseKeywords,
+      } = await detectIntegrationIntent(editPrompt);
       setCheckingAuthIntent(false);
 
-      if (hasAuthIntent || hasDatabaseIntent) {
+      const hasSelectedAuth = editAppAuth.length > 0;
+      const hasSelectedDatabase = currentAppDatabase.length > 0;
+      const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
+      const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
+      if (hasBlockedAuth || hasBlockedDatabase) {
+        const blockedKeywords = [
+          ...(hasBlockedAuth ? matchedAuthKeywords : []),
+          ...(hasBlockedDatabase ? matchedDatabaseKeywords : []),
+        ];
         showIntegrationBlockedFeedback({
-          hasAuthIntent,
-          hasDatabaseIntent,
+          hasBlockedAuth,
+          hasBlockedDatabase,
+          blockedKeywords,
           source: "edit",
         });
         return;
       }
     }
+    setBlockedPromptWords([]);
     setAuthPromptWarning(null);
 
     // Ask for clarification iteratively until request is precise enough.
@@ -1180,6 +1256,7 @@ function ReactGeneratorContent() {
           setAuthPromptWarning(
             `Please answer this before I edit:\n${editClarificationQuestion}${suggestionLine}`,
           );
+          setBlockedPromptWords([]);
           return;
         }
 
@@ -1191,7 +1268,10 @@ function ReactGeneratorContent() {
         if (!alreadyIncluded) {
           candidateHistory = [
             ...candidateHistory,
-            { question: editClarificationQuestion, answer: clarificationAnswer },
+            {
+              question: editClarificationQuestion,
+              answer: clarificationAnswer,
+            },
           ];
         }
       }
@@ -1216,6 +1296,7 @@ function ReactGeneratorContent() {
         setAuthPromptWarning(
           `Before I start editing, I need one detail:\n${clarity.question}${suggestionLine}`,
         );
+        setBlockedPromptWords([]);
         return;
       }
 
@@ -1225,6 +1306,7 @@ function ReactGeneratorContent() {
       setEditClarificationQuestion("");
       setEditClarificationSuggestion("");
       setEditClarificationAnswer("");
+      setBlockedPromptWords([]);
       setAuthPromptWarning(null);
     }
 
@@ -1511,6 +1593,8 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       const persistedFiles = await persistGeneratedImages(result.files, {
         previousFiles: project.files,
         preserveExistingImages: !allowImageChanges,
+        originalPrompt: project.originalPrompt || result.originalPrompt,
+        detectedTheme: project.detectedTheme || result.detectedTheme,
       });
       const mergedProject = { ...result, files: persistedFiles };
 
@@ -1676,7 +1760,10 @@ ${pdfUrlList}
         ...prev,
         "[6/7] Persisting generated images...",
       ]);
-      const persistedFiles = await persistGeneratedImages(result.files);
+      const persistedFiles = await persistGeneratedImages(result.files, {
+        originalPrompt: result.originalPrompt,
+        detectedTheme: result.detectedTheme,
+      });
       result = { ...result, files: persistedFiles };
       setProject(result);
 
@@ -1695,7 +1782,11 @@ ${pdfUrlList}
           const sandboxFiles = prepareSandboxFiles(result);
 
           // Trigger sandbox creation in background
-          await triggerSandboxCreation(sandboxFiles, user.uid, result.projectId);
+          await triggerSandboxCreation(
+            sandboxFiles,
+            user.uid,
+            result.projectId,
+          );
 
           // Poll for sandbox info (with reasonable timeout)
           const sandboxInfo = await pollForSandboxInfo(result.projectId, 90000); // 90s timeout
@@ -1708,12 +1799,19 @@ ${pdfUrlList}
               sandboxCreatedAt: Date.now(),
             };
             setProject(result);
-            console.log("[Sandbox] ✨ Preview will be instant - sandbox already created!");
+            console.log(
+              "[Sandbox] ✨ Preview will be instant - sandbox already created!",
+            );
           } else {
-            console.log("[Sandbox] Sandbox creation in progress, will be ready soon");
+            console.log(
+              "[Sandbox] Sandbox creation in progress, will be ready soon",
+            );
           }
         } catch (sandboxError) {
-          console.error("[Sandbox] Error creating background sandbox:", sandboxError);
+          console.error(
+            "[Sandbox] Error creating background sandbox:",
+            sandboxError,
+          );
           // Don't fail the whole generation if sandbox creation fails
         }
       }
@@ -1771,19 +1869,33 @@ ${pdfUrlList}
     // Block auth/database intent in text prompts; force integration buttons.
     if (prompt.trim()) {
       setCheckingAuthIntent(true);
-      const { hasAuthIntent, hasDatabaseIntent } =
-        await detectIntegrationIntent(prompt);
+      const {
+        hasAuthIntent,
+        hasDatabaseIntent,
+        matchedAuthKeywords,
+        matchedDatabaseKeywords,
+      } = await detectIntegrationIntent(prompt);
       setCheckingAuthIntent(false);
 
-      if (hasAuthIntent || hasDatabaseIntent) {
+      const hasSelectedAuth = currentAppAuth.length > 0;
+      const hasSelectedDatabase = currentAppDatabase.length > 0;
+      const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
+      const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
+      if (hasBlockedAuth || hasBlockedDatabase) {
+        const blockedKeywords = [
+          ...(hasBlockedAuth ? matchedAuthKeywords : []),
+          ...(hasBlockedDatabase ? matchedDatabaseKeywords : []),
+        ];
         showIntegrationBlockedFeedback({
-          hasAuthIntent,
-          hasDatabaseIntent,
+          hasBlockedAuth,
+          hasBlockedDatabase,
+          blockedKeywords,
           source: "generation",
         });
         return;
       }
     }
+    setBlockedPromptWords([]);
     setAuthPromptWarning(null);
 
     // Check if user is logged in
@@ -1882,7 +1994,7 @@ ${pdfUrlList}
    */
   const pollForSandboxInfo = async (
     projectId: string,
-    timeoutMs: number = 90000 // 90 seconds max
+    timeoutMs: number = 90000, // 90 seconds max
   ): Promise<{ sandboxId: string; url: string } | null> => {
     const startTime = Date.now();
     const pollInterval = 2000; // Poll every 2 seconds
@@ -1890,13 +2002,15 @@ ${pdfUrlList}
     while (Date.now() - startTime < timeoutMs) {
       try {
         const res = await fetch(
-          `/api/inngest/status?projectId=${encodeURIComponent(projectId)}&event=sandbox.ready`
+          `/api/inngest/status?projectId=${encodeURIComponent(projectId)}&event=sandbox.ready`,
         );
 
         if (res.ok) {
           const data = await res.json();
           if (data.sandboxId && data.url) {
-            console.log(`[Sandbox] Found pre-created sandbox: ${data.sandboxId}`);
+            console.log(
+              `[Sandbox] Found pre-created sandbox: ${data.sandboxId}`,
+            );
             return { sandboxId: data.sandboxId, url: data.url };
           }
         }
@@ -1925,16 +2039,22 @@ ${pdfUrlList}
       // Check if we have an existing sandbox (within 25 minute TTL)
       const SANDBOX_TTL = 25 * 60 * 1000; // 25 minutes (less than 30 min timeout)
       const now = Date.now();
-      const sandboxAge = project.sandboxCreatedAt ? now - project.sandboxCreatedAt : Infinity;
+      const sandboxAge = project.sandboxCreatedAt
+        ? now - project.sandboxCreatedAt
+        : Infinity;
 
       if (project.sandboxId && project.sandboxUrl && sandboxAge < SANDBOX_TTL) {
-        console.log(`[Preview] Checking existing sandbox ${project.sandboxId}...`);
+        console.log(
+          `[Preview] Checking existing sandbox ${project.sandboxId}...`,
+        );
 
         // Quick health check
         const healthyUrl = await checkSandboxHealth(project.sandboxId);
 
         if (healthyUrl) {
-          console.log(`[Preview] Reusing healthy sandbox - instant preview! ✨`);
+          console.log(
+            `[Preview] Reusing healthy sandbox - instant preview! ✨`,
+          );
           if (previewWindow && !previewWindow.closed) {
             previewWindow.location.href = healthyUrl;
           } else if (!previewWindow) {
@@ -1944,10 +2064,14 @@ ${pdfUrlList}
           }
           return;
         } else {
-          console.log(`[Preview] Existing sandbox is not healthy, creating new one...`);
+          console.log(
+            `[Preview] Existing sandbox is not healthy, creating new one...`,
+          );
         }
       } else if (project.sandboxId) {
-        console.log(`[Preview] Sandbox expired (age: ${Math.round(sandboxAge / 1000)}s), creating new one...`);
+        console.log(
+          `[Preview] Sandbox expired (age: ${Math.round(sandboxAge / 1000)}s), creating new one...`,
+        );
       }
 
       // No healthy sandbox, create a new one
@@ -2157,7 +2281,9 @@ ${pdfUrlList}
       }
 
       // Show success feedback
-      setTokenToast("Image replaced successfully! The preview will update momentarily.");
+      setTokenToast(
+        "Image replaced successfully! The preview will update momentarily.",
+      );
       setTimeout(() => setTokenToast(""), 4000);
 
       // Exit image select mode after successful replacement
@@ -2188,7 +2314,7 @@ ${pdfUrlList}
     }
 
     // Check token balance (0.10 tokens for image regeneration)
-    const IMAGE_REGEN_COST = 0.10;
+    const IMAGE_REGEN_COST = 0.1;
     const appTokenBalance = userData?.appTokens || 0;
     if (appTokenBalance < IMAGE_REGEN_COST) {
       const deficit = IMAGE_REGEN_COST - appTokenBalance;
@@ -2255,7 +2381,9 @@ ${pdfUrlList}
       }
 
       // Show success feedback
-      setTokenToast(`Image regenerated successfully! (${formatTokens(IMAGE_REGEN_COST)} tokens used)`);
+      setTokenToast(
+        `Image regenerated successfully! (${formatTokens(IMAGE_REGEN_COST)} tokens used)`,
+      );
       setTimeout(() => setTokenToast(""), 4000);
 
       // Exit image select mode and clear prompt after successful regeneration
@@ -2265,7 +2393,9 @@ ${pdfUrlList}
     } catch (err) {
       console.error("Failed to regenerate selected image:", err);
       setError(
-        err instanceof Error ? err.message : "Failed to regenerate selected image",
+        err instanceof Error
+          ? err.message
+          : "Failed to regenerate selected image",
       );
     } finally {
       setIsReplacingSelectedImage(false);
@@ -2741,7 +2871,8 @@ ${pdfUrlList}
                       />
                     </svg>
                     <span className="text-xs font-medium text-orange-300">
-                      Click any image in the preview to select it for replacement
+                      Click any image in the preview to select it for
+                      replacement
                     </span>
                   </div>
                 ) : (
@@ -2869,7 +3000,7 @@ ${pdfUrlList}
                           </span>
                         </div>
                         <span className="text-xs font-medium text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">
-                          {formatTokens(0.10)} tokens
+                          {formatTokens(0.1)} tokens
                         </span>
                       </div>
 
@@ -2877,12 +3008,18 @@ ${pdfUrlList}
                         <input
                           type="text"
                           value={imageRegenerationPrompt}
-                          onChange={(e) => setImageRegenerationPrompt(e.target.value)}
+                          onChange={(e) =>
+                            setImageRegenerationPrompt(e.target.value)
+                          }
                           placeholder="Describe the image you want to generate..."
                           disabled={isReplacingSelectedImage}
                           className="w-full px-3 py-2 text-xs bg-bg-tertiary/50 border border-blue-500/30 rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey && imageRegenerationPrompt.trim()) {
+                            if (
+                              e.key === "Enter" &&
+                              !e.shiftKey &&
+                              imageRegenerationPrompt.trim()
+                            ) {
                               e.preventDefault();
                               handleRegenerateSelectedImage();
                             }
@@ -2912,7 +3049,10 @@ ${pdfUrlList}
 
                       <button
                         onClick={handleRegenerateSelectedImage}
-                        disabled={isReplacingSelectedImage || !imageRegenerationPrompt.trim()}
+                        disabled={
+                          isReplacingSelectedImage ||
+                          !imageRegenerationPrompt.trim()
+                        }
                         className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-md bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-500 hover:to-blue-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/25"
                       >
                         {isReplacingSelectedImage ? (
@@ -3290,6 +3430,21 @@ ${pdfUrlList}
                     <p className="text-xs text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
                       {authPromptWarning}
                     </p>
+                    {blockedPromptWords.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] text-amber-900 dark:text-amber-200">
+                          Blocked word(s):
+                        </span>
+                        {blockedPromptWords.map((word) => (
+                          <span
+                            key={word}
+                            className="inline-flex items-center rounded-md bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                          >
+                            {word}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {editClarificationQuestion && (
                       <div className="mt-3 space-y-2">
                         <label className="block text-[11px] font-medium text-amber-900 dark:text-amber-100">
@@ -3297,7 +3452,9 @@ ${pdfUrlList}
                         </label>
                         <textarea
                           value={editClarificationAnswer}
-                          onChange={(e) => setEditClarificationAnswer(e.target.value)}
+                          onChange={(e) =>
+                            setEditClarificationAnswer(e.target.value)
+                          }
                           rows={2}
                           placeholder="Type your clarification so the edit is accurate..."
                           className="w-full rounded-lg border border-amber-300/80 bg-white/70 dark:bg-amber-950/30 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-100 placeholder:text-amber-700/70 dark:placeholder:text-amber-300/70 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
@@ -3327,6 +3484,7 @@ ${pdfUrlList}
                     type="button"
                     onClick={() => {
                       setAuthPromptWarning(null);
+                      setBlockedPromptWords([]);
                       clearEditClarificationState();
                     }}
                     className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition"
@@ -3349,32 +3507,108 @@ ${pdfUrlList}
               )}
 
               {/* Edit Form */}
-              <form onSubmit={handleEdit} className="flex-1 flex flex-col p-4">
+              <form
+                onSubmit={handleEdit}
+                className="flex-1 flex flex-col p-4 gap-4"
+              >
                 {/* Desktop: Vertical layout with taller textarea */}
-                <div className="hidden lg:flex flex-col gap-3.5 flex-1">
-                  {/* Prompt area with auth tags */}
-                  <div className="flex-1 flex flex-col rounded-2xl border border-border-secondary bg-gradient-to-b from-bg-tertiary/65 to-bg-tertiary/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] focus-within:border-blue-500/60 focus-within:ring-2 focus-within:ring-blue-500/15 overflow-hidden transition">
-                    <div className="flex items-start justify-between gap-4 px-4 pt-3 pb-2 border-b border-border-secondary/70">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-text-primary">
-                          Edit Prompt
-                        </p>
+                <div className="hidden lg:flex flex-col gap-4 flex-1">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30 flex items-center justify-center">
+                        <svg
+                          className="w-5 h-5 text-blue-400"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
                       </div>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-500/10 text-[11px] text-blue-400 border border-blue-500/20 whitespace-nowrap">
-                        Enter to submit
+                      <div>
+                        <h3 className="text-lg font-semibold text-text-primary">
+                          Edit
+                        </h3>
+                      </div>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 text-xs font-medium text-blue-400 border border-blue-500/20">
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M13 10V3L4 14h7v7l9-11h-7z"
+                        />
+                      </svg>
+                      0.10 tokens
+                    </span>
+                  </div>
+
+                  {/* Prompt area with auth tags */}
+                  <div className="flex-1 flex flex-col rounded-xl border border-border-primary bg-bg-secondary focus-within:border-blue-500/50 focus-within:ring-2 focus-within:ring-blue-500/10 overflow-hidden transition shadow-sm">
+                    <div className="flex items-center justify-between gap-4 px-4 pt-3 pb-2 bg-bg-tertiary/30 border-b border-border-primary">
+                      <div className="flex items-center gap-2">
+                        <svg
+                          className="w-4 h-4 text-text-muted"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"
+                          />
+                        </svg>
+                        <span className="text-xs font-medium text-text-secondary">
+                          Your Instructions
+                        </span>
+                      </div>
+                      <span className="text-xs text-text-muted">
+                        {editPromptCount} / 60 chars
                       </span>
                     </div>
-                    {/* Auth prefill tags (non-editable) */}
+                    {/* Auth prefill tags */}
                     {editAppAuth.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1.5">
+                      <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2 bg-blue-500/5 border-b border-blue-500/10">
+                        <div className="flex items-center gap-1.5">
+                          <svg
+                            className="w-3.5 h-3.5 text-blue-400"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                            />
+                          </svg>
+                          <span className="text-xs font-medium text-blue-400">
+                            Active Integrations:
+                          </span>
+                        </div>
                         {editAppAuth.includes("username-password") && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-medium">
+                          <span className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-md text-xs font-medium">
                             <svg
                               className="w-3 h-3"
                               fill="none"
                               viewBox="0 0 24 24"
                               stroke="currentColor"
-                              strokeWidth={1.5}
+                              strokeWidth={2}
                             >
                               <path
                                 strokeLinecap="round"
@@ -3382,7 +3616,7 @@ ${pdfUrlList}
                                 d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
                               />
                             </svg>
-                            Add Password Authentication
+                            Password Auth
                             <button
                               type="button"
                               onClick={() =>
@@ -3392,7 +3626,7 @@ ${pdfUrlList}
                                   ),
                                 )
                               }
-                              className="ml-0.5 text-blue-400/60 hover:text-blue-300 transition"
+                              className="ml-0.5 p-0.5 rounded hover:bg-blue-500/30 text-blue-300/70 hover:text-blue-200 transition"
                             >
                               <svg
                                 className="w-3 h-3"
@@ -3411,7 +3645,7 @@ ${pdfUrlList}
                           </span>
                         )}
                         {editAppAuth.includes("google") && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg text-xs font-medium">
+                          <span className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-md text-xs font-medium">
                             <svg
                               className="w-3 h-3"
                               viewBox="0 0 24 24"
@@ -3422,7 +3656,7 @@ ${pdfUrlList}
                               <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                               <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                             </svg>
-                            Add Google Authentication
+                            Google Auth
                             <button
                               type="button"
                               onClick={() =>
@@ -3430,7 +3664,7 @@ ${pdfUrlList}
                                   editAppAuth.filter((a) => a !== "google"),
                                 )
                               }
-                              className="ml-0.5 text-blue-400/60 hover:text-blue-300 transition"
+                              className="ml-0.5 p-0.5 rounded hover:bg-blue-500/30 text-blue-300/70 hover:text-blue-200 transition"
                             >
                               <svg
                                 className="w-3 h-3"
@@ -3464,28 +3698,49 @@ ${pdfUrlList}
                             handleEdit(e);
                         }
                       }}
+                      maxLength={60}
                       placeholder={
                         editAppAuth.length > 0
-                          ? "Add additional instructions (optional)..."
-                          : "Describe changes you want to make...\n\nExamples:\n- Change the color scheme to blue\n- Add a contact form\n- Make the header sticky\n- Add dark mode toggle"
+                          ? "Add instructions (optional)..."
+                          : "Describe changes... (e.g., Change colors to blue)"
                       }
                       disabled={isEditing}
-                      className="flex-1 min-h-[120px] px-4 py-3.5 bg-transparent text-text-primary placeholder-text-muted focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
+                      className="flex-1 min-h-[140px] px-4 py-4 bg-transparent text-text-primary placeholder-text-muted/80 focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
                     />
-                    <div className="flex items-center justify-between px-4 py-2 border-t border-border-secondary/70">
-                      <p className="text-[11px] text-text-muted">
-                        Shift+Enter for new line
-                      </p>
-                      <p className="text-[11px] text-text-muted">
-                        {editPromptCount} chars
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-bg-tertiary/20 border-t border-border-primary">
+                      <p className="text-xs text-text-muted flex items-center gap-1.5">
+                        <kbd className="px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary bg-bg-tertiary border border-border-secondary rounded">
+                          Shift
+                        </kbd>
+                        <span>+</span>
+                        <kbd className="px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary bg-bg-tertiary border border-border-secondary rounded">
+                          Enter
+                        </kbd>
+                        <span className="ml-0.5">for new line</span>
                       </p>
                     </div>
                   </div>
-                  <div className="rounded-xl border border-border-secondary bg-bg-tertiary/35 px-3 py-2">
-                    <p className="text-xs font-medium text-text-muted mb-2">
-                      Add Integrations:
-                    </p>
-                    <div className="flex flex-col gap-2">
+                  {/* Integrations Section */}
+                  <div className="rounded-xl border border-border-primary bg-gradient-to-br from-bg-secondary to-bg-tertiary/50 p-4 shadow-sm">
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg
+                        className="w-4 h-4 text-violet-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                        />
+                      </svg>
+                      <h4 className="text-sm font-semibold text-text-primary">
+                        Add Integrations
+                      </h4>
+                    </div>
+                    <div className="space-y-2">
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -3499,18 +3754,18 @@ ${pdfUrlList}
                             )
                           }
                           disabled={isEditing}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                          className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                             editAppAuth.includes("username-password")
-                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                          } disabled:opacity-50`}
+                              ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
+                              : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           <svg
-                            className="w-3 h-3"
+                            className="w-4 h-4"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
-                            strokeWidth={1.5}
+                            strokeWidth={2}
                           >
                             <path
                               strokeLinecap="round"
@@ -3518,7 +3773,22 @@ ${pdfUrlList}
                               d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
                             />
                           </svg>
-                          Password
+                          <span>Password Auth</span>
+                          {editAppAuth.includes("username-password") && (
+                            <svg
+                              className="w-3.5 h-3.5 ml-auto"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={3}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M5 13l4 4L19 7"
+                              />
+                            </svg>
+                          )}
                         </button>
                         <button
                           type="button"
@@ -3530,14 +3800,14 @@ ${pdfUrlList}
                             )
                           }
                           disabled={isEditing}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                          className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                             editAppAuth.includes("google")
-                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                          } disabled:opacity-50`}
+                              ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
+                              : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           <svg
-                            className="w-3 h-3"
+                            className="w-4 h-4"
                             viewBox="0 0 24 24"
                             fill="currentColor"
                           >
@@ -3546,25 +3816,40 @@ ${pdfUrlList}
                             <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                             <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                           </svg>
-                          Google
+                          <span>Google OAuth</span>
+                          {editAppAuth.includes("google") && (
+                            <svg
+                              className="w-3.5 h-3.5 ml-auto"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={3}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M5 13l4 4L19 7"
+                              />
+                            </svg>
+                          )}
                         </button>
                       </div>
                       <button
                         type="button"
                         onClick={() => setShowDbModal(true)}
                         disabled={isEditing}
-                        className={`inline-flex items-center gap-1.5 self-start px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                        className={`w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                           currentAppDatabase.length > 0
-                            ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
-                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint hover:text-text-secondary"
-                        } disabled:opacity-50`}
+                            ? "bg-emerald-500/20 text-emerald-300 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
+                            : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-emerald-500/40 hover:bg-bg-tertiary hover:text-text-primary"
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
                       >
                         <svg
-                          className="w-3 h-3"
+                          className="w-4 h-4"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
-                          strokeWidth={1.5}
+                          strokeWidth={2}
                         >
                           <path
                             strokeLinecap="round"
@@ -3572,16 +3857,69 @@ ${pdfUrlList}
                             d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"
                           />
                         </svg>
-                        Database
+                        <span>Database Storage</span>
+                        {currentAppDatabase.length > 0 && (
+                          <svg
+                            className="w-3.5 h-3.5 ml-auto"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={3}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+
+                  {/* File Upload Preview */}
+                  {editFiles.length > 0 && (
+                    <div className="rounded-xl border border-border-primary bg-bg-secondary p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-text-secondary flex items-center gap-1.5">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          </svg>
+                          Attached Files ({editFiles.length})
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {editFiles.map((file, idx) => (
+                          <div
+                            key={idx}
+                            className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-bg-tertiary/70 border border-border-secondary rounded-lg text-xs group hover:border-red-500/40 transition"
+                          >
+                            <svg className="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span className="text-text-secondary max-w-[120px] truncate">{file.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => setEditFiles(editFiles.filter((_, i) => i !== idx))}
+                              className="p-0.5 rounded hover:bg-red-500/20 text-text-muted hover:text-red-400 transition"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex gap-3">
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-3 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary text-sm font-medium rounded-xl transition disabled:opacity-50"
+                      className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-bg-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary text-text-secondary hover:text-text-primary text-sm font-medium rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Attach image or PDF"
                     >
                       <svg
@@ -3589,38 +3927,39 @@ ${pdfUrlList}
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
-                        strokeWidth={1.5}
+                        strokeWidth={2}
                       >
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
-                          d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
+                          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
                         />
                       </svg>
+                      <span className="hidden sm:inline">Attach File</span>
                     </button>
                     <button
                       type="submit"
                       disabled={isEditSubmitDisabled}
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 active:scale-[0.98] text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 hover:shadow-blue-600/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                     >
                       {isEditing ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Updating...
+                          <span>Updating App...</span>
                         </>
                       ) : checkingAuthIntent || checkingEditClarity ? (
                         <>
                           <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Checking...
+                          <span>Analyzing...</span>
                         </>
                       ) : (
                         <>
                           <svg
-                            className="w-4 h-4"
+                            className="w-5 h-5"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
-                            strokeWidth={2}
+                            strokeWidth={2.5}
                           >
                             <path
                               strokeLinecap="round"
@@ -3628,14 +3967,17 @@ ${pdfUrlList}
                               d="M13 10V3L4 14h7v7l9-11h-7z"
                             />
                           </svg>
-                          Apply Changes
+                          <span>Apply Changes</span>
                         </>
                       )}
                     </button>
                   </div>
-                  <p className="text-xs text-text-muted text-center">
-                    Press Enter to apply edits quickly
-                  </p>
+                  <div className="flex items-center justify-center gap-2 text-xs text-text-muted">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Press <kbd className="px-1.5 py-0.5 text-[10px] font-semibold bg-bg-tertiary border border-border-secondary rounded">Enter</kbd> to apply changes quickly</span>
+                  </div>
                 </div>
 
                 {/* Mobile/Tablet: Layout */}
@@ -3833,9 +4175,10 @@ ${pdfUrlList}
                               handleEdit(e);
                           }
                         }}
+                        maxLength={60}
                         placeholder={
                           editAppAuth.length > 0
-                            ? "Additional instructions (optional)..."
+                            ? "Add instructions (optional)..."
                             : "Describe changes..."
                         }
                         rows={1}
@@ -3884,7 +4227,7 @@ ${pdfUrlList}
                       Shift+Enter for new line
                     </p>
                     <p className="text-[11px] text-text-muted">
-                      {editPromptCount} chars
+                      {editPromptCount} / 60
                     </p>
                   </div>
                 </div>
@@ -4173,6 +4516,7 @@ ${pdfUrlList}
         isRecording={isRecording}
         voiceError={voiceError}
         authPromptWarning={authPromptWarning}
+        blockedPromptWords={blockedPromptWords}
         checkingAuthIntent={checkingAuthIntent}
         setIsGenerationMinimized={setIsGenerationMinimized}
         cancelGeneration={cancelGeneration}
@@ -4188,6 +4532,7 @@ ${pdfUrlList}
         handleGenerate={handleGenerate}
         setShowDbModal={setShowDbModal}
         setAuthPromptWarning={setAuthPromptWarning}
+        setBlockedPromptWords={setBlockedPromptWords}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
       />
     );

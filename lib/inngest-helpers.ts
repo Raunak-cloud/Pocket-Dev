@@ -12,6 +12,8 @@ import {
   triggerImageProcessing as triggerImageProcessingAction,
 } from "@/app/inngest-actions";
 
+import type { SiteTheme } from "@/app/types";
+
 interface GeneratedFile {
   path: string;
   content: string;
@@ -30,6 +32,8 @@ interface GenerateCodeResult {
   sandboxId?: string;
   sandboxUrl?: string;
   sandboxCreatedAt?: number;
+  originalPrompt?: string;
+  detectedTheme?: SiteTheme;
 }
 
 interface CreateSandboxResult {

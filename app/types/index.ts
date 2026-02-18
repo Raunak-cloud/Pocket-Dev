@@ -1,5 +1,7 @@
 import type { WebsiteConfig } from "@/lib/website-config-types";
 
+export type SiteTheme = "food" | "fashion" | "interior" | "automotive" | "people" | "generic";
+
 export interface GeneratedFile {
   path: string;
   content: string;
@@ -18,6 +20,8 @@ export interface ReactProject {
   sandboxId?: string;
   sandboxUrl?: string;
   sandboxCreatedAt?: number; // timestamp for TTL checking
+  originalPrompt?: string;
+  detectedTheme?: SiteTheme;
 }
 
 export interface UploadedFile {
@@ -51,6 +55,8 @@ export interface SavedProject {
   sandboxId?: string;
   sandboxUrl?: string;
   sandboxCreatedAt?: number; // timestamp for TTL checking
+  originalPrompt?: string;
+  detectedTheme?: SiteTheme;
 }
 
 export interface EditHistoryEntry {

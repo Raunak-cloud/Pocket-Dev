@@ -7,6 +7,8 @@ interface PersistGeneratedImagesOptions {
   previousFiles?: GeneratedFile[];
   preserveExistingImages?: boolean;
   isUserProvidedPrompt?: boolean;
+  originalPrompt?: string;
+  detectedTheme?: string;
 }
 
 export async function persistGeneratedImages(
@@ -23,6 +25,8 @@ export async function persistGeneratedImages(
       previousFiles: options?.previousFiles,
       preserveExistingImages: options?.preserveExistingImages ?? false,
       isUserProvidedPrompt: options?.isUserProvidedPrompt ?? false,
+      originalPrompt: options?.originalPrompt,
+      detectedTheme: options?.detectedTheme,
     }),
   });
 

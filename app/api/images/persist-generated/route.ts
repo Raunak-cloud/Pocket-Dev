@@ -38,6 +38,8 @@ export async function POST(req: Request) {
       previousFiles?: unknown;
       preserveExistingImages?: unknown;
       isUserProvidedPrompt?: unknown;
+      originalPrompt?: unknown;
+      detectedTheme?: unknown;
     };
     const files = payload.files;
     const previousFiles = isGeneratedFileArray(payload.previousFiles)
@@ -45,11 +47,19 @@ export async function POST(req: Request) {
       : undefined;
     const preserveExistingImages = payload.preserveExistingImages === true;
     const isUserProvidedPrompt = payload.isUserProvidedPrompt === true;
+    const originalPrompt = typeof payload.originalPrompt === "string"
+      ? payload.originalPrompt
+      : undefined;
+    const detectedTheme = typeof payload.detectedTheme === "string"
+      ? payload.detectedTheme
+      : undefined;
 
     const persistedFiles = await persistGeneratedImagesToStorage(files, userId, {
       previousFiles,
       preserveExistingImages,
       isUserProvidedPrompt,
+      originalPrompt,
+      detectedTheme,
     });
     return NextResponse.json({ files: persistedFiles });
   } catch (error) {

@@ -9,42 +9,41 @@ const EXAMPLES = [
     name: "E-Commerce",
     desc: "Product listings, cart & checkout",
     query:
-      "Create a modern e-commerce Next.js app with product listings, shopping cart, and checkout pages using App Router and server components",
+      "Create a modern e-commerce app with product listings, shopping cart, and checkout pages",
   },
   {
     icon: "🍕",
     name: "Restaurant",
     desc: "Menu, reservations & about",
-    query:
-      "Create a restaurant Next.js app with menu, reservations, and about pages using dynamic routes and App Router",
+    query: "Create a restaurant app with menu, reservations, and about pages",
   },
   {
     icon: "🚀",
     name: "SaaS Dashboard",
     desc: "Users, billing & analytics",
     query:
-      "Create a SaaS dashboard Next.js app with user authentication, billing section, and analytics charts using Recharts",
+      "Create a SaaS dashboard app with billing section, and analytics charts",
   },
   {
     icon: "✍️",
     name: "Blog",
     desc: "Posts, comments & search",
     query:
-      "Create a blog Next.js app with MDX support, comments section, and full-text search functionality",
+      "Create a blog app with MDX support, comments section, and full-text search functionality",
   },
   {
     icon: "🎬",
     name: "Movie Database",
     desc: "Listings, ratings & reviews",
     query:
-      "Create a movie database Next.js app with movie listings, user ratings, and review functionality",
+      "Create a movie app with movie listings, user ratings, and review functionality",
   },
   {
     icon: "📚",
     name: "Learning Platform",
     desc: "Courses, lessons & progress",
     query:
-      "Create an online learning platform Next.js app with courses, lessons, and student progress tracking",
+      "Create an online learning platform app with courses, lessons, and student progress tracking",
   },
 ];
 
@@ -63,6 +62,7 @@ interface CreateContentProps {
   isRecording: boolean;
   voiceError: string | null;
   authPromptWarning: string | null;
+  blockedPromptWords: string[];
   checkingAuthIntent: boolean;
   setIsGenerationMinimized: (val: boolean) => void;
   cancelGeneration: () => void;
@@ -78,6 +78,7 @@ interface CreateContentProps {
   handleGenerate: (e: React.FormEvent) => void;
   setShowDbModal: (val: boolean) => void;
   setAuthPromptWarning: (val: string | null) => void;
+  setBlockedPromptWords: (val: string[]) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
 }
 
@@ -96,6 +97,7 @@ export default function CreateContent({
   isRecording,
   voiceError,
   authPromptWarning,
+  blockedPromptWords,
   checkingAuthIntent,
   setIsGenerationMinimized,
   cancelGeneration,
@@ -111,6 +113,7 @@ export default function CreateContent({
   handleGenerate,
   setShowDbModal,
   setAuthPromptWarning,
+  setBlockedPromptWords,
   textareaRef,
 }: CreateContentProps) {
   if (status === "loading" && !isGenerationMinimized) {
@@ -141,12 +144,26 @@ export default function CreateContent({
                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse" />
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-blue-300">Building your app...</p>
-                <p className="text-xs text-blue-400/70">Click to view progress</p>
+                <p className="text-sm font-medium text-blue-300">
+                  Building your app...
+                </p>
+                <p className="text-xs text-blue-400/70">
+                  Click to view progress
+                </p>
               </div>
             </div>
-            <svg className="w-5 h-5 text-blue-400 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            <svg
+              className="w-5 h-5 text-blue-400 group-hover:translate-x-1 transition-transform"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 5l7 7-7 7"
+              />
             </svg>
           </button>
         </div>
@@ -157,11 +174,28 @@ export default function CreateContent({
           <div className="inline-flex items-center justify-center mb-6">
             <Logo size={56} animate />
           </div>
-          <h1 className="text-4xl sm:text-5xl font-bold text-text-primary mb-3 tracking-tight">Pocket Dev</h1>
-          <p className="text-lg text-text-tertiary max-w-md mx-auto mb-6">Describe your app and watch it come to life</p>
-          <button onClick={() => setShowSignInModal(true)} className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M18 12l-3-3m0 0l3-3m-3 3h8.25" />
+          <h1 className="text-4xl sm:text-5xl font-bold text-text-primary mb-3 tracking-tight">
+            Pocket Dev
+          </h1>
+          <p className="text-lg text-text-tertiary max-w-md mx-auto mb-6">
+            Describe your app and watch it come to life
+          </p>
+          <button
+            onClick={() => setShowSignInModal(true)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all"
+          >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M18 12l-3-3m0 0l3-3m-3 3h8.25"
+              />
             </svg>
             Sign In to Get Started
           </button>
@@ -170,16 +204,30 @@ export default function CreateContent({
 
       {user && !isGenerationMinimized && (
         <div className="text-center mb-8 w-full max-w-3xl">
-          <h2 className="text-2xl font-semibold text-text-primary mb-2">Create a New App</h2>
-          <p className="text-text-tertiary">Describe your app and we&apos;ll build it for you</p>
+          <h2 className="text-2xl font-semibold text-text-primary mb-2">
+            Create a New App
+          </h2>
+          <p className="text-text-tertiary">
+            Describe your app and we&apos;ll build it for you
+          </p>
         </div>
       )}
 
       {error && (
         <div className="w-full max-w-3xl mb-6">
           <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-300 rounded-xl text-red-800 dark:bg-red-500/10 dark:border-red-500/20 dark:text-red-300">
-            <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              className="w-5 h-5 flex-shrink-0 mt-0.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
             <div>
               <p className="text-sm font-medium">Generation failed</p>
@@ -192,13 +240,21 @@ export default function CreateContent({
       )}
 
       <div className="w-full max-w-3xl mb-8">
-        <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3 text-center">Quick start</p>
+        <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3 text-center">
+          Quick start
+        </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {EXAMPLES.map((ex) => (
-            <button key={ex.name} onClick={() => setPrompt(ex.query)} className="group p-3 bg-bg-secondary/50 hover:bg-bg-tertiary/70 border border-border-primary hover:border-border-secondary rounded-xl text-left transition-all duration-200">
+            <button
+              key={ex.name}
+              onClick={() => setPrompt(ex.query)}
+              className="group p-3 bg-bg-secondary/50 hover:bg-bg-tertiary/70 border border-border-primary hover:border-border-secondary rounded-xl text-left transition-all duration-200"
+            >
               <div className="flex items-center gap-2.5 mb-1">
                 <span className="text-xl">{ex.icon}</span>
-                <span className="text-sm font-medium text-text-primary group-hover:text-blue-400 transition-colors">{ex.name}</span>
+                <span className="text-sm font-medium text-text-primary group-hover:text-blue-400 transition-colors">
+                  {ex.name}
+                </span>
               </div>
               <p className="text-xs text-text-muted pl-8">{ex.desc}</p>
             </button>
@@ -210,11 +266,27 @@ export default function CreateContent({
         <div className="w-full mb-4">
           <div className="flex flex-wrap gap-2 justify-center">
             {uploadedFiles.map((file, idx) => (
-              <div key={idx} className="inline-flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-sm">
+              <div
+                key={idx}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-sm"
+              >
                 <span className="text-xs text-text-secondary">{file.name}</span>
-                <button onClick={() => removeFile(idx)} className="text-text-muted hover:text-red-400 transition">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                <button
+                  onClick={() => removeFile(idx)}
+                  className="text-text-muted hover:text-red-400 transition"
+                >
+                  <svg
+                    className="w-3 h-3"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
                   </svg>
                 </button>
               </div>
@@ -225,15 +297,38 @@ export default function CreateContent({
 
       {voiceError && (
         <div className="mb-3 p-4 bg-red-50 border border-red-300 rounded-xl flex items-start gap-3 dark:bg-red-500/10 dark:border-red-500/30">
-          <svg className="w-5 h-5 text-red-700 dark:text-red-300 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          <svg
+            className="w-5 h-5 text-red-700 dark:text-red-300 flex-shrink-0 mt-0.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
           </svg>
           <p className="text-sm text-red-800 dark:text-red-300 font-medium">
             {voiceError}
           </p>
-          <button onClick={() => setVoiceError(null)} className="text-red-700 hover:text-red-800 dark:text-red-300 dark:hover:text-red-200 transition">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          <button
+            onClick={() => setVoiceError(null)}
+            className="text-red-700 hover:text-red-800 dark:text-red-300 dark:hover:text-red-200 transition"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -241,15 +336,58 @@ export default function CreateContent({
 
       {authPromptWarning && (
         <div className="mb-3 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3 dark:bg-amber-500/10 dark:border-amber-500/30">
-          <svg className="w-5 h-5 text-amber-700 dark:text-amber-300 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+          <svg
+            className="w-5 h-5 text-amber-700 dark:text-amber-300 flex-shrink-0 mt-0.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+            />
           </svg>
-          <p className="text-sm text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
-            {authPromptWarning}
-          </p>
-          <button onClick={() => setAuthPromptWarning(null)} className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          <div className="flex-1">
+            <p className="text-sm text-amber-800 dark:text-amber-200 font-medium whitespace-pre-line">
+              {authPromptWarning}
+            </p>
+            {blockedPromptWords.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-amber-900 dark:text-amber-200">
+                  Blocked word(s):
+                </span>
+                {blockedPromptWords.map((word) => (
+                  <span
+                    key={word}
+                    className="inline-flex items-center rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                  >
+                    {word}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => {
+              setAuthPromptWarning(null);
+              setBlockedPromptWords([]);
+            }}
+            className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 transition"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -257,33 +395,174 @@ export default function CreateContent({
 
       <form onSubmit={handleGenerate} className="w-full max-w-3xl">
         <div className="relative bg-bg-secondary/80 backdrop-blur-xl border border-border-primary rounded-2xl shadow-2xl shadow-black/30 overflow-hidden focus-within:border-border-secondary transition-colors w-full">
-          <textarea ref={textareaRef} value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (prompt.trim()) handleGenerate(e as any); }}} rows={1} className="w-full px-4 pt-4 pb-14 bg-transparent text-text-primary focus:outline-none resize-none text-base relative z-[1]" style={{ minHeight: "52px", maxHeight: "150px" }} placeholder="Describe your app..." />
+          <textarea
+            ref={textareaRef}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (prompt.trim()) handleGenerate(e as any);
+              }
+            }}
+            rows={1}
+            className="w-full px-4 pt-4 pb-14 bg-transparent text-text-primary focus:outline-none resize-none text-base relative z-[1]"
+            style={{ minHeight: "52px", maxHeight: "150px" }}
+            placeholder="Describe your app..."
+          />
 
           <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2.5 bg-bg-secondary/50 z-[2]">
             <div className="flex items-center gap-1">
-              <input ref={fileInputRef} type="file" accept="image/*,.pdf" multiple onChange={handleFileUpload} className="hidden" />
-              <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition" title="Attach files">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,.pdf"
+                multiple
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition"
+                title="Attach files"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
+                  />
                 </svg>
               </button>
-              <button type="button" onClick={() => (isRecording ? stopRecording() : startRecording())} className={`p-2 rounded-lg transition ${isRecording ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`} title={isRecording ? "Stop recording" : "Voice input"}>
-                {isRecording ? <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" /></svg>}
+              <button
+                type="button"
+                onClick={() =>
+                  isRecording ? stopRecording() : startRecording()
+                }
+                className={`p-2 rounded-lg transition ${isRecording ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                title={isRecording ? "Stop recording" : "Voice input"}
+              >
+                {isRecording ? (
+                  <svg
+                    className="w-5 h-5"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+                    />
+                  </svg>
+                )}
               </button>
               <div className="w-px h-5 bg-border-secondary mx-0.5" />
-              <button type="button" onClick={() => setShowAuthModal(true)} className={`p-2 rounded-lg transition ${currentAppAuth.length > 0 ? "text-blue-400 bg-blue-500/10 hover:bg-blue-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`} title={currentAppAuth.length > 0 ? `Auth: ${currentAppAuth.map((a) => (a === "username-password" ? "Username/Password" : "Google OAuth")).join(" + ")}` : "Add authentication"}>
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+              <button
+                type="button"
+                onClick={() => setShowAuthModal(true)}
+                className={`p-2 rounded-lg transition ${currentAppAuth.length > 0 ? "text-blue-400 bg-blue-500/10 hover:bg-blue-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                title={
+                  currentAppAuth.length > 0
+                    ? `Auth: ${currentAppAuth.map((a) => (a === "username-password" ? "Username/Password" : "Google OAuth")).join(" + ")}`
+                    : "Add authentication"
+                }
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+                  />
                 </svg>
               </button>
-              <button type="button" onClick={() => setShowDbModal(true)} className={`p-2 rounded-lg transition ${currentAppDatabase.length > 0 ? "text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`} title={currentAppDatabase.length > 0 ? "Database configured" : "Database options"}>
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+              <button
+                type="button"
+                onClick={() => setShowDbModal(true)}
+                className={`p-2 rounded-lg transition ${currentAppDatabase.length > 0 ? "text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                title={
+                  currentAppDatabase.length > 0
+                    ? "Database configured"
+                    : "Database options"
+                }
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
+                  />
                 </svg>
               </button>
             </div>
-            <button type="submit" disabled={!prompt.trim() || checkingAuthIntent} className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-              {checkingAuthIntent ? <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> : <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
+            <button
+              type="submit"
+              disabled={!prompt.trim() || checkingAuthIntent}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {checkingAuthIntent ? (
+                <svg
+                  className="w-4 h-4 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+              ) : (
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M13 10V3L4 14h7v7l9-11h-7z"
+                  />
+                </svg>
+              )}
               {checkingAuthIntent ? "Checking..." : "Generate"}
             </button>
           </div>
@@ -293,15 +572,48 @@ export default function CreateContent({
       {currentAppAuth.length > 0 && (
         <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap max-w-2xl">
           {currentAppAuth.map((auth) => (
-            <div key={auth} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full">
-              <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+            <div
+              key={auth}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full"
+            >
+              <svg
+                className="w-3.5 h-3.5 text-blue-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+                />
               </svg>
-              <span className="text-xs text-blue-300 font-medium">{auth === "username-password" ? "Username/Password" : "Google OAuth"}</span>
+              <span className="text-xs text-blue-300 font-medium">
+                {auth === "username-password"
+                  ? "Username/Password"
+                  : "Google OAuth"}
+              </span>
               <span className="text-xs text-violet-400">(2 tokens)</span>
-              <button type="button" onClick={() => setCurrentAppAuth(currentAppAuth.filter((a) => a !== auth))} className="ml-0.5 text-text-tertiary hover:text-text-primary transition">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              <button
+                type="button"
+                onClick={() =>
+                  setCurrentAppAuth(currentAppAuth.filter((a) => a !== auth))
+                }
+                className="ml-0.5 text-text-tertiary hover:text-text-primary transition"
+              >
+                <svg
+                  className="w-3.5 h-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
