@@ -29,26 +29,6 @@ export async function triggerCodeGeneration(
 }
 
 /**
- * Trigger sandbox creation workflow
- */
-export async function triggerSandboxCreation(
-  files: Record<string, string>,
-  userId: string,
-  projectId: string
-) {
-  await inngest.send({
-    name: "app/sandbox.create",
-    data: {
-      files,
-      userId,
-      projectId,
-    },
-  });
-
-  return { success: true, projectId };
-}
-
-/**
  * Trigger image processing workflow
  */
 export async function triggerImageProcessing(

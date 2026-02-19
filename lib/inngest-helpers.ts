@@ -8,7 +8,6 @@
 
 import {
   triggerCodeGeneration as triggerCodeGenerationAction,
-  triggerSandboxCreation as triggerSandboxCreationAction,
   triggerImageProcessing as triggerImageProcessingAction,
 } from "@/app/inngest-actions";
 
@@ -28,17 +27,9 @@ interface GenerateCodeResult {
     warnings: number;
   };
   model: string;
-  projectId?: string; // Include projectId for cancellation tracking
-  sandboxId?: string;
-  sandboxUrl?: string;
-  sandboxCreatedAt?: number;
+  projectId?: string;
   originalPrompt?: string;
   detectedTheme?: SiteTheme;
-}
-
-interface CreateSandboxResult {
-  sandboxId: string;
-  url: string;
 }
 
 const DEFAULT_GENERATE_TIMEOUT_MS = 15 * 60 * 1000;
@@ -165,36 +156,6 @@ export async function generateCodeWithInngest(
 
   // Include projectId in result for tracking
   return { ...result, projectId };
-}
-
-/**
- * Trigger sandbox creation workflow
- */
-export async function createSandboxWithInngest(
-  files: Record<string, string>,
-  userId: string,
-  onProgress?: (message: string) => void
-): Promise<CreateSandboxResult> {
-  const projectId = `sandbox_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  onProgress?.("Creating sandbox...");
-
-  // Trigger workflow
-  await triggerSandboxCreationAction(files, userId, projectId);
-
-  onProgress?.("Installing dependencies...");
-
-  // Poll for completion
-  const result = await pollForCompletion<CreateSandboxResult>(
-    projectId,
-    "sandbox.ready",
-    3 * 60 * 1000, // 3 minutes
-    onProgress
-  );
-
-  onProgress?.("Sandbox ready!");
-
-  return result;
 }
 
 /**

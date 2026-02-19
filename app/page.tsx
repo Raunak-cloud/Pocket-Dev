@@ -5,14 +5,12 @@ import { useSearchParams } from "next/navigation";
 
 import { generateCodeWithInngest } from "@/lib/inngest-helpers";
 import CodeViewer from "./components/CodeViewer";
-import E2BPreview from "./components/E2BPreview";
+import WebContainerPreview from "./components/WebContainerPreview";
 import LoadingScreen from "./components/LoadingScreen";
 import BackgroundEffects from "./components/BackgroundEffects";
 import SettingsContent from "./components/Settings";
 import ProjectsContent from "./components/Projects";
-import { createSandboxServer, checkSandboxHealth } from "./sandbox-actions";
 import { cancelGenerationJob } from "./inngest-actions";
-import { prepareSandboxFiles } from "@/lib/sandbox-utils";
 import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
@@ -58,7 +56,7 @@ const formatTokens = (tokens: number): string => {
   return tokens.toFixed(2);
 };
 
-// E2B preview component with loading state
+// Main content component
 function ReactGeneratorContent() {
   const {
     user,
@@ -661,6 +659,25 @@ function ReactGeneratorContent() {
     }
   };
 
+  const updateSavedProjectCache = (
+    projectId: string,
+    projectData: ReactProject,
+  ) => {
+    setSavedProjects((prev) =>
+      prev.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              files: projectData.files,
+              dependencies: projectData.dependencies || {},
+              lintReport: projectData.lintReport || p.lintReport,
+              config: projectData.config ?? p.config,
+            }
+          : p,
+      ),
+    );
+  };
+
   // Load saved projects from Firestore
   const loadSavedProjects = async () => {
     if (!user) return;
@@ -858,7 +875,7 @@ function ReactGeneratorContent() {
       };
       setProject(restoredProject);
       await updateProjectInFirestore(currentProjectId, restoredProject);
-      // Preview updates via file diff (Effect 2 in E2BPreview)
+      // Preview updates via file diff
       if (publishedUrl) {
         setHasUnpublishedChanges(true);
       }
@@ -890,7 +907,7 @@ function ReactGeneratorContent() {
     setHasUnpublishedChanges(false);
     setStatus("success");
     setActiveSection("create");
-    // Force E2B to re-initialize with new project data
+    // Force preview to re-initialize with new project data
     setPreviewKey((prev) => prev + 1);
     // Load edit history
     loadEditHistory(savedProject.id);
@@ -1599,14 +1616,14 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       const mergedProject = { ...result, files: persistedFiles };
 
       setProject(mergedProject);
-      // Force preview sandbox re-init after AI edit to avoid stale iframe/HMR state.
+      // Force preview re-init after AI edit to avoid stale iframe/HMR state.
       setPreviewKey((prev) => prev + 1);
       setEditPrompt("");
       clearEditClarificationState();
       setEditFiles([]); // Clear edit files after successful edit
       setEditAppAuth([]); // Reset edit auth after successful edit
 
-      // Preview updates via file diff (Effect 2 in E2BPreview)
+      // Preview updates via file diff
 
       // Update project in Firestore if we have a project ID
       if (currentProjectId && user) {
@@ -1766,55 +1783,6 @@ ${pdfUrlList}
       });
       result = { ...result, files: persistedFiles };
       setProject(result);
-
-      // Trigger background sandbox creation and poll for info
-      if (result.projectId && user) {
-        setProgressMessages((prev) => [
-          ...prev,
-          "[7/7] Creating preview sandbox in background...",
-        ]);
-
-        try {
-          // Import the trigger function
-          const { triggerSandboxCreation } = await import("./inngest-actions");
-
-          // Prepare files for sandbox
-          const sandboxFiles = prepareSandboxFiles(result);
-
-          // Trigger sandbox creation in background
-          await triggerSandboxCreation(
-            sandboxFiles,
-            user.uid,
-            result.projectId,
-          );
-
-          // Poll for sandbox info (with reasonable timeout)
-          const sandboxInfo = await pollForSandboxInfo(result.projectId, 90000); // 90s timeout
-
-          if (sandboxInfo) {
-            result = {
-              ...result,
-              sandboxId: sandboxInfo.sandboxId,
-              sandboxUrl: sandboxInfo.url,
-              sandboxCreatedAt: Date.now(),
-            };
-            setProject(result);
-            console.log(
-              "[Sandbox] ✨ Preview will be instant - sandbox already created!",
-            );
-          } else {
-            console.log(
-              "[Sandbox] Sandbox creation in progress, will be ready soon",
-            );
-          }
-        } catch (sandboxError) {
-          console.error(
-            "[Sandbox] Error creating background sandbox:",
-            sandboxError,
-          );
-          // Don't fail the whole generation if sandbox creation fails
-        }
-      }
 
       // Save project to Firestore
       if (user) {
@@ -1988,151 +1956,177 @@ ${pdfUrlList}
     setIsRecording(false);
   };
 
-  /**
-   * Poll Inngest status API for sandbox info after code generation
-   * Returns sandbox data if available within timeout
-   */
-  const pollForSandboxInfo = async (
-    projectId: string,
-    timeoutMs: number = 90000, // 90 seconds max
-  ): Promise<{ sandboxId: string; url: string } | null> => {
-    const startTime = Date.now();
-    const pollInterval = 2000; // Poll every 2 seconds
-
-    while (Date.now() - startTime < timeoutMs) {
-      try {
-        const res = await fetch(
-          `/api/inngest/status?projectId=${encodeURIComponent(projectId)}&event=sandbox.ready`,
-        );
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.sandboxId && data.url) {
-            console.log(
-              `[Sandbox] Found pre-created sandbox: ${data.sandboxId}`,
-            );
-            return { sandboxId: data.sandboxId, url: data.url };
-          }
-        }
-      } catch (err) {
-        console.error("[Sandbox] Error polling for sandbox info:", err);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-    }
-
-    console.log("[Sandbox] Timeout waiting for sandbox info");
-    return null;
-  };
-
-  const openInE2BSandbox = async () => {
-    if (!project) return;
-
-    const previewWindow = window.open("about:blank", "_blank");
-    if (previewWindow) {
-      previewWindow.document.write(
-        "<html><body style='font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;'>Preparing preview sandbox...</body></html>",
-      );
-    }
-
-    try {
-      // Check if we have an existing sandbox (within 25 minute TTL)
-      const SANDBOX_TTL = 25 * 60 * 1000; // 25 minutes (less than 30 min timeout)
-      const now = Date.now();
-      const sandboxAge = project.sandboxCreatedAt
-        ? now - project.sandboxCreatedAt
-        : Infinity;
-
-      if (project.sandboxId && project.sandboxUrl && sandboxAge < SANDBOX_TTL) {
-        console.log(
-          `[Preview] Checking existing sandbox ${project.sandboxId}...`,
-        );
-
-        // Quick health check
-        const healthyUrl = await checkSandboxHealth(project.sandboxId);
-
-        if (healthyUrl) {
-          console.log(
-            `[Preview] Reusing healthy sandbox - instant preview! ✨`,
-          );
-          if (previewWindow && !previewWindow.closed) {
-            previewWindow.location.href = healthyUrl;
-          } else if (!previewWindow) {
-            window.location.href = healthyUrl;
-          } else {
-            window.open(healthyUrl, "_blank");
-          }
-          return;
-        } else {
-          console.log(
-            `[Preview] Existing sandbox is not healthy, creating new one...`,
-          );
-        }
-      } else if (project.sandboxId) {
-        console.log(
-          `[Preview] Sandbox expired (age: ${Math.round(sandboxAge / 1000)}s), creating new one...`,
-        );
-      }
-
-      // No healthy sandbox, create a new one
-      const files = prepareSandboxFiles(project);
-      const { url, sandboxId } = await createSandboxServer(files, undefined, {
-        projectId: currentProjectId || undefined,
-      });
-
-      // Store the new sandbox info in the project
-      const updatedProject = {
-        ...project,
-        sandboxId,
-        sandboxUrl: url,
-        sandboxCreatedAt: Date.now(),
-      };
-      setProject(updatedProject);
-
-      // Save to Firestore if this is a saved project
-      if (currentProjectId && user) {
-        try {
-          await updateProjectInFirestore(currentProjectId, updatedProject);
-        } catch (err) {
-          console.error("Failed to save sandbox info:", err);
-        }
-      }
-
-      if (previewWindow && !previewWindow.closed) {
-        previewWindow.location.href = url;
-      } else if (!previewWindow) {
-        window.location.href = url;
-      } else {
-        window.open(url, "_blank");
-      }
-    } catch (err) {
-      if (previewWindow && !previewWindow.closed) {
-        previewWindow.close();
-      }
-      console.error("Error opening E2B sandbox:", err);
-      setError("Failed to create sandbox. Please try again.");
-    }
-  };
-
-  const replaceFirstTextInProject = (
+  const replaceNthTextInProject = (
     sourceProject: ReactProject,
     from: string,
     to: string,
+    occurrence: number = 1,
   ): ReactProject => {
     if (!from || from === to) return sourceProject;
     const files = sourceProject.files.map((f) => ({ ...f }));
     const mutableExt = /\.(tsx|ts|jsx|js|css|md|txt)$/;
+    const targetOccurrence = Math.max(1, occurrence);
+
+    const uniqueCandidates = (base: string): string[] => {
+      const variants = [base, base.replace(/'/g, "’"), base.replace(/’/g, "'")];
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const v of variants) {
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+      }
+      return out;
+    };
+
+    const escapeRe = (value: string) =>
+      value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const normalizeText = (value: string) =>
+      value
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/\s+/g, " ")
+        .replace(/[’`]/g, "'")
+        .trim()
+        .toLowerCase();
+
+    const candidates = uniqueCandidates(from);
+    const normalizedFrom = normalizeText(from);
+    let seen = 0;
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!mutableExt.test(file.path)) continue;
-      const idx = file.content.indexOf(from);
-      if (idx === -1) continue;
-      files[i] = {
-        ...file,
-        content: `${file.content.slice(0, idx)}${to}${file.content.slice(idx + from.length)}`,
-      };
-      return { ...sourceProject, files };
+
+      for (const candidate of candidates) {
+        let searchStart = 0;
+        while (searchStart <= file.content.length) {
+          const idx = file.content.indexOf(candidate, searchStart);
+          if (idx === -1) break;
+          seen += 1;
+          if (seen === targetOccurrence) {
+            files[i] = {
+              ...file,
+              content: `${file.content.slice(0, idx)}${to}${file.content.slice(idx + candidate.length)}`,
+            };
+            return { ...sourceProject, files };
+          }
+          searchStart = idx + candidate.length;
+        }
+      }
+    }
+
+    // Fallback: whitespace-tolerant matching (helps with newlines/spacing differences).
+    const seenFallback = { count: 0 };
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      for (const candidate of candidates) {
+        const pattern = escapeRe(candidate).replace(/\s+/g, "\\s+");
+        const re = new RegExp(pattern, "g");
+        const nextContent = file.content.replace(re, (match) => {
+          seenFallback.count += 1;
+          return seenFallback.count === targetOccurrence ? to : match;
+        });
+
+        if (nextContent !== file.content) {
+          files[i] = { ...file, content: nextContent };
+          if (seenFallback.count >= targetOccurrence) {
+            return { ...sourceProject, files };
+          }
+        }
+      }
+    }
+
+    // Fallback: normalize JSX text nodes like <h1> ... </h1>.
+    // This catches cases where source has line breaks/spacing or encoded entities.
+    // Also handles multi-child elements by joining adjacent text segments.
+    const jsxTextRe = />([^<>{}][^<>]*?)</g;
+    let seenJsx = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      let replaced = false;
+      const nextContent = file.content.replace(
+        jsxTextRe,
+        (match, inner: string) => {
+          if (replaced) return match;
+          if (normalizeText(inner) !== normalizedFrom) return match;
+          seenJsx += 1;
+          if (seenJsx !== targetOccurrence) return match;
+          replaced = true;
+          return `>${to}<`;
+        },
+      );
+
+      if (replaced) {
+        files[i] = { ...file, content: nextContent };
+        return { ...sourceProject, files };
+      }
+    }
+
+    // Fallback: match text spanning multiple child elements.
+    // For elements like <h1><span>Hello</span> World</h1>, the rendered
+    // textContent is "Hello World" but the source has tags in between.
+    // Strip tags from block-level element inner HTML and compare normalized text.
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      const blockOpenRe =
+        /<(h[1-6]|p|li|td|th|dt|dd|figcaption|blockquote|button|label|a)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi;
+      let blockMatch;
+      while ((blockMatch = blockOpenRe.exec(file.content)) !== null) {
+        const fullMatch = blockMatch[0];
+        const openTagEnd = fullMatch.indexOf(">") + 1;
+        const closeTagStart = fullMatch.lastIndexOf("<");
+        const innerHtml = fullMatch.slice(openTagEnd, closeTagStart);
+        // Strip all tags to get the combined text content
+        const combinedText = innerHtml.replace(/<[^>]*>/g, "");
+        if (normalizeText(combinedText) === normalizedFrom) {
+          const openTag = fullMatch.slice(0, openTagEnd);
+          const closeTag = fullMatch.slice(closeTagStart);
+          const newBlock = openTag + to + closeTag;
+          files[i] = {
+            ...file,
+            content:
+              file.content.slice(0, blockMatch.index) +
+              newBlock +
+              file.content.slice(blockMatch.index + fullMatch.length),
+          };
+          return { ...sourceProject, files };
+        }
+      }
+    }
+
+    // Fallback: replace matching string literal values in JS/TS source.
+    const stringLiteralRe = /(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      let replaced = false;
+      const nextContent = file.content.replace(
+        stringLiteralRe,
+        (match, quote: string, value: string) => {
+          if (replaced) return match;
+          if (normalizeText(value) !== normalizedFrom) return match;
+          seen += 1;
+          if (seen !== targetOccurrence) return match;
+          replaced = true;
+          const safeTo = to.replace(new RegExp(`\\\\${quote}`, "g"), quote);
+          return `${quote}${safeTo}${quote}`;
+        },
+      );
+
+      if (replaced) {
+        files[i] = { ...file, content: nextContent };
+        return { ...sourceProject, files };
+      }
     }
 
     return sourceProject;
@@ -2141,16 +2135,23 @@ ${pdfUrlList}
   const handlePreviewTextEdited = async (
     originalText: string,
     updatedText: string,
+    occurrence: number = 1,
   ) => {
     if (!textEditMode || !project) return;
-    const from = originalText.trim();
-    const to = updatedText.trim();
-    if (!from || !to || from === to) return;
+    const from = originalText;
+    const to = updatedText;
+    if (!from.trim() || !to.trim() || from === to) return;
 
-    const updatedProject = replaceFirstTextInProject(project, from, to);
+    const updatedProject = replaceNthTextInProject(
+      project,
+      from,
+      to,
+      occurrence,
+    );
     setProject(updatedProject);
 
     if (currentProjectId && user) {
+      updateSavedProjectCache(currentProjectId, updatedProject);
       try {
         await updateProjectInFirestore(currentProjectId, updatedProject);
         if (publishedUrl) setHasUnpublishedChanges(true);
@@ -2172,11 +2173,19 @@ ${pdfUrlList}
       const parsed = new URL(fromSrc);
       sourceCandidates.add(parsed.pathname + parsed.search);
       sourceCandidates.add(parsed.pathname);
+      if (parsed.pathname !== "/api/image-proxy") {
+        sourceCandidates.add(
+          `/api/image-proxy?url=${encodeURIComponent(fromSrc)}`,
+        );
+      }
       if (parsed.pathname === "/_next/image") {
         const encoded = parsed.searchParams.get("url");
         if (encoded) {
           const decoded = decodeURIComponent(encoded);
           sourceCandidates.add(decoded);
+          sourceCandidates.add(
+            `/api/image-proxy?url=${encodeURIComponent(decoded)}`,
+          );
           try {
             const decodedUrl = new URL(decoded);
             sourceCandidates.add(decodedUrl.pathname + decodedUrl.search);
@@ -2197,6 +2206,7 @@ ${pdfUrlList}
     let seen = 0;
     let replaced = false;
 
+    // Pass 1: match src="..." attributes (standard <img> tags)
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!mutableExt.test(file.path)) continue;
@@ -2218,25 +2228,72 @@ ${pdfUrlList}
       if (replaced) return { ...sourceProject, files };
     }
 
-    // Fallback: replace first exact src if occurrence mapping fails.
+    // Pass 2: match url(...) patterns (CSS background-image, inline styles)
+    const urlRe = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+    let seenUrl = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!mutableExt.test(file.path)) continue;
+
+      const nextContent = file.content.replace(
+        urlRe,
+        (match, src: string) => {
+          if (!sourceCandidates.has(src) || replaced) return match;
+          seenUrl++;
+          if (seenUrl !== Math.max(1, occurrence)) return match;
+          replaced = true;
+          return match.replace(src, toSrc);
+        },
+      );
+
+      if (nextContent !== file.content) {
+        files[i] = { ...file, content: nextContent };
+      }
+      if (replaced) return { ...sourceProject, files };
+    }
+
+    // Pass 3: match the URL as a plain string literal (covers template literals,
+    // variables like const imgUrl = "https://...", etc.)
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      for (const candidate of sourceCandidates) {
+        if (!candidate || candidate.length < 8) continue; // skip very short fragments
+        const idx = file.content.indexOf(candidate);
+        if (idx !== -1) {
+          files[i] = {
+            ...file,
+            content:
+              file.content.slice(0, idx) +
+              toSrc +
+              file.content.slice(idx + candidate.length),
+          };
+          return { ...sourceProject, files };
+        }
+      }
+    }
+
+    // Pass 4: fallback — replace first exact src attr match ignoring occurrence
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+      let didReplace = false;
       const nextContent = file.content.replace(
         srcAttrRe,
         (match, src: string) => {
-          if (replaced || !sourceCandidates.has(src)) return match;
-          replaced = true;
+          if (didReplace || !sourceCandidates.has(src)) return match;
+          didReplace = true;
           return match.replace(src, toSrc);
         },
       );
       if (nextContent !== file.content) {
         files[i] = { ...file, content: nextContent };
+        return { ...sourceProject, files };
       }
-      if (replaced) break;
     }
 
-    return replaced ? { ...sourceProject, files } : sourceProject;
+    return sourceProject;
   };
 
   const handlePreviewImageSelected = (payload: {
@@ -2269,6 +2326,9 @@ ${pdfUrlList}
         selectedPreviewImage.occurrence,
       );
       setProject(updatedProject);
+      if (currentProjectId) {
+        updateSavedProjectCache(currentProjectId, updatedProject);
+      }
       setSelectedPreviewImage({
         src: replacementUrl,
         alt: selectedPreviewImage.alt,
@@ -2374,6 +2434,9 @@ ${pdfUrlList}
         selectedPreviewImage.occurrence,
       );
       setProject(updatedProject);
+      if (currentProjectId) {
+        updateSavedProjectCache(currentProjectId, updatedProject);
+      }
 
       if (currentProjectId) {
         await updateProjectInFirestore(currentProjectId, updatedProject);
@@ -2636,15 +2699,6 @@ ${pdfUrlList}
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Open in E2B Sandbox Button */}
-                <button
-                  onClick={openInE2BSandbox}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-sm hover:shadow-md"
-                  title="Open in E2B Sandbox"
-                >
-                  Preview
-                </button>
-
                 {/* Export Dropdown */}
                 <div className="relative export-dropdown">
                   <button
@@ -2846,7 +2900,7 @@ ${pdfUrlList}
           </header>
 
           {imageSelectMode && (
-            <div className="px-4 py-2.5 border-b border-border-primary bg-orange-500/10">
+            <div className="px-4 py-3 border-b border-border-primary bg-gradient-to-b from-orange-500/10 to-transparent">
               <input
                 ref={replaceImageInputRef}
                 type="file"
@@ -2854,253 +2908,154 @@ ${pdfUrlList}
                 className="hidden"
                 onChange={handleSelectedImageReplacement}
               />
-              <div className="space-y-3">
-                {!selectedPreviewImage ? (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+              {!selectedPreviewImage ? (
+                /* Instruction state — no image selected yet */
+                <div className="flex items-center gap-3 px-3.5 py-3 rounded-xl bg-orange-500/10 border border-orange-500/20 border-dashed">
+                  <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-orange-500/20 flex items-center justify-center">
                     <svg
-                      className="w-4 h-4 text-orange-400 flex-shrink-0"
+                      className="w-5 h-5 text-orange-400 animate-pulse"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
-                      strokeWidth={2}
+                      strokeWidth={1.5}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                      />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zM12 2.25V4.5m5.834.166l-1.591 1.591M20.25 10.5H18M7.757 14.743l-1.59 1.59M6 10.5H3.75m4.007-4.243l-1.59-1.59" />
                     </svg>
-                    <span className="text-xs font-medium text-orange-300">
-                      Click any image in the preview to select it for
-                      replacement
-                    </span>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gradient-to-r from-orange-500/20 to-orange-600/20 border border-orange-500/30">
-                      <div className="flex-shrink-0">
-                        <div className="w-8 h-8 rounded-md bg-orange-500/30 flex items-center justify-center">
-                          <svg
-                            className="w-4 h-4 text-orange-300"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                            />
-                          </svg>
-                        </div>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-orange-200">
-                          Image Selected
-                        </p>
-                        <p className="text-xs text-text-secondary truncate mt-0.5">
-                          {selectedPreviewImage.alt || selectedPreviewImage.src}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setSelectedPreviewImage(null);
-                          setImageRegenerationPrompt("");
-                        }}
-                        className="flex-shrink-0 p-1 rounded-md hover:bg-orange-500/20 transition text-text-secondary hover:text-text-primary"
-                        title="Clear selection"
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
+                  <div>
+                    <p className="text-xs font-semibold text-orange-300">Click any image in the preview</p>
+                    <p className="text-[11px] text-text-muted mt-0.5">Select an image to replace it with your own or generate a new one with AI</p>
+                  </div>
+                </div>
+              ) : (
+                /* Image selected — show replacement options */
+                <div className="space-y-3">
+                  {/* Selected image indicator */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                        <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                         </svg>
-                      </button>
-                    </div>
-
-                    {/* Upload File Option */}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => replaceImageInputRef.current?.click()}
-                        disabled={isReplacingSelectedImage}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-md bg-gradient-to-r from-orange-500 to-orange-600 text-white hover:from-orange-400 hover:to-orange-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-orange-500/25"
-                      >
-                        {isReplacingSelectedImage ? (
-                          <>
-                            <svg
-                              className="w-3.5 h-3.5 animate-spin"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                            >
-                              <circle
-                                className="opacity-25"
-                                cx="12"
-                                cy="12"
-                                r="10"
-                                stroke="currentColor"
-                                strokeWidth="4"
-                              />
-                              <path
-                                className="opacity-75"
-                                fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                              />
-                            </svg>
-                            Uploading...
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              className="w-3.5 h-3.5"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                              />
-                            </svg>
-                            Upload File
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    {/* AI Regeneration Section */}
-                    <div className="space-y-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-2">
-                          <svg
-                            className="w-4 h-4 text-blue-400"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
-                            />
-                          </svg>
-                          <span className="text-xs font-semibold text-blue-300">
-                            AI Regenerate
-                          </span>
-                        </div>
-                        <span className="text-xs font-medium text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">
-                          {formatTokens(0.1)} tokens
-                        </span>
                       </div>
-
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={imageRegenerationPrompt}
-                          onChange={(e) =>
-                            setImageRegenerationPrompt(e.target.value)
-                          }
-                          placeholder="Describe the image you want to generate..."
-                          disabled={isReplacingSelectedImage}
-                          className="w-full px-3 py-2 text-xs bg-bg-tertiary/50 border border-blue-500/30 rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                          onKeyDown={(e) => {
-                            if (
-                              e.key === "Enter" &&
-                              !e.shiftKey &&
-                              imageRegenerationPrompt.trim()
-                            ) {
-                              e.preventDefault();
-                              handleRegenerateSelectedImage();
-                            }
-                          }}
-                        />
-                        {imageRegenerationPrompt.trim() && (
-                          <button
-                            onClick={() => setImageRegenerationPrompt("")}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-primary transition"
-                          >
-                            <svg
-                              className="w-3.5 h-3.5"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            </svg>
-                          </button>
-                        )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-text-primary truncate">
+                          {selectedPreviewImage.alt || "Image selected"}
+                        </p>
                       </div>
-
-                      <button
-                        onClick={handleRegenerateSelectedImage}
-                        disabled={
-                          isReplacingSelectedImage ||
-                          !imageRegenerationPrompt.trim()
-                        }
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-md bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-500 hover:to-blue-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/25"
-                      >
-                        {isReplacingSelectedImage ? (
-                          <>
-                            <svg
-                              className="w-3.5 h-3.5 animate-spin"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                            >
-                              <circle
-                                className="opacity-25"
-                                cx="12"
-                                cy="12"
-                                r="10"
-                                stroke="currentColor"
-                                strokeWidth="4"
-                              />
-                              <path
-                                className="opacity-75"
-                                fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                              />
-                            </svg>
-                            Generating...
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              className="w-3.5 h-3.5"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"
-                              />
-                            </svg>
-                            Generate with AI
-                          </>
-                        )}
-                      </button>
                     </div>
+                    <button
+                      onClick={() => {
+                        setSelectedPreviewImage(null);
+                        setImageRegenerationPrompt("");
+                      }}
+                      className="flex-shrink-0 text-[11px] font-medium text-text-muted hover:text-red-400 transition px-2 py-1 rounded-md hover:bg-red-500/10"
+                    >
+                      Deselect
+                    </button>
                   </div>
-                )}
-              </div>
+
+                  {/* Two replacement options side by side */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Option 1: Upload your own image */}
+                    <button
+                      onClick={() => replaceImageInputRef.current?.click()}
+                      disabled={isReplacingSelectedImage}
+                      className="group relative flex flex-col items-center gap-2 p-3.5 rounded-xl border-2 border-dashed border-border-secondary hover:border-orange-500/50 bg-bg-secondary/50 hover:bg-orange-500/5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isReplacingSelectedImage ? (
+                        <div className="w-5 h-5 border-2 border-orange-300/30 border-t-orange-400 rounded-full animate-spin" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-lg bg-orange-500/15 group-hover:bg-orange-500/25 flex items-center justify-center transition-colors">
+                          <svg className="w-5 h-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                          </svg>
+                        </div>
+                      )}
+                      <div className="text-center">
+                        <p className="text-xs font-semibold text-text-primary">
+                          {isReplacingSelectedImage ? "Uploading..." : "Upload Image"}
+                        </p>
+                        <p className="text-[10px] text-text-muted mt-0.5">From your device</p>
+                      </div>
+                    </button>
+
+                    {/* Option 2: Generate with AI */}
+                    <button
+                      onClick={() => {
+                        const input = document.getElementById("pocket-img-regen-input");
+                        if (input) input.focus();
+                      }}
+                      disabled={isReplacingSelectedImage}
+                      className="group relative flex flex-col items-center gap-2 p-3.5 rounded-xl border-2 border-dashed border-border-secondary hover:border-blue-500/50 bg-bg-secondary/50 hover:bg-blue-500/5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-blue-500/15 group-hover:bg-blue-500/25 flex items-center justify-center transition-colors">
+                        <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                        </svg>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-semibold text-text-primary">Generate with AI</p>
+                        <p className="text-[10px] text-text-muted mt-0.5">{formatTokens(0.1)} tokens</p>
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* AI prompt input — always visible when image is selected */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 relative">
+                      <input
+                        id="pocket-img-regen-input"
+                        type="text"
+                        value={imageRegenerationPrompt}
+                        onChange={(e) =>
+                          setImageRegenerationPrompt(e.target.value)
+                        }
+                        placeholder="Describe the image to generate..."
+                        disabled={isReplacingSelectedImage}
+                        className="w-full pl-3 pr-8 py-2.5 text-xs bg-bg-tertiary/60 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onKeyDown={(e) => {
+                          if (
+                            e.key === "Enter" &&
+                            !e.shiftKey &&
+                            imageRegenerationPrompt.trim()
+                          ) {
+                            e.preventDefault();
+                            handleRegenerateSelectedImage();
+                          }
+                        }}
+                      />
+                      {imageRegenerationPrompt.trim() && (
+                        <button
+                          onClick={() => setImageRegenerationPrompt("")}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-text-muted hover:text-text-primary transition"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleRegenerateSelectedImage}
+                      disabled={
+                        isReplacingSelectedImage ||
+                        !imageRegenerationPrompt.trim()
+                      }
+                      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isReplacingSelectedImage ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                        </svg>
+                      )}
+                      {isReplacingSelectedImage ? "Generating..." : "Generate"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -3165,7 +3120,7 @@ ${pdfUrlList}
                     </div>
                   )}
 
-                  {/* E2B Preview */}
+                  {/* WebContainer Preview */}
                   <div
                     className={
                       previewMode !== "desktop"
@@ -3173,10 +3128,9 @@ ${pdfUrlList}
                         : "h-full"
                     }
                   >
-                    <E2BPreview
+                    <WebContainerPreview
                       project={project}
                       previewKey={previewKey}
-                      projectId={currentProjectId}
                       textEditMode={textEditMode}
                       imageSelectMode={imageSelectMode}
                       onTextEdited={handlePreviewTextEdited}
@@ -3616,7 +3570,7 @@ ${pdfUrlList}
                                 d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
                               />
                             </svg>
-                            Password Auth
+                            Password
                             <button
                               type="button"
                               onClick={() =>
@@ -3741,7 +3695,7 @@ ${pdfUrlList}
                       </h4>
                     </div>
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() =>
@@ -3754,14 +3708,14 @@ ${pdfUrlList}
                             )
                           }
                           disabled={isEditing}
-                          className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
+                          className={`flex-1 min-w-[120px] inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                             editAppAuth.includes("username-password")
                               ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
                               : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
                           } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           <svg
-                            className="w-4 h-4"
+                            className="w-4 h-4 flex-shrink-0"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -3773,10 +3727,10 @@ ${pdfUrlList}
                               d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
                             />
                           </svg>
-                          <span>Password Auth</span>
+                          <span className="truncate">Password Auth</span>
                           {editAppAuth.includes("username-password") && (
                             <svg
-                              className="w-3.5 h-3.5 ml-auto"
+                              className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
                               fill="none"
                               viewBox="0 0 24 24"
                               stroke="currentColor"
@@ -3800,14 +3754,14 @@ ${pdfUrlList}
                             )
                           }
                           disabled={isEditing}
-                          className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
+                          className={`flex-1 min-w-[120px] inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
                             editAppAuth.includes("google")
                               ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
                               : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
                           } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
                           <svg
-                            className="w-4 h-4"
+                            className="w-4 h-4 flex-shrink-0"
                             viewBox="0 0 24 24"
                             fill="currentColor"
                           >
@@ -3816,10 +3770,10 @@ ${pdfUrlList}
                             <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                             <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                           </svg>
-                          <span>Google OAuth</span>
+                          <span className="truncate">Google OAuth</span>
                           {editAppAuth.includes("google") && (
                             <svg
-                              className="w-3.5 h-3.5 ml-auto"
+                              className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
                               fill="none"
                               viewBox="0 0 24 24"
                               stroke="currentColor"
@@ -3882,8 +3836,18 @@ ${pdfUrlList}
                     <div className="rounded-xl border border-border-primary bg-bg-secondary p-3">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-text-secondary flex items-center gap-1.5">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                            />
                           </svg>
                           Attached Files ({editFiles.length})
                         </span>
@@ -3894,17 +3858,43 @@ ${pdfUrlList}
                             key={idx}
                             className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-bg-tertiary/70 border border-border-secondary rounded-lg text-xs group hover:border-red-500/40 transition"
                           >
-                            <svg className="w-3.5 h-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            <svg
+                              className="w-3.5 h-3.5 text-text-muted"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                              />
                             </svg>
-                            <span className="text-text-secondary max-w-[120px] truncate">{file.name}</span>
+                            <span className="text-text-secondary max-w-[120px] truncate">
+                              {file.name}
+                            </span>
                             <button
                               type="button"
-                              onClick={() => setEditFiles(editFiles.filter((_, i) => i !== idx))}
+                              onClick={() =>
+                                setEditFiles(
+                                  editFiles.filter((_, i) => i !== idx),
+                                )
+                              }
                               className="p-0.5 rounded hover:bg-red-500/20 text-text-muted hover:text-red-400 transition"
                             >
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              <svg
+                                className="w-3 h-3"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M6 18L18 6M6 6l12 12"
+                                />
                               </svg>
                             </button>
                           </div>
@@ -3935,7 +3925,7 @@ ${pdfUrlList}
                           d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
                         />
                       </svg>
-                      <span className="hidden sm:inline">Attach File</span>
+                      <span className="hidden sm:inline">Attach</span>
                     </button>
                     <button
                       type="submit"
@@ -3967,24 +3957,40 @@ ${pdfUrlList}
                               d="M13 10V3L4 14h7v7l9-11h-7z"
                             />
                           </svg>
-                          <span>Apply Changes</span>
+                          <span>Apply</span>
                         </>
                       )}
                     </button>
                   </div>
                   <div className="flex items-center justify-center gap-2 text-xs text-text-muted">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
                     </svg>
-                    <span>Press <kbd className="px-1.5 py-0.5 text-[10px] font-semibold bg-bg-tertiary border border-border-secondary rounded">Enter</kbd> to apply changes quickly</span>
+                    <span>
+                      Press{" "}
+                      <kbd className="px-1.5 py-0.5 text-[10px] font-semibold bg-bg-tertiary border border-border-secondary rounded">
+                        Enter
+                      </kbd>{" "}
+                      to apply changes quickly
+                    </span>
                   </div>
                 </div>
 
                 {/* Mobile/Tablet: Layout */}
                 <div className="flex lg:hidden flex-col gap-2.5">
                   {/* Auth selector for mobile edit */}
-                  <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-medium text-text-muted">
                         Add:
                       </span>
@@ -4000,14 +4006,14 @@ ${pdfUrlList}
                           )
                         }
                         disabled={isEditing}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
                           editAppAuth.includes("username-password")
                             ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                             : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                         } disabled:opacity-50`}
                       >
                         <svg
-                          className="w-3 h-3"
+                          className="w-3 h-3 flex-shrink-0"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -4031,14 +4037,14 @@ ${pdfUrlList}
                           )
                         }
                         disabled={isEditing}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
                           editAppAuth.includes("google")
                             ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
                             : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                         } disabled:opacity-50`}
                       >
                         <svg
-                          className="w-3 h-3"
+                          className="w-3 h-3 flex-shrink-0"
                           viewBox="0 0 24 24"
                           fill="currentColor"
                         >
@@ -4049,32 +4055,32 @@ ${pdfUrlList}
                         </svg>
                         Google
                       </button>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowDbModal(true)}
-                      disabled={isEditing}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap transition ${
-                        currentAppDatabase.length > 0
-                          ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
-                          : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
-                      } disabled:opacity-50`}
-                    >
-                      <svg
-                        className="w-3 h-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={1.5}
+                      <button
+                        type="button"
+                        onClick={() => setShowDbModal(true)}
+                        disabled={isEditing}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
+                          currentAppDatabase.length > 0
+                            ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
+                            : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
+                        } disabled:opacity-50`}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375"
-                        />
-                      </svg>
-                      Database
-                    </button>
+                        <svg
+                          className="w-3 h-3 flex-shrink-0"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375"
+                          />
+                        </svg>
+                        Database
+                      </button>
+                    </div>
                   </div>
                   {/* Auth prefill tags for mobile */}
                   {editAppAuth.length > 0 && (
@@ -4139,16 +4145,16 @@ ${pdfUrlList}
                       )}
                     </div>
                   )}
-                  <div className="flex items-end gap-2">
+                  <div className="flex items-end gap-2 min-w-0">
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
                       disabled={isEditing}
-                      className="p-3 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary rounded-xl transition disabled:opacity-50"
+                      className="flex-shrink-0 p-2.5 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary rounded-xl transition disabled:opacity-50"
                       title="Attach file"
                     >
                       <svg
-                        className="w-5 h-5"
+                        className="w-4 h-4"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -4161,7 +4167,7 @@ ${pdfUrlList}
                         />
                       </svg>
                     </button>
-                    <div className="flex-1 relative">
+                    <div className="flex-1 min-w-0 relative">
                       <textarea
                         value={editPrompt}
                         onChange={(e) => setEditPrompt(e.target.value)}
@@ -4178,19 +4184,19 @@ ${pdfUrlList}
                         maxLength={60}
                         placeholder={
                           editAppAuth.length > 0
-                            ? "Add instructions (optional)..."
+                            ? "Instructions (optional)..."
                             : "Describe changes..."
                         }
                         rows={1}
                         disabled={isEditing}
-                        className="w-full px-4 py-3 bg-bg-tertiary/55 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 resize-none text-sm disabled:opacity-50"
-                        style={{ minHeight: "46px", maxHeight: "120px" }}
+                        className="w-full px-3 py-2.5 bg-bg-tertiary/55 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 resize-none text-sm disabled:opacity-50"
+                        style={{ minHeight: "42px", maxHeight: "120px" }}
                       />
                     </div>
                     <button
                       type="submit"
                       disabled={isEditSubmitDisabled}
-                      className="inline-flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {isEditing ? (
                         <>

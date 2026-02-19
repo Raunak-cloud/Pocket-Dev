@@ -31,9 +31,11 @@ const nextConfig: NextConfig = {
     {
       source: "/(.*)",
       headers: [
-        { key: "X-Frame-Options", value: "DENY" },
         { key: "X-Content-Type-Options", value: "nosniff" },
         { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        // Required by WebContainer (SharedArrayBuffer + worker transfer)
+        { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+        { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
       ],
     },
     {

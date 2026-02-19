@@ -14,6 +14,26 @@ export interface SandboxFiles {
   [path: string]: string;
 }
 
+function toProxyImageUrl(rawUrl: string): string {
+  return `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
+}
+
+function rewriteExternalImageUrls(content: string): string {
+  const supabaseStorageUrlRe =
+    /https:\/\/[a-z0-9-]+\.supabase\.co\/storage\/v1\/object\/public\/[^"'`\s)]+/gi;
+  const genericImageUrlRe =
+    /https?:\/\/[^"'`\s)]+\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^"'`\s)]*)?/gi;
+
+  const rewrite = (url: string) => {
+    if (url.startsWith("/api/image-proxy?url=")) return url;
+    return toProxyImageUrl(url);
+  };
+
+  let next = content.replace(supabaseStorageUrlRe, rewrite);
+  next = next.replace(genericImageUrlRe, rewrite);
+  return next;
+}
+
 export function hasAuthentication(project: ReactProject): boolean {
   return project.files.some(
     (f) =>
@@ -50,18 +70,8 @@ export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
 
   project.files.forEach((f) => {
     if (managedConfigFiles.has(f.path)) return;
-    files[f.path] = f.content;
+    files[f.path] = rewriteExternalImageUrls(f.content);
   });
-
-  let supabaseImageHost = "";
-  try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    if (supabaseUrl) {
-      supabaseImageHost = new URL(supabaseUrl).hostname;
-    }
-  } catch {
-    supabaseImageHost = "";
-  }
 
   files["package.json"] = JSON.stringify(
     {
@@ -102,27 +112,12 @@ export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
   files["next.config.js"] = `/** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'replicate.delivery',
+        hostname: '**',
       },
-      {
-        protocol: 'https',
-        hostname: 'utfs.io',
-      },
-      {
-        protocol: 'https',
-        hostname: 'lh3.googleusercontent.com',
-      },${
-        supabaseImageHost
-          ? `
-      {
-        protocol: 'https',
-        hostname: '${supabaseImageHost}',
-      },`
-          : ""
-      }
     ],
   },
 };
@@ -184,6 +179,78 @@ module.exports = {
     null,
     2,
   );
+
+  files["app/api/image-proxy/route.ts"] = `import { NextRequest, NextResponse } from "next/server";
+
+const BLOCKED_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function badRequest(message: string) {
+  return NextResponse.json({ error: message }, { status: 400 });
+}
+
+export async function GET(request: NextRequest) {
+  const encoded = request.nextUrl.searchParams.get("url");
+  if (!encoded) {
+    return badRequest("Missing url query parameter");
+  }
+
+  let target: URL;
+  try {
+    target = new URL(encoded);
+  } catch {
+    return badRequest("Invalid image URL");
+  }
+
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    return badRequest("Only http/https image URLs are allowed");
+  }
+  if (BLOCKED_HOSTS.has(target.hostname)) {
+    return badRequest("Blocked host");
+  }
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(target.toString(), { redirect: "follow" });
+  } catch {
+    return NextResponse.json(
+      { error: "Failed to fetch upstream image" },
+      { status: 502 },
+    );
+  }
+
+  if (!upstream.ok) {
+    return NextResponse.json(
+      { error: \`Upstream image request failed with status \${upstream.status}\` },
+      { status: 502 },
+    );
+  }
+
+  const contentType = upstream.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    return NextResponse.json(
+      { error: "Upstream response is not an image" },
+      { status: 415 },
+    );
+  }
+
+  const arr = await upstream.arrayBuffer();
+  if (arr.byteLength > MAX_IMAGE_BYTES) {
+    return NextResponse.json(
+      { error: "Image too large for preview proxy" },
+      { status: 413 },
+    );
+  }
+
+  return new NextResponse(arr, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400",
+    },
+  });
+}
+`;
 
   if (!files["app/globals.css"]) {
     files["app/globals.css"] = `@tailwind base;

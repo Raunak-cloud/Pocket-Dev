@@ -1,27 +1,23 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  createSandboxServer,
-  updateSandboxFiles,
-  closeSandbox,
-  keepAliveSandbox,
-  ensureSandboxHealthy,
-} from "@/app/sandbox-actions";
+import { WebContainer } from "@webcontainer/api";
 import {
   prepareSandboxFiles,
   computeFileDiff,
-  hasAuthentication,
 } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
-interface SandboxPreviewProps {
+interface WebContainerPreviewProps {
   project: ReactProject | null;
   previewKey: number;
-  projectId?: string | null;
   textEditMode?: boolean;
   imageSelectMode?: boolean;
-  onTextEdited?: (originalText: string, updatedText: string) => void;
+  onTextEdited?: (
+    originalText: string,
+    updatedText: string,
+    occurrence?: number,
+  ) => void;
   onImageSelected?: (payload: {
     src: string;
     resolvedSrc?: string;
@@ -31,161 +27,175 @@ interface SandboxPreviewProps {
   onSyncStateChange?: (isSyncing: boolean) => void;
 }
 
-export default function SandboxPreview({
+/**
+ * Convert a flat file map (e.g. {"app/page.tsx": "..."})
+ * into the nested tree structure WebContainer expects.
+ */
+function toFileTree(
+  flat: Record<string, string>,
+): Record<string, any> {
+  const tree: Record<string, any> = {};
+
+  for (const [filePath, contents] of Object.entries(flat)) {
+    const parts = filePath.split("/");
+    let current = tree;
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      const dir = parts[i];
+      if (!current[dir]) {
+        current[dir] = { directory: {} };
+      }
+      current = current[dir].directory;
+    }
+
+    const fileName = parts[parts.length - 1];
+    current[fileName] = { file: { contents } };
+  }
+
+  return tree;
+}
+
+// Singleton WebContainer instance (only one per page is allowed)
+let wcInstance: WebContainer | null = null;
+let wcBootPromise: Promise<WebContainer> | null = null;
+
+async function getWebContainer(): Promise<WebContainer> {
+  if (wcInstance) return wcInstance;
+  if (wcBootPromise) return wcBootPromise;
+
+  wcBootPromise = WebContainer.boot().then((instance) => {
+    wcInstance = instance;
+    return instance;
+  });
+
+  return wcBootPromise;
+}
+
+export default function WebContainerPreview({
   project,
   previewKey,
-  projectId = null,
   textEditMode = false,
   imageSelectMode = false,
   onTextEdited,
   onImageSelected,
   onSyncStateChange,
-}: SandboxPreviewProps) {
-  const [sandboxId, setSandboxId] = useState<string | null>(null);
+}: WebContainerPreviewProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [startupId, setStartupId] = useState<string | null>(null);
-  const [startupLogs, setStartupLogs] = useState<string[]>([]);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [loadingState, setLoadingState] = useState<
     "creating" | "installing" | "starting" | "ready" | "error"
   >("creating");
   const [error, setError] = useState<string | null>(null);
+  const [startupLogs, setStartupLogs] = useState<string[]>([]);
   const prevFilesRef = useRef<Record<string, string> | null>(null);
   const latestProjectRef = useRef<ReactProject | null>(project);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const recoveringRef = useRef(false);
-  // Hard lock: prevent concurrent sandbox creation calls
-  const creatingRef = useRef(false);
-  // Track current sandboxId in a ref so useCallback can access it without re-renders
-  const sandboxIdRef = useRef<string | null>(null);
-  const previewUrlRef = useRef<string | null>(null);
-  const hasAuthPreviewHint = project ? hasAuthentication(project) : false;
+  const containerRef = useRef<WebContainer | null>(null);
+  const serverProcessRef = useRef<any>(null);
 
   useEffect(() => {
     latestProjectRef.current = project;
   }, [project]);
 
-  // Keep refs in sync with state for use inside useCallback
+  // Effect 1: Boot WebContainer and set up project
   useEffect(() => {
-    sandboxIdRef.current = sandboxId;
-  }, [sandboxId]);
-  useEffect(() => {
-    previewUrlRef.current = previewUrl;
-  }, [previewUrl]);
+    const currentProject = latestProjectRef.current;
+    if (!currentProject) return;
 
-  const startSandbox = useCallback(
-    async (opts?: { previousSandboxId?: string | null }) => {
-      const currentProject = latestProjectRef.current;
-      if (!currentProject) return null;
+    let mounted = true;
 
-      // Hard lock: only one creation at a time
-      if (creatingRef.current) {
-        console.log("[SandboxPreview] Sandbox creation already in progress, skipping");
-        return null;
-      }
-      creatingRef.current = true;
-
-      let phaseTimer: NodeJS.Timeout | null = null;
+    const init = async () => {
       try {
-        // Fix 2: Reuse — if we already have a sandbox and this isn't a forced
-        // recreation (previousSandboxId signals the old one is dead), check if
-        // the existing sandbox is still healthy before spinning up a new one.
-        const existingId = sandboxIdRef.current;
-        if (existingId && !opts?.previousSandboxId) {
-          try {
-            const health = await ensureSandboxHealthy(existingId, {
-              projectId: projectId || undefined,
-            });
-            if (health.ok && health.url) {
-              console.log("[SandboxPreview] Existing sandbox is healthy, reusing:", existingId);
-              setPreviewUrl(health.url);
-              setLoadingState("ready");
-              return { sandboxId: existingId, url: health.url };
-            }
-          } catch {
-            // Existing sandbox is gone — fall through to create new
-          }
-        }
-
         setLoadingState("creating");
         setError(null);
         setStartupLogs([]);
+        setPreviewUrl(null);
+
+        const addLog = (msg: string) => {
+          if (!mounted) return;
+          setStartupLogs((prev) => [...prev.slice(-80), msg]);
+        };
+
+        addLog("Booting WebContainer...");
+        const wc = await getWebContainer();
+        containerRef.current = wc;
+
+        if (!mounted) return;
+        addLog("WebContainer ready");
+
+        // Prepare and mount files
         const files = prepareSandboxFiles(currentProject);
-        const newStartupId = `sbx_${Date.now()}_${Math.random()
-          .toString(36)
-          .slice(2, 9)}`;
-        setStartupId(newStartupId);
+        const fileTree = toFileTree(files);
 
-        setLoadingState("installing");
-        phaseTimer = setTimeout(() => {
-          setLoadingState("starting");
-        }, 90_000);
-
-        const sandboxPromise = createSandboxServer(files, newStartupId, {
-          projectId: projectId || undefined,
-        });
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(
-            () => {
-              reject(
-                new Error(
-                  "Sandbox startup is taking too long (over 15 minutes). Please retry.",
-                ),
-              );
-            },
-            15 * 60 * 1000,
-          );
-        });
-
-        const { sandboxId: nextSandboxId, url } = await Promise.race([
-          sandboxPromise,
-          timeoutPromise,
-        ]);
-
-        if (phaseTimer) clearTimeout(phaseTimer);
-
-        setSandboxId(nextSandboxId);
-        setPreviewUrl(url);
-        setPreviewVersion(0);
+        addLog(`Mounting ${Object.keys(files).length} files...`);
+        await wc.mount(fileTree);
         prevFilesRef.current = files;
-        setLoadingState("ready");
 
-        if (
-          opts?.previousSandboxId &&
-          opts.previousSandboxId !== nextSandboxId
-        ) {
-          closeSandbox(opts.previousSandboxId);
+        if (!mounted) return;
+        addLog("Files mounted");
+
+        // Install dependencies
+        setLoadingState("installing");
+        addLog("Installing dependencies (npm install)...");
+
+        const installProcess = await wc.spawn("npm", ["install", "--no-audit", "--no-fund", "--progress=false"]);
+
+        installProcess.output.pipeTo(
+          new WritableStream({
+            write(data) {
+              if (!mounted) return;
+              const lines = data.split("\n").filter((l: string) => l.trim());
+              for (const line of lines) {
+                addLog(line);
+              }
+            },
+          }),
+        ).catch(() => {});
+
+        const installExitCode = await installProcess.exit;
+
+        if (!mounted) return;
+
+        if (installExitCode !== 0) {
+          setLoadingState("error");
+          setError(`npm install failed with exit code ${installExitCode}`);
+          return;
         }
+        addLog("Dependencies installed successfully");
 
-        return { sandboxId: nextSandboxId, url };
+        // Start dev server
+        setLoadingState("starting");
+        addLog("Starting development server...");
+
+        const devProcess = await wc.spawn("npx", ["next", "dev", "--port", "3000"]);
+        serverProcessRef.current = devProcess;
+
+        devProcess.output.pipeTo(
+          new WritableStream({
+            write(data) {
+              if (!mounted) return;
+              const lines = data.split("\n").filter((l: string) => l.trim());
+              for (const line of lines) {
+                addLog(line);
+              }
+            },
+          }),
+        ).catch(() => {});
+
+        // Listen for server-ready event
+        wc.on("server-ready", (_port, url) => {
+          if (!mounted) return;
+          addLog(`Dev server ready at ${url}`);
+          setPreviewUrl(url);
+          setPreviewVersion(0);
+          setLoadingState("ready");
+        });
       } catch (err) {
-        if (phaseTimer) clearTimeout(phaseTimer);
+        if (!mounted) return;
         setLoadingState("error");
         setError(
-          err instanceof Error ? err.message : "Failed to create sandbox",
+          err instanceof Error ? err.message : "Failed to start WebContainer",
         );
-        return null;
-      } finally {
-        creatingRef.current = false;
-      }
-    },
-    [projectId],
-  );
-
-  // Effect 1: Create sandbox
-  useEffect(() => {
-    if (!latestProjectRef.current) return;
-
-    let mounted = true;
-    let currentSandboxId: string | null = null;
-
-    const init = async () => {
-      const started = await startSandbox();
-      if (!started) return;
-      currentSandboxId = started.sandboxId;
-
-      if (!mounted) {
-        await closeSandbox(started.sandboxId);
       }
     };
 
@@ -193,63 +203,17 @@ export default function SandboxPreview({
 
     return () => {
       mounted = false;
-      if (currentSandboxId) {
-        closeSandbox(currentSandboxId);
+      // Kill running server process
+      if (serverProcessRef.current) {
+        try {
+          serverProcessRef.current.kill();
+        } catch {}
+        serverProcessRef.current = null;
       }
     };
-  }, [previewKey, startSandbox]);
+  }, [previewKey]);
 
-  // Effect 1b: Poll live startup logs/status.
-  useEffect(() => {
-    if (!startupId || loadingState === "ready" || loadingState === "error") {
-      return;
-    }
-
-    let stopped = false;
-
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/sandbox-status?id=${startupId}`, {
-          cache: "no-store",
-        });
-        if (!response.ok) return;
-
-        const data = await response.json();
-        if (stopped || data.found !== true) return;
-
-        if (Array.isArray(data.logs)) {
-          setStartupLogs(data.logs);
-        }
-
-        if (
-          data.phase === "creating" ||
-          data.phase === "installing" ||
-          data.phase === "starting"
-        ) {
-          setLoadingState(data.phase);
-        }
-
-        if (data.phase === "error") {
-          setLoadingState("error");
-          setError(
-            typeof data.error === "string" && data.error
-              ? data.error
-              : "Failed to start sandbox",
-          );
-        }
-      } catch {
-        // Keep polling.
-      }
-    };
-
-    poll();
-    const interval = setInterval(poll, 1200);
-    return () => {
-      stopped = true;
-      clearInterval(interval);
-    };
-  }, [startupId, loadingState]);
-
+  // Effect: Forward text edit mode to iframe
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe?.contentWindow) return;
@@ -259,6 +223,7 @@ export default function SandboxPreview({
     );
   }, [textEditMode, previewUrl]);
 
+  // Effect: Forward image select mode to iframe
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe?.contentWindow) return;
@@ -268,16 +233,40 @@ export default function SandboxPreview({
     );
   }, [imageSelectMode, previewUrl]);
 
+  // Effect: Listen for postMessage from iframe
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data;
       if (!data || typeof data !== "object") return;
+
+      // When the bridge (re)mounts after HMR or iframe remount, re-send
+      // the current text-edit / image-select mode so it stays in sync.
+      if (data.type === "pocket:bridge-ready") {
+        const iframe = iframeRef.current;
+        if (!iframe?.contentWindow) return;
+        iframe.contentWindow.postMessage(
+          { type: "pocket:set-text-edit-mode", enabled: textEditMode },
+          "*",
+        );
+        iframe.contentWindow.postMessage(
+          { type: "pocket:set-image-select-mode", enabled: imageSelectMode },
+          "*",
+        );
+        return;
+      }
+
       if (
         data.type === "pocket:text-edited" &&
         typeof data.originalText === "string" &&
         typeof data.updatedText === "string"
       ) {
-        onTextEdited?.(data.originalText, data.updatedText);
+        onTextEdited?.(
+          data.originalText,
+          data.updatedText,
+          typeof data.occurrence === "number" && data.occurrence > 0
+            ? data.occurrence
+            : 1,
+        );
       }
       if (
         data.type === "pocket:image-selected" &&
@@ -298,13 +287,15 @@ export default function SandboxPreview({
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [onTextEdited, onImageSelected]);
+  }, [onTextEdited, onImageSelected, textEditMode, imageSelectMode]);
 
-  // Effect 2: Update files
+  // Effect: Update files when project changes (HMR-style sync)
   useEffect(() => {
-    if (!sandboxId || !prevFilesRef.current || !project) return;
+    if (!containerRef.current || !prevFilesRef.current || !project) return;
+    if (loadingState !== "ready") return;
 
     const update = async () => {
+      const wc = containerRef.current!;
       try {
         const newFiles = prepareSandboxFiles(project);
         const { toWrite, toDelete } = computeFileDiff(
@@ -312,74 +303,43 @@ export default function SandboxPreview({
           newFiles,
         );
 
-        if (toWrite.length > 0 || toDelete.length > 0) {
-          onSyncStateChange?.(true);
-          await updateSandboxFiles(sandboxId, toWrite, toDelete);
-          prevFilesRef.current = newFiles;
+        if (toWrite.length === 0 && toDelete.length === 0) return;
 
-          // Force preview remount after sync so users see edits immediately.
-          // Next.js dev HMR inside a cross-origin iframe can be inconsistent.
+        onSyncStateChange?.(true);
+
+        for (const { path, data } of toWrite) {
+          // Ensure parent directory exists
+          const dir = path.split("/").slice(0, -1).join("/");
+          if (dir) {
+            await wc.fs.mkdir(dir, { recursive: true });
+          }
+          await wc.fs.writeFile(path, data);
+        }
+
+        for (const path of toDelete) {
+          try {
+            await wc.fs.rm(path);
+          } catch {
+            // File might not exist
+          }
+        }
+
+        prevFilesRef.current = newFiles;
+
+        // Force preview remount for changes HMR might miss
+        setPreviewVersion((prev) => prev + 1);
+        setTimeout(() => {
           setPreviewVersion((prev) => prev + 1);
-          setTimeout(() => {
-            setPreviewVersion((prev) => prev + 1);
-          }, 1800);
-        }
-      } catch (err: any) {
-        console.error("Error updating sandbox files:", err);
-        // Sandbox expired — recreate it automatically.
-        if (err?.message === "SANDBOX_EXPIRED") {
-          console.log("[SandboxPreview] Sandbox expired, recreating...");
-          startSandbox({ previousSandboxId: sandboxId });
-        }
+        }, 1800);
+      } catch (err) {
+        console.error("Error updating WebContainer files:", err);
       } finally {
         onSyncStateChange?.(false);
       }
     };
 
     update();
-  }, [project, sandboxId, onSyncStateChange, startSandbox]);
-
-  // Effect 3: Keep sandbox alive while user is on the preview
-  useEffect(() => {
-    if (!sandboxId || !project) return;
-
-    const interval = setInterval(async () => {
-      if (recoveringRef.current) return;
-      recoveringRef.current = true;
-      try {
-        await keepAliveSandbox(sandboxId);
-        const health = await ensureSandboxHealthy(sandboxId, {
-          projectId: projectId || undefined,
-        });
-
-        if (health.ok) {
-          if (health.url && health.url !== previewUrl) {
-            setPreviewUrl(health.url);
-          }
-          if (health.restarted) {
-            setLoadingState("ready");
-          }
-          return;
-        }
-
-        const restarted = await startSandbox({
-          previousSandboxId: sandboxId,
-        });
-        if (!restarted) {
-          setError(
-            "Preview sandbox recovery failed. Please click Preview again.",
-          );
-          setLoadingState("error");
-        }
-      } catch (err) {
-        console.error("Error during sandbox health check:", err);
-      } finally {
-        recoveringRef.current = false;
-      }
-    }, 75 * 1000);
-
-    return () => clearInterval(interval);
-  }, [project, sandboxId, previewUrl, startSandbox, projectId]);
+  }, [project, loadingState, onSyncStateChange]);
 
   return (
     <div className="relative h-full isolate" style={{ colorScheme: "normal" }}>
@@ -466,12 +426,12 @@ export default function SandboxPreview({
               </div>
             </div>
             <p className="text-sm font-medium text-text-secondary mb-1">
-              {loadingState === "creating" && "Creating sandbox..."}
+              {loadingState === "creating" && "Starting WebContainer..."}
               {loadingState === "installing" && "Installing dependencies..."}
               {loadingState === "starting" && "Starting dev server..."}
             </p>
             <p className="text-xs text-text-muted">
-              {loadingState === "creating" && "Setting up cloud environment"}
+              {loadingState === "creating" && "Booting in-browser environment"}
               {loadingState === "installing" && "This can take a few minutes"}
               {loadingState === "starting" && "Waiting for Next.js to start"}
             </p>
@@ -523,23 +483,6 @@ export default function SandboxPreview({
               {error ||
                 "There was an issue loading the preview. Try refreshing the page or regenerating the project."}
             </p>
-            {error && error.includes("Dev server") && (
-              <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-left">
-                <p className="text-xs font-semibold text-blue-300 mb-2">
-                  Quick Fixes:
-                </p>
-                <ul className="text-xs text-text-secondary space-y-1 list-disc list-inside">
-                  <li>
-                    Click "New" and try regenerating with a simpler prompt
-                  </li>
-                  <li>The AI may have generated code with syntax errors</li>
-                  <li>
-                    Check the startup logs above for specific error messages
-                  </li>
-                  <li>Try describing your project in more detail</li>
-                </ul>
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -547,32 +490,13 @@ export default function SandboxPreview({
       {/* Iframe preview */}
       {previewUrl && (
         <iframe
-          key={`${sandboxId ?? "sandbox"}:${previewVersion}`}
+          key={`wc-preview:${previewVersion}`}
           ref={iframeRef}
-          src={`${previewUrl}${previewUrl.includes("?") ? "&" : "?"}pv=${previewVersion}`}
+          src={previewUrl}
           className="w-full h-full border-0"
           style={{ colorScheme: "normal", backgroundColor: "transparent" }}
           title="Next.js Preview"
         />
-      )}
-
-      {/* Auth hint: small bottom-right toast so it doesn't block the preview */}
-      {previewUrl && loadingState === "ready" && hasAuthPreviewHint && (
-        <div className="absolute bottom-3 right-3 z-20 max-w-xs pointer-events-auto">
-          <div className="flex items-center gap-2 rounded-lg border border-border-primary bg-bg-secondary/95 backdrop-blur-md px-3 py-2 shadow-lg text-xs">
-            <span className="text-text-tertiary truncate">
-              OAuth flows?
-            </span>
-            <button
-              onClick={() =>
-                window.open(previewUrl, "_blank", "noopener,noreferrer")
-              }
-              className="shrink-0 rounded-md bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-500 transition"
-            >
-              Open in New Tab
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );

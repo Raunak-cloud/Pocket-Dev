@@ -25,7 +25,9 @@
       "Bash(npx tsx:*)",
       "Bash(ls:*)",
       "Bash(npx prisma migrate deploy:*)",
-      "Bash(npx dotenv:*)"
+      "Bash(npx dotenv:*)",
+      "Bash(npm uninstall:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

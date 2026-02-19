@@ -17,9 +17,6 @@ export interface ReactProject {
   };
   config?: WebsiteConfig;
   imageCache?: Record<string, string>;
-  sandboxId?: string;
-  sandboxUrl?: string;
-  sandboxCreatedAt?: number; // timestamp for TTL checking
   originalPrompt?: string;
   detectedTheme?: SiteTheme;
 }
@@ -52,9 +49,6 @@ export interface SavedProject {
   tier?: "free" | "premium";
   paidAt?: Date;
   config?: WebsiteConfig;
-  sandboxId?: string;
-  sandboxUrl?: string;
-  sandboxCreatedAt?: number; // timestamp for TTL checking
   originalPrompt?: string;
   detectedTheme?: SiteTheme;
 }
