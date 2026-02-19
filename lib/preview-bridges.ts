@@ -208,20 +208,6 @@ export default function PocketTextEditBridge() {
       }
     };
 
-    // Prevent link navigation in text edit / image select modes.
-    // Intercept mousedown and pointerdown to block framework routers
-    // (e.g. Next.js Link) that may navigate before our click handler fires.
-    const onPointerOrMouseDown = (event: Event) => {
-      if (!window.__pocketTextEditMode && !window.__pocketImageSelectMode) return;
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      const link = target.closest("a");
-      if (link) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-
     const resolveEditable = (target: HTMLElement): HTMLElement | null => {
       let editable = target.closest(EDITABLE_SELECTOR) as HTMLElement | null;
       if (!editable) return null;
@@ -259,6 +245,23 @@ export default function PocketTextEditBridge() {
         }
         if (!image) {
           image = target.querySelector("img") as HTMLImageElement | null;
+        }
+
+        // Fallback: use elementsFromPoint to find images hidden behind overlays
+        // (e.g. hero images under gradient overlays with higher z-index)
+        if (!image) {
+          const elements = document.elementsFromPoint(event.clientX, event.clientY);
+          for (const el of elements) {
+            if (el.tagName === "IMG") {
+              image = el as HTMLImageElement;
+              break;
+            }
+            const child = (el as HTMLElement).querySelector?.("img");
+            if (child) {
+              image = child as HTMLImageElement;
+              break;
+            }
+          }
         }
 
         if (image) {
@@ -399,8 +402,6 @@ export default function PocketTextEditBridge() {
     };
 
     window.addEventListener("message", onMessage);
-    document.addEventListener("pointerdown", onPointerOrMouseDown, true);
-    document.addEventListener("mousedown", onPointerOrMouseDown, true);
     document.addEventListener("click", onClick, true);
     document.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("focusout", onFocusOut, true);
@@ -411,8 +412,6 @@ export default function PocketTextEditBridge() {
 
     return () => {
       window.removeEventListener("message", onMessage);
-      document.removeEventListener("pointerdown", onPointerOrMouseDown, true);
-      document.removeEventListener("mousedown", onPointerOrMouseDown, true);
       document.removeEventListener("click", onClick, true);
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusout", onFocusOut, true);
