@@ -332,11 +332,11 @@ export default function DashboardSidebar({
       {/* Theme Toggle */}
       {!isCollapsed ? (
         <div className="px-4 pb-2">
-          <ThemeToggle className="w-full justify-center" size={16} />
+          <ThemeToggle className="w-full justify-center" />
         </div>
       ) : (
         <div className="flex justify-center pb-2">
-          <ThemeToggle size={16} />
+          <ThemeToggle compact size={16} />
         </div>
       )}
 

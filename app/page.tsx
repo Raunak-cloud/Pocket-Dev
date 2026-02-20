@@ -50,10 +50,74 @@ const BASE_GENERATION_APP_COST = 2;
 const BASE_EDIT_APP_COST = 0.1;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
+const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
+const MAX_EDIT_HISTORY_ENTRIES = 200;
 
 // Helper function to format token values to 2 decimal places
 const formatTokens = (tokens: number): string => {
   return tokens.toFixed(2);
+};
+
+const parseEditHistoryFromConfig = (
+  config?: ReactProject["config"],
+): EditHistoryEntry[] => {
+  const raw = (config as Record<string, unknown> | undefined)?.[
+    EDIT_HISTORY_CONFIG_KEY
+  ];
+  if (!Array.isArray(raw)) return [];
+
+  const parsed = raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const candidate = item as Partial<EditHistoryEntry> & {
+        timestamp?: Date | string;
+      };
+      if (
+        typeof candidate.id !== "string" ||
+        typeof candidate.prompt !== "string" ||
+        !Array.isArray(candidate.files) ||
+        !candidate.dependencies
+      ) {
+        return null;
+      }
+      const timestampValue = candidate.timestamp
+        ? new Date(candidate.timestamp)
+        : new Date();
+      const timestamp = Number.isNaN(timestampValue.getTime())
+        ? new Date()
+        : timestampValue;
+      return {
+        id: candidate.id,
+        prompt: candidate.prompt,
+        files: candidate.files,
+        dependencies: candidate.dependencies as Record<string, string>,
+        timestamp,
+      } satisfies EditHistoryEntry;
+    })
+    .filter((entry): entry is EditHistoryEntry => !!entry);
+
+  return parsed.slice(-MAX_EDIT_HISTORY_ENTRIES);
+};
+
+const applyEditHistoryToProject = (
+  projectData: ReactProject,
+  history: EditHistoryEntry[],
+): ReactProject => {
+  const serialized = history
+    .slice(-MAX_EDIT_HISTORY_ENTRIES)
+    .map((entry) => ({
+      ...entry,
+      timestamp: entry.timestamp.toISOString(),
+    }));
+  const existingConfig = (projectData.config ??
+    {}) as Record<string, unknown>;
+  return {
+    ...projectData,
+    config: {
+      ...existingConfig,
+      [EDIT_HISTORY_CONFIG_KEY]: serialized,
+    } as unknown as ReactProject["config"],
+  };
 };
 
 // Main content component
@@ -856,25 +920,44 @@ function ReactGeneratorContent() {
   };
 
   // Load edit history for a project
-  const loadEditHistory = async (projectId: string) => {
-    // Edit history is currently client-session based after Firebase removal.
-    // Keep current state for active session and reset when switching projects.
+  const loadEditHistory = async (
+    projectId: string,
+    config?: ReactProject["config"],
+  ) => {
     void projectId;
-    setEditHistory([]);
+    setEditHistory(parseEditHistoryFromConfig(config));
   };
 
   // Rollback to a previous version from edit history
   const rollbackToVersion = async (entry: EditHistoryEntry) => {
-    if (!currentProjectId || !user) return;
+    if (!currentProjectId || !user || !project) return;
     setIsRollingBack(true);
     try {
-      const restoredProject: ReactProject = {
+      const rollbackSnapshot: EditHistoryEntry = {
+        id: `rollback_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        prompt: `Rollback to: ${entry.prompt}`,
+        files: project.files,
+        dependencies: project.dependencies || {},
+        timestamp: new Date(),
+      };
+      const nextHistory = [...editHistory, rollbackSnapshot].slice(
+        -MAX_EDIT_HISTORY_ENTRIES,
+      );
+      const restoredProjectBase: ReactProject = {
         files: entry.files,
         dependencies: entry.dependencies || {},
         lintReport: { passed: true, errors: 0, warnings: 0 },
       };
+      const restoredProject = applyEditHistoryToProject(
+        restoredProjectBase,
+        nextHistory,
+      );
       setProject(restoredProject);
+      setEditHistory(nextHistory);
+      setShowEditHistory(true);
+      setPreviewKey((prev) => prev + 1);
       await updateProjectInFirestore(currentProjectId, restoredProject);
+      updateSavedProjectCache(currentProjectId, restoredProject);
       // Preview updates via file diff
       if (publishedUrl) {
         setHasUnpublishedChanges(true);
@@ -910,7 +993,7 @@ function ReactGeneratorContent() {
     // Force preview to re-initialize with new project data
     setPreviewKey((prev) => prev + 1);
     // Load edit history
-    loadEditHistory(savedProject.id);
+    loadEditHistory(savedProject.id, savedProject.config);
   };
 
   // Delete project
@@ -1558,6 +1641,7 @@ Even if you only modify 1-2 files, you must include ALL files in the output JSON
 Do not skip any files. Keep unmodified files exactly as they are.`;
 
     // Save current project state as a snapshot before applying the edit
+    let currentEditHistory = editHistory;
     if (currentProjectId && user) {
       try {
         const editPromptText =
@@ -1566,8 +1650,8 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         const historyId = `local_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 8)}`;
-        setEditHistory((prev) => [
-          ...prev,
+        const nextHistory = [
+          ...editHistory,
           {
             id: historyId,
             prompt: editPromptText,
@@ -1575,7 +1659,18 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
             dependencies: project.dependencies || {},
             timestamp: new Date(),
           },
-        ]);
+        ].slice(-MAX_EDIT_HISTORY_ENTRIES);
+        currentEditHistory = nextHistory;
+        setEditHistory(nextHistory);
+        setShowEditHistory(true);
+
+        const projectWithHistory = applyEditHistoryToProject(
+          project,
+          nextHistory,
+        );
+        setProject(projectWithHistory);
+        updateSavedProjectCache(currentProjectId, projectWithHistory);
+        await updateProjectInFirestore(currentProjectId, projectWithHistory);
       } catch (historyError) {
         console.error("Error saving edit history:", historyError);
       }
@@ -1613,7 +1708,10 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         originalPrompt: project.originalPrompt || result.originalPrompt,
         detectedTheme: project.detectedTheme || result.detectedTheme,
       });
-      const mergedProject = { ...result, files: persistedFiles };
+      const mergedProject = applyEditHistoryToProject(
+        { ...result, files: persistedFiles },
+        currentEditHistory,
+      );
 
       setProject(mergedProject);
       // Force preview re-init after AI edit to avoid stale iframe/HMR state.
@@ -1629,6 +1727,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       if (currentProjectId && user) {
         try {
           await updateProjectInFirestore(currentProjectId, mergedProject);
+          updateSavedProjectCache(currentProjectId, mergedProject);
 
           // Mark that there are unpublished changes
           if (publishedUrl) {
@@ -3142,7 +3241,7 @@ ${pdfUrlList}
             </div>
 
             {/* Edit Panel - Right on desktop, Bottom on mobile/tablet */}
-            <div className="flex-shrink-0 lg:w-56 xl:w-64 border-t lg:border-t-0 lg:border-l border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col">
+            <div className="flex-shrink-0 lg:w-[clamp(15rem,24vw,20rem)] border-t lg:border-t-0 lg:border-l border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col min-h-0 overflow-hidden">
               {/* Panel Header - Desktop only */}
 
               {/* Low token balance indicator */}
@@ -3463,10 +3562,10 @@ ${pdfUrlList}
               {/* Edit Form */}
               <form
                 onSubmit={handleEdit}
-                className="flex-1 flex flex-col p-4 gap-4"
+                className="flex-1 min-h-0 overflow-y-auto flex flex-col p-4 gap-4"
               >
                 {/* Desktop: Vertical layout with taller textarea */}
-                <div className="hidden lg:flex flex-col gap-4 flex-1">
+                <div className="hidden lg:flex flex-col gap-4 flex-1 min-h-0">
                   {/* Header */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -3904,7 +4003,7 @@ ${pdfUrlList}
                   )}
 
                   {/* Actions */}
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 lg:sticky lg:bottom-0 lg:z-10 lg:pt-2 lg:bg-bg-secondary/95 lg:backdrop-blur-sm">
                     <button
                       type="button"
                       onClick={() => editFileInputRef.current?.click()}
@@ -3962,7 +4061,7 @@ ${pdfUrlList}
                       )}
                     </button>
                   </div>
-                  <div className="flex items-center justify-center gap-2 text-xs text-text-muted">
+                  <div className="flex items-center justify-center gap-2 text-xs text-text-muted lg:pb-1">
                     <svg
                       className="w-3.5 h-3.5"
                       fill="none"
@@ -4372,6 +4471,48 @@ ${pdfUrlList}
             if (projectToDelete) deleteProject(projectToDelete);
           }}
         />
+
+        {/* Token Confirmation Modal (success view) */}
+        {showTokenConfirmModal &&
+          (() => {
+            const isGeneration = showTokenConfirmModal === "generation";
+            const authCost = isGeneration
+              ? getAuthAppCost(currentAppAuth)
+              : getAuthAppCost(editAppAuth);
+            const databaseCost = getDatabaseAppCost(currentAppDatabase);
+            const baseCost = isGeneration
+              ? BASE_GENERATION_APP_COST
+              : BASE_EDIT_APP_COST;
+            const totalCost = baseCost + authCost + databaseCost;
+            const appBalance = userData?.appTokens || 0;
+
+            const handleConfirm = () => {
+              if (isGeneration) {
+                setShowTokenConfirmModal(null);
+                startGeneration();
+              } else {
+                proceedWithEdit();
+              }
+            };
+
+            return (
+              <TokenConfirmModal
+                isOpen={true}
+                onClose={() => setShowTokenConfirmModal(null)}
+                confirmationType={isGeneration ? "generation" : "edit"}
+                totalCost={totalCost}
+                baseCost={baseCost}
+                authCost={authCost}
+                databaseCost={databaseCost}
+                appBalance={appBalance}
+                skipEditTokenConfirm={skipEditTokenConfirm}
+                onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
+                onConfirm={handleConfirm}
+                currentAppAuth={currentAppAuth}
+                editAppAuth={editAppAuth}
+              />
+            );
+          })()}
 
         {/* Token Purchase Modal (success view) */}
         <TokenPurchaseModal

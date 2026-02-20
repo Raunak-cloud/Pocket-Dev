@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -10,6 +10,12 @@ interface ProjectFile {
 }
 
 type ProjectFileWithNormalizedPath = ProjectFile & { normalizedPath: string };
+type ResolvedComponent = {
+  file: ProjectFileWithNormalizedPath;
+  localName: string;
+};
+const WRANGLER_VERSION = process.env.WRANGLER_VERSION || "4.64.0";
+const WRANGLER_EXEC_CWD = join(tmpdir(), "pocketdev-wrangler-exec");
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -61,41 +67,257 @@ function findFirstFileByRegex(
 
 function getImportMap(pageCode: string): Map<string, string> {
   const map = new Map<string, string>();
-  const re = /import\s+(\w+)\s+from\s+["']([^"']+)["']/g;
+  const re = /import\s+([\s\S]*?)\s+from\s+["']([^"']+)["']/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(pageCode)) !== null) {
-    map.set(m[1], m[2]);
+    const clause = m[1].trim();
+    const source = m[2].trim();
+
+    // import Foo from "..."
+    const defaultMatch = clause.match(/^([A-Za-z_$][\w$]*)/);
+    if (defaultMatch) {
+      map.set(defaultMatch[1], source);
+    }
+
+    // import { A, B as C } from "..."
+    const namedMatch = clause.match(/\{([^}]+)\}/);
+    if (namedMatch) {
+      const names = namedMatch[1]
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean);
+      for (const name of names) {
+        const asMatch = name.match(
+          /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+        );
+        if (asMatch) {
+          map.set(asMatch[2], source);
+        } else if (/^[A-Za-z_$][\w$]*$/.test(name)) {
+          map.set(name, source);
+        }
+      }
+    }
   }
   return map;
 }
 
-function findComponentFile(
-  files: ProjectFileWithNormalizedPath[],
-  pageFile: ProjectFileWithNormalizedPath,
-  componentName: string,
-): ProjectFileWithNormalizedPath | undefined {
-  const importMap = getImportMap(pageFile.content);
-  const importPath = importMap.get(componentName);
-  const exts = ["tsx", "jsx", "ts", "js"];
+function resolveImportBasePaths(
+  pageFilePath: string,
+  importPath: string,
+): string[] {
+  const candidates: string[] = [];
 
-  if (importPath?.startsWith(".")) {
-    const resolved = resolveRelativeImport(pageFile.normalizedPath, importPath);
-    const candidates = [
-      ...exts.map((ext) => `${resolved}.${ext}`),
-      ...exts.map((ext) => `${resolved}/index.${ext}`),
-    ];
-    const byImport = findFileByCandidates(files, candidates);
-    if (byImport) return byImport;
+  if (importPath.startsWith(".")) {
+    candidates.push(resolveRelativeImport(pageFilePath, importPath));
+  } else if (importPath.startsWith("@/") || importPath.startsWith("~/")) {
+    const stripped = importPath.slice(2);
+    if (stripped) {
+      candidates.push(stripped);
+      if (!stripped.startsWith("app/")) {
+        candidates.push(`app/${stripped}`);
+      } else {
+        candidates.push(stripped.slice(4));
+      }
+    }
+  } else if (importPath.startsWith("/")) {
+    const stripped = importPath.slice(1);
+    if (stripped) {
+      candidates.push(stripped);
+      if (!stripped.startsWith("app/")) {
+        candidates.push(`app/${stripped}`);
+      } else {
+        candidates.push(stripped.slice(4));
+      }
+    }
+  } else if (importPath.startsWith("app/")) {
+    candidates.push(importPath, importPath.slice(4));
+  } else if (importPath.startsWith("components/")) {
+    candidates.push(importPath, `app/${importPath}`);
   }
 
-  return findFileByCandidates(files, [
-    ...exts.map((ext) => `app/components/${componentName}.${ext}`),
-    ...exts.map((ext) => `app/components/${componentName.toLowerCase()}.${ext}`),
-  ]);
+  return Array.from(
+    new Set(
+      candidates
+        .map((p) => normalizeProjectPath(p))
+        .filter((p) => p.length > 0),
+    ),
+  );
+}
+
+function findByImportPath(
+  files: ProjectFileWithNormalizedPath[],
+  pageFilePath: string,
+  importPath: string,
+): ProjectFileWithNormalizedPath | undefined {
+  const exts = ["tsx", "jsx", "ts", "js"];
+  const basePaths = resolveImportBasePaths(pageFilePath, importPath);
+  if (basePaths.length === 0) return undefined;
+
+  for (const basePath of basePaths) {
+    const hasExt = /\.[a-zA-Z0-9]+$/.test(basePath);
+    const candidates = hasExt
+      ? [basePath]
+      : [
+          ...exts.map((ext) => `${basePath}.${ext}`),
+          ...exts.map((ext) => `${basePath}/index.${ext}`),
+        ];
+
+    const match = findFileByCandidates(files, candidates);
+    if (match) return match;
+  }
+
+  return undefined;
+}
+
+function getImportSources(code: string): string[] {
+  const sources = new Set<string>();
+  const importFromRe = /import\s+[\s\S]*?\s+from\s+["']([^"']+)["']/g;
+  const sideEffectImportRe = /import\s+["']([^"']+)["']/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = importFromRe.exec(code)) !== null) {
+    sources.add(match[1]);
+  }
+  while ((match = sideEffectImportRe.exec(code)) !== null) {
+    sources.add(match[1]);
+  }
+
+  return Array.from(sources);
+}
+
+function collectTransitiveLocalFiles(
+  files: ProjectFileWithNormalizedPath[],
+  entryFiles: ProjectFileWithNormalizedPath[],
+): ProjectFileWithNormalizedPath[] {
+  const queue = [...entryFiles];
+  const entrySet = new Set(entryFiles.map((f) => f.normalizedPath));
+  const scanned = new Set<string>();
+  const collected = new Map<string, ProjectFileWithNormalizedPath>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (scanned.has(current.normalizedPath)) continue;
+    scanned.add(current.normalizedPath);
+
+    const importSources = getImportSources(current.content);
+    for (const importSource of importSources) {
+      const dep = findByImportPath(files, current.normalizedPath, importSource);
+      if (!dep) continue;
+      if (!dep.normalizedPath.match(/\.(tsx|jsx|ts|js)$/)) continue;
+
+      if (!entrySet.has(dep.normalizedPath) && !collected.has(dep.normalizedPath)) {
+        collected.set(dep.normalizedPath, dep);
+      }
+      if (!scanned.has(dep.normalizedPath)) {
+        queue.push(dep);
+      }
+    }
+  }
+
+  return Array.from(collected.values()).sort((a, b) =>
+    a.normalizedPath.localeCompare(b.normalizedPath),
+  );
+}
+
+function resolveComponentFromImports(
+  files: ProjectFileWithNormalizedPath[],
+  sourceFile: ProjectFileWithNormalizedPath,
+  preferredNames: string[],
+  fallbackNamePattern?: RegExp,
+): ResolvedComponent | undefined {
+  const importMap = getImportMap(sourceFile.content);
+
+  for (const preferredName of preferredNames) {
+    const importPath = importMap.get(preferredName);
+    if (!importPath) continue;
+    const file = findByImportPath(files, sourceFile.normalizedPath, importPath);
+    if (file) {
+      return { file, localName: preferredName };
+    }
+  }
+
+  if (fallbackNamePattern) {
+    for (const [localName, importPath] of importMap.entries()) {
+      if (!fallbackNamePattern.test(localName)) continue;
+      const file = findByImportPath(files, sourceFile.normalizedPath, importPath);
+      if (file) {
+        return { file, localName };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function detectPrimaryExportName(rawCode: string, cleanedCode: string): string | null {
+  const defaultNamedFn = rawCode.match(
+    /export\s+default\s+function\s+([A-Za-z_$][\w$]*)/,
+  )?.[1];
+  if (defaultNamedFn) return defaultNamedFn;
+
+  const defaultNamedRef = rawCode.match(
+    /export\s+default\s+([A-Za-z_$][\w$]*)\s*;?/,
+  )?.[1];
+  if (defaultNamedRef) return defaultNamedRef;
+
+  const firstDeclaration = cleanedCode.match(
+    /\b(?:function|const|class)\s+([A-Za-z_$][\w$]*)\b/,
+  )?.[1];
+  if (firstDeclaration) return firstDeclaration;
+
+  return null;
+}
+
+function buildAliasedComponentCode(
+  file: ProjectFileWithNormalizedPath,
+  expectedName: string,
+): string {
+  const cleaned = cleanComponent(file.content);
+  if (
+    new RegExp(`\\b(?:function|const|class)\\s+${expectedName}\\b`).test(
+      cleaned,
+    )
+  ) {
+    return cleaned;
+  }
+
+  const exportName = detectPrimaryExportName(file.content, cleaned);
+  if (exportName && exportName !== expectedName) {
+    return `${cleaned}\n\nconst ${expectedName} = ${exportName};`;
+  }
+
+  return cleaned;
 }
 
 function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function runWrangler(args: string[], timeout: number): string {
+  mkdirSync(WRANGLER_EXEC_CWD, { recursive: true });
+  return execFileSync(
+    "npm",
+    [
+      "exec",
+      "--yes",
+      "--package",
+      `wrangler@${WRANGLER_VERSION}`,
+      "--",
+      "wrangler",
+      ...args,
+    ],
+    {
+      encoding: "utf-8",
+      timeout,
+      cwd: WRANGLER_EXEC_CWD,
+      env: {
+        ...process.env,
+        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
+        CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+      },
+    },
+  );
 }
 
 /** Strip imports, exports, "use client", and basic TypeScript syntax from a component file */
@@ -130,35 +352,199 @@ function cleanComponent(code: string): string {
   return cleaned;
 }
 
-/** Extract component names from a page file's imports */
-function extractComponentNames(pageCode: string): string[] {
-  const names: string[] = [];
-  const re = /import\s+(\w+)\s+from\s+["'](?:\.\.?\/)*components\/(\w+)["']/g;
-  let m;
-  while ((m = re.exec(pageCode)) !== null) {
-    names.push(m[1]);
-  }
-  return names;
-}
-
 /** Strip @tailwind directives (CDN handles them) but keep custom CSS */
 function cleanCss(css: string): string {
   return css.replace(/@tailwind\s+\w+;?\s*/g, "").trim();
+}
+
+function componentTagUsed(code: string, componentName: string): boolean {
+  const re = new RegExp(`<\\s*${componentName}(\\s|/|>)`);
+  return re.test(code);
+}
+
+function normalizeClassTokens(raw: string): string {
+  return raw
+    .replace(/\$\{[^}]+\}/g, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractClassNameFromTag(source: string, tagName: "html" | "body"): string {
+  const tagMatch = source.match(new RegExp(`<${tagName}[^>]*>`, "i"));
+  if (!tagMatch) return "";
+  const tag = tagMatch[0];
+
+  const directDouble = tag.match(/className\s*=\s*"([^"]*)"/i);
+  if (directDouble?.[1]) return normalizeClassTokens(directDouble[1]);
+
+  const directSingle = tag.match(/className\s*=\s*'([^']*)'/i);
+  if (directSingle?.[1]) return normalizeClassTokens(directSingle[1]);
+
+  const braceDouble = tag.match(/className\s*=\s*\{\s*"([^"]*)"\s*\}/i);
+  if (braceDouble?.[1]) return normalizeClassTokens(braceDouble[1]);
+
+  const braceSingle = tag.match(/className\s*=\s*\{\s*'([^']*)'\s*\}/i);
+  if (braceSingle?.[1]) return normalizeClassTokens(braceSingle[1]);
+
+  const template = tag.match(/className\s*=\s*\{\s*`([\s\S]*?)`\s*\}/i);
+  if (template?.[1]) return normalizeClassTokens(template[1]);
+
+  return "";
+}
+
+function mergeClassNames(...values: Array<string | undefined | null>): string {
+  const tokens = values
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/\s+/))
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return Array.from(new Set(tokens)).join(" ");
+}
+
+function extractObjectLiteralFromIndex(source: string, fromIndex: number): string | null {
+  const start = source.indexOf("{", fromIndex);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString: "'" | '"' | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = ch;
+      continue;
+    }
+
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return source.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractTailwindConfigObjectLiteral(configCode: string): string | null {
+  const normalized = configCode
+    .replace(/^import\s+type\s+.*$/gm, "")
+    .replace(/^import\s+.*$/gm, "")
+    .replace(/^type\s+.*$/gm, "")
+    .trim();
+
+  const moduleExportsMatch = normalized.match(/module\.exports\s*=/);
+  if (moduleExportsMatch?.index !== undefined) {
+    return extractObjectLiteralFromIndex(
+      normalized,
+      moduleExportsMatch.index + moduleExportsMatch[0].length,
+    );
+  }
+
+  const exportDefaultObjectMatch = normalized.match(/export\s+default\s*{/);
+  if (exportDefaultObjectMatch?.index !== undefined) {
+    return extractObjectLiteralFromIndex(
+      normalized,
+      exportDefaultObjectMatch.index + "export default".length,
+    );
+  }
+
+  const exportDefaultRefMatch = normalized.match(
+    /export\s+default\s+([A-Za-z_$][\w$]*)\s*;?/,
+  );
+  if (exportDefaultRefMatch) {
+    const varName = exportDefaultRefMatch[1];
+    const varDeclRe = new RegExp(
+      `(?:const|let|var)\\s+${varName}(?:\\s*:\\s*[\\s\\S]*?)?\\s*=`,
+    );
+    const varDeclMatch = normalized.match(varDeclRe);
+    if (varDeclMatch?.index !== undefined) {
+      return extractObjectLiteralFromIndex(
+        normalized,
+        varDeclMatch.index + varDeclMatch[0].length,
+      );
+    }
+  }
+
+  return null;
 }
 
 // ── HTML Builder ────────────────────────────────────────────────
 
 function buildPageHtml(opts: {
   title: string;
+  htmlClass?: string;
   globalsCss: string;
+  tailwindConfigObjectLiteral?: string | null;
   navbarCode: string;
   footerCode: string;
+  bodyClass?: string;
+  renderNavbar: boolean;
+  renderFooter: boolean;
   sectionCodes: { name: string; code: string }[];
   pageCode: string | null; // null for home (sections rendered directly), string for sub-pages
   sectionNames: string[];
   isDark: boolean;
 }): string {
-  const { title, globalsCss, navbarCode, footerCode, sectionCodes, pageCode, sectionNames, isDark } = opts;
+  const {
+    title,
+    htmlClass,
+    globalsCss,
+    tailwindConfigObjectLiteral,
+    navbarCode,
+    footerCode,
+    bodyClass,
+    renderNavbar,
+    renderFooter,
+    sectionCodes,
+    pageCode,
+    sectionNames,
+    isDark,
+  } = opts;
 
   // Combine all component code
   const allCode = [
@@ -180,19 +566,30 @@ function buildPageHtml(opts: {
     mainContent = sectionNames.map((n) => `          <${n} />`).join("\n");
   }
 
-  const appCode = `
+  const appCode = pageCode
+    ? `
 ${allCode}
 
 function App() {
   return (
     <React.Fragment>
-      <TestButton />
-      <Navbar />
-      <main>
+${renderNavbar ? "      <Navbar />\n" : ""}      ${mainContent}
+${renderFooter ? "      <Footer />\n" : ""}    </React.Fragment>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+`
+    : `
+${allCode}
+
+function App() {
+  return (
+    <React.Fragment>
+${renderNavbar ? "      <Navbar />\n" : ""}      <main>
 ${mainContent}
       </main>
-      <Footer />
-    </React.Fragment>
+${renderFooter ? "      <Footer />\n" : ""}    </React.Fragment>
   );
 }
 
@@ -201,15 +598,31 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
   // Base64-encode the code to avoid HTML escaping issues
   const codeBase64 = Buffer.from(appCode).toString("base64");
-
-  const bodyClass = isDark ? "bg-gray-950 text-white" : "bg-white text-gray-900";
+  const tailwindConfigBase64 = tailwindConfigObjectLiteral
+    ? Buffer.from(tailwindConfigObjectLiteral).toString("base64")
+    : null;
+  const resolvedHtmlClass = (htmlClass || "").trim();
+  const resolvedBodyClass = (bodyClass || "").trim();
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en"${resolvedHtmlClass ? ` class="${escHtml(resolvedHtmlClass)}"` : ""}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escHtml(title)}</title>
+  ${
+    tailwindConfigBase64
+      ? `<script>
+    try {
+      window.tailwind = window.tailwind || {};
+      const __cfgRaw = atob("${tailwindConfigBase64}");
+      window.tailwind.config = new Function("return (" + __cfgRaw + ")")();
+    } catch (e) {
+      console.warn("Failed to parse tailwind config for CDN runtime:", e);
+    }
+  </script>`
+      : ""
+  }
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     #root { opacity: 0; transition: opacity 0.3s ease; }
@@ -220,13 +633,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
       left: 50%;
       transform: translate(-50%, -50%);
       font-family: system-ui, -apple-system, sans-serif;
-      color: ${isDark ? "#fff" : "#000"};
+      color: ${isDark ? "#d1d5db" : "#111827"};
       font-size: 18px;
     }
 ${cleanCss(globalsCss)}
   </style>
 </head>
-<body class="${bodyClass}">
+<body${resolvedBodyClass ? ` class="${escHtml(resolvedBodyClass)}"` : ""}>
   <div id="loading">Loading...</div>
   <div id="root"></div>
 
@@ -241,8 +654,37 @@ ${cleanCss(globalsCss)}
         Object.assign(window, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext });
         window.Fragment = React.Fragment;
 
+        const escapeHtml = (text) => String(text ?? "")
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        const showRuntimeError = (error) => {
+          const loading = document.getElementById('loading');
+          if (loading) loading.style.display = 'none';
+          const root = document.getElementById('root');
+          const message = error && error.message ? error.message : String(error);
+          const details = error && error.stack ? '\\n\\n' + error.stack : '';
+          const html = '<div style="padding:20px;font-family:system-ui;">'
+            + '<h1 style="margin:0 0 12px;">Runtime Error</h1>'
+            + '<pre style="white-space:pre-wrap;line-height:1.4;">'
+            + escapeHtml(message + details)
+            + '</pre></div>';
+          if (root) {
+            root.classList.add('ready');
+            root.innerHTML = html;
+          } else {
+            document.body.innerHTML = html;
+          }
+        };
+        window.addEventListener('error', (event) => {
+          if (event && event.error) showRuntimeError(event.error);
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+          showRuntimeError(event && event.reason ? event.reason : new Error('Unhandled promise rejection'));
+        });
+
         // Next.js stubs
-        window.Link = function Link({ href, children, className, style, onClick, target, rel, ...restProps }) {
+        window.__pocketNextLink = function Link({ href, children, className, style, onClick, target, rel, ...restProps }) {
           console.log('Link rendered with children:', children, 'href:', href);
           return React.createElement('a', {
             href: href || '#',
@@ -257,7 +699,7 @@ ${cleanCss(globalsCss)}
             ...restProps
           }, children);
         };
-        window.Image = function Image({ src, alt, width, height, className, style, ...restProps }) {
+        window.__pocketNextImage = function Image({ src, alt, width, height, className, style, ...restProps }) {
           return React.createElement('img', {
             src,
             alt,
@@ -268,6 +710,151 @@ ${cleanCss(globalsCss)}
             loading: 'lazy',
             ...restProps
           });
+        };
+        window.Link = window.__pocketNextLink;
+        window.Image = window.__pocketNextImage;
+
+        // Motion value utilities used by framer-motion hooks
+        const createMotionValue = (initialValue = 0) => {
+          let value = initialValue;
+          const listeners = new Set();
+          return {
+            get: () => value,
+            set: (next) => {
+              value = next;
+              listeners.forEach((listener) => {
+                try {
+                  listener(value);
+                } catch {}
+              });
+            },
+            on: (event, listener) => {
+              if (event !== 'change' || typeof listener !== 'function') return () => {};
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+            onChange: (listener) => {
+              if (typeof listener !== 'function') return () => {};
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+          };
+        };
+
+        const mapRangeValue = (value, inputRange, outputRange) => {
+          if (
+            !Array.isArray(inputRange) ||
+            !Array.isArray(outputRange) ||
+            inputRange.length < 2 ||
+            outputRange.length < 2
+          ) {
+            return value;
+          }
+          const inMin = Number(inputRange[0]);
+          const inMax = Number(inputRange[inputRange.length - 1]);
+          const outMin = outputRange[0];
+          const outMax = outputRange[outputRange.length - 1];
+
+          if (!Number.isFinite(inMin) || !Number.isFinite(inMax) || inMin === inMax) {
+            return outMin;
+          }
+
+          const t = Math.max(0, Math.min(1, (Number(value) - inMin) / (inMax - inMin)));
+          if (typeof outMin === 'number' && typeof outMax === 'number') {
+            return outMin + (outMax - outMin) * t;
+          }
+          return t < 0.5 ? outMin : outMax;
+        };
+
+        window.useMotionValue = function useMotionValue(initialValue = 0) {
+          const ref = useRef(null);
+          if (!ref.current) {
+            ref.current = createMotionValue(initialValue);
+          }
+          return ref.current;
+        };
+
+        window.useScroll = function useScroll() {
+          const scrollY = window.useMotionValue(0);
+          const scrollYProgress = window.useMotionValue(0);
+
+          useEffect(() => {
+            const update = () => {
+              const y = window.scrollY || 0;
+              const maxScroll = Math.max(
+                1,
+                (document.documentElement?.scrollHeight || 1) - window.innerHeight,
+              );
+              scrollY.set(y);
+              scrollYProgress.set(Math.max(0, Math.min(1, y / maxScroll)));
+            };
+
+            update();
+            window.addEventListener('scroll', update, { passive: true });
+            window.addEventListener('resize', update);
+            return () => {
+              window.removeEventListener('scroll', update);
+              window.removeEventListener('resize', update);
+            };
+          }, [scrollY, scrollYProgress]);
+
+          return { scrollY, scrollYProgress };
+        };
+
+        window.useTransform = function useTransform(sourceValue, inputRange, outputRange) {
+          const source =
+            sourceValue && typeof sourceValue.get === 'function'
+              ? sourceValue
+              : createMotionValue(sourceValue ?? 0);
+          const derivedRef = useRef(null);
+          if (!derivedRef.current) {
+            derivedRef.current = createMotionValue(
+              mapRangeValue(source.get(), inputRange, outputRange),
+            );
+          }
+
+          useEffect(() => {
+            const update = (v) => {
+              derivedRef.current.set(mapRangeValue(v, inputRange, outputRange));
+            };
+            update(source.get());
+            if (typeof source.on === 'function') {
+              return source.on('change', update);
+            }
+            return undefined;
+          }, [source, inputRange, outputRange]);
+
+          return derivedRef.current;
+        };
+
+        window.useSpring = function useSpring(value) {
+          if (value && typeof value.get === 'function') return value;
+          return createMotionValue(value ?? 0);
+        };
+
+        window.useMotionValueEvent = function useMotionValueEvent(
+          value,
+          eventName,
+          handler,
+        ) {
+          useEffect(() => {
+            if (!value || typeof value.on !== 'function' || typeof handler !== 'function') {
+              return undefined;
+            }
+            return value.on(eventName || 'change', handler);
+          }, [value, eventName, handler]);
+        };
+
+        window.useAnimation = function useAnimation() {
+          return {
+            start: async () => {},
+            stop: () => {},
+            set: () => {},
+          };
+        };
+        window.useAnimationControls = window.useAnimation;
+        window.useReducedMotion = function useReducedMotion() {
+          return false;
         };
 
         // useInView stub - simple implementation
@@ -553,7 +1140,7 @@ ${cleanCss(globalsCss)}
           'Folder', 'FolderMinus', 'FolderPlus', 'Framer', 'Frown', 'Gift', 'GitBranch',
           'GitCommit', 'GitMerge', 'GitPullRequest', 'GitHub', 'Gitlab', 'Globe', 'Grid',
           'HardDrive', 'Hash', 'Headphones', 'Heart', 'HelpCircle', 'Hexagon', 'Home', 'Image',
-          'Inbox', 'Info', 'Instagram', 'Italic', 'Key', 'Layers', 'Layout', 'LifeBuoy',
+          'Inbox', 'Info', 'Instagram', 'Italic', 'Key', 'Layers', 'Layout', 'Leaf', 'LifeBuoy',
           'Link', 'Link2', 'Linkedin', 'List', 'Loader', 'Lock', 'LogIn', 'LogOut', 'Mail',
           'Map', 'MapPin', 'Maximize', 'Maximize2', 'Meh', 'Menu', 'MessageCircle',
           'MessageSquare', 'Mic', 'MicOff', 'Minimize', 'Minimize2', 'Minus', 'MinusCircle',
@@ -582,29 +1169,40 @@ ${cleanCss(globalsCss)}
           }
         });
 
-        console.log('Icon stubs and useInView loaded - Total icons available:', commonIconNames.length + Object.keys(window).filter(k => typeof window[k] === 'function' && /^[A-Z]/.test(k) && !commonIconNames.includes(k)).length);
-
-        // Add a test component to verify React rendering works
-        window.TestButton = function TestButton() {
-          const [count, setCount] = useState(0);
-          return React.createElement('div', {
-            style: {
-              position: 'fixed',
-              top: '10px',
-              right: '10px',
-              zIndex: 9999,
-              background: 'red',
-              color: 'white',
-              padding: '10px',
-              cursor: 'pointer',
-              border: '2px solid white'
-            },
-            onClick: () => {
-              setCount(count + 1);
-              alert('Test button clicked! Count: ' + (count + 1));
-            }
-          }, 'TEST BUTTON (clicks: ' + count + ')');
+        // Preserve both Next.js component behavior and lucide icon behavior for names that collide.
+        const lucideLinkIcon = window.Link;
+        const lucideImageIcon = window.Image;
+        window.Link = function HybridLink(props = {}) {
+          const hasNavigationProps =
+            Object.prototype.hasOwnProperty.call(props, 'href') ||
+            Object.prototype.hasOwnProperty.call(props, 'target') ||
+            Object.prototype.hasOwnProperty.call(props, 'rel') ||
+            Object.prototype.hasOwnProperty.call(props, 'onClick') ||
+            props.children !== undefined;
+          if (hasNavigationProps) {
+            return window.__pocketNextLink(props);
+          }
+          if (typeof lucideLinkIcon === 'function') {
+            return lucideLinkIcon(props);
+          }
+          return null;
         };
+        window.Image = function HybridImage(props = {}) {
+          const hasImageProps =
+            Object.prototype.hasOwnProperty.call(props, 'src') ||
+            Object.prototype.hasOwnProperty.call(props, 'alt') ||
+            Object.prototype.hasOwnProperty.call(props, 'width') ||
+            Object.prototype.hasOwnProperty.call(props, 'height');
+          if (hasImageProps) {
+            return window.__pocketNextImage(props);
+          }
+          if (typeof lucideImageIcon === 'function') {
+            return lucideImageIcon(props);
+          }
+          return null;
+        };
+
+        console.log('Icon stubs and useInView loaded - Total icons available:', commonIconNames.length + Object.keys(window).filter(k => typeof window[k] === 'function' && /^[A-Z]/.test(k) && !commonIconNames.includes(k)).length);
 
         // Transform JSX and execute
         const code = atob("${codeBase64}");
@@ -623,20 +1221,58 @@ ${cleanCss(globalsCss)}
         const loading = document.getElementById('loading');
         if (loading) loading.style.display = 'none';
 
+        const compiledCode = transformed.code.replace(/^\\s*["']use strict["'];?\\s*/, '');
+
+        const pocketGlobals = new Proxy(window, {
+          has(target, key) {
+            if (typeof key !== 'string') return key in target;
+            if (key in target) return true;
+            return /^[A-Z]/.test(key);
+          },
+          get(target, key) {
+            if (typeof key !== 'string') return target[key];
+            if (key in target) return target[key];
+            if (/^[A-Z]/.test(key)) {
+              const fallback = createFallbackIcon(key);
+              target[key] = fallback;
+              return fallback;
+            }
+            return undefined;
+          },
+          set(target, key, value) {
+            target[key] = value;
+            return true;
+          },
+        });
+
         // Execute the compiled code with better error handling and auto-recovery
         const maxRetries = 10;
         let retryCount = 0;
         let lastError = null;
 
+        const createFallbackUtility = (name) => {
+          if (/^use[A-Z]/.test(name)) {
+            return function fallbackHook() {
+              return {};
+            };
+          }
+          return function fallbackUtility() {
+            return null;
+          };
+        };
+
         const executeWithRetry = () => {
           try {
-            const executionWrapper = new Function(transformed.code);
-            executionWrapper();
+            const executionWrapper = new Function(
+              "__POCKET_GLOBALS__",
+              "with (__POCKET_GLOBALS__) {\\n" + compiledCode + "\\n}",
+            );
+            executionWrapper(pocketGlobals);
             console.log('✓ Code executed successfully' + (retryCount > 0 ? \` (after \${retryCount} icon fixes)\` : ''));
             return true;
           } catch (execError) {
             // Check if it's a missing icon/component error
-            const match = execError.message && execError.message.match(/(\w+) is not defined/);
+            const match = execError && execError.message && execError.message.match(/(\\w+) is not defined/);
             if (match && /^[A-Z]/.test(match[1]) && retryCount < maxRetries) {
               const missingName = match[1];
               console.warn(\`⚠ Missing: \${missingName}, creating fallback (attempt \${retryCount + 1}/\${maxRetries})...\`);
@@ -645,6 +1281,12 @@ ${cleanCss(globalsCss)}
               window[missingName] = createFallbackIcon(missingName);
 
               // Retry execution
+              retryCount++;
+              return executeWithRetry();
+            } else if (match && retryCount < maxRetries) {
+              const missingName = match[1];
+              console.warn(\`⚠ Missing: \${missingName}, creating utility fallback (attempt \${retryCount + 1}/\${maxRetries})...\`);
+              window[missingName] = createFallbackUtility(missingName);
               retryCount++;
               return executeWithRetry();
             } else {
@@ -699,42 +1341,55 @@ function deployCfPages(
 
     console.log(`[cf] Deploying ${htmlFiles.size} files via wrangler to ${projectName}`);
 
-    // Create project if it doesn't exist
-    try {
-      execSync(
-        `npx wrangler pages project create "${projectName}" --production-branch=main`,
-        {
-          encoding: "utf-8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
-            CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
-          },
-        },
-      );
-      console.log(`[cf] Project created: ${projectName}`);
-    } catch (e: unknown) {
-      const err = e as { stderr?: string };
-      // Ignore if already exists
-      if (!err?.stderr?.includes("already exists")) {
-        console.warn(`[cf] Project create warning:`, err?.stderr || e);
-      }
-    }
+    const deployArgs = [
+      "pages",
+      "deploy",
+      tempDir,
+      `--project-name=${projectName}`,
+      "--branch=main",
+      "--commit-dirty=true",
+    ];
 
-    // Run wrangler pages deploy
-    const output = execSync(
-      `npx wrangler pages deploy "${tempDir}" --project-name="${projectName}" --branch=main --commit-dirty=true`,
-      {
-        encoding: "utf-8",
-        timeout: 120_000,
-        env: {
-          ...process.env,
-          CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
-          CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
-        },
-      },
-    );
+    let output = "";
+    try {
+      output = runWrangler(deployArgs, 120_000);
+    } catch (e: unknown) {
+      const err = e as { stderr?: string; message?: string };
+      const rawError = `${err?.stderr || ""}\n${err?.message || ""}`;
+      const projectNotFound =
+        rawError.includes("Project not found") || rawError.includes("8000007");
+
+      if (!projectNotFound) {
+        throw e;
+      }
+
+      console.log(
+        `[cf] Project ${projectName} not found. Creating it and retrying deploy...`,
+      );
+      try {
+        runWrangler(
+          [
+            "pages",
+            "project",
+            "create",
+            projectName,
+            "--production-branch=main",
+          ],
+          30_000,
+        );
+      } catch (createErr: unknown) {
+        const cErr = createErr as { stderr?: string; message?: string };
+        const createRaw = `${cErr?.stderr || ""}\n${cErr?.message || ""}`;
+        // Safe to ignore if create raced and project now exists.
+        if (!createRaw.includes("already exists")) {
+          throw new Error(
+            `Cloudflare Pages project create failed for "${projectName}": ${createRaw || "Unknown error"}`,
+          );
+        }
+      }
+
+      output = runWrangler(deployArgs, 120_000);
+    }
 
     console.log(`[cf] Wrangler output:\n${output}`);
 
@@ -783,6 +1438,19 @@ export async function POST(request: NextRequest) {
     const normalizedFiles = withNormalizedPaths(files);
     const globalsCss =
       findFileByCandidates(normalizedFiles, ["app/globals.css"])?.content || "";
+    const tailwindConfigFile = findFileByCandidates(normalizedFiles, [
+      "tailwind.config.ts",
+      "tailwind.config.js",
+      "tailwind.config.mjs",
+      "tailwind.config.cjs",
+      "app/tailwind.config.ts",
+      "app/tailwind.config.js",
+      "app/tailwind.config.mjs",
+      "app/tailwind.config.cjs",
+    ]);
+    const tailwindConfigObjectLiteral = tailwindConfigFile
+      ? extractTailwindConfigObjectLiteral(tailwindConfigFile.content)
+      : null;
     const homePageFile =
       findFileByCandidates(normalizedFiles, [
         "app/page.tsx",
@@ -790,48 +1458,147 @@ export async function POST(request: NextRequest) {
         "app/page.ts",
         "app/page.js",
       ]) || findFirstFileByRegex(normalizedFiles, /^app\/page\.(tsx|jsx|ts|js)$/);
-    const navbarFile = homePageFile
-      ? findComponentFile(normalizedFiles, homePageFile, "Navbar")
-      : undefined;
-    const footerFile = homePageFile
-      ? findComponentFile(normalizedFiles, homePageFile, "Footer")
-      : undefined;
+    const layoutFile = findFileByCandidates(normalizedFiles, [
+      "app/layout.tsx",
+      "app/layout.jsx",
+      "app/layout.ts",
+      "app/layout.js",
+    ]);
+
+    const navbarResolution =
+      (homePageFile
+        ? resolveComponentFromImports(
+            normalizedFiles,
+            homePageFile,
+            ["Navbar"],
+            /\b(navbar|header|topbar|navigation|menu)\b/i,
+          )
+        : undefined) ||
+      (layoutFile
+        ? resolveComponentFromImports(
+            normalizedFiles,
+            layoutFile,
+            ["Navbar"],
+            /\b(navbar|header|topbar|navigation|menu)\b/i,
+          )
+        : undefined);
+
+    const footerResolution =
+      (homePageFile
+        ? resolveComponentFromImports(
+            normalizedFiles,
+            homePageFile,
+            ["Footer"],
+            /\bfooter\b/i,
+          )
+        : undefined) ||
+      (layoutFile
+        ? resolveComponentFromImports(
+            normalizedFiles,
+            layoutFile,
+            ["Footer"],
+            /\bfooter\b/i,
+          )
+        : undefined);
+
+    const fallbackNavbarFile = findFileByCandidates(normalizedFiles, [
+      "components/Navbar.tsx",
+      "components/Navbar.jsx",
+      "components/Navbar.ts",
+      "components/Navbar.js",
+      "components/navbar.tsx",
+      "components/navbar.jsx",
+      "components/navbar.ts",
+      "components/navbar.js",
+      "app/components/Navbar.tsx",
+      "app/components/Navbar.jsx",
+      "app/components/Navbar.ts",
+      "app/components/Navbar.js",
+    ]);
+    const fallbackFooterFile = findFileByCandidates(normalizedFiles, [
+      "components/Footer.tsx",
+      "components/Footer.jsx",
+      "components/Footer.ts",
+      "components/Footer.js",
+      "components/footer.tsx",
+      "components/footer.jsx",
+      "components/footer.ts",
+      "components/footer.js",
+      "app/components/Footer.tsx",
+      "app/components/Footer.jsx",
+      "app/components/Footer.ts",
+      "app/components/Footer.js",
+    ]);
+
+    const resolvedNavbar = navbarResolution
+      ? navbarResolution
+      : fallbackNavbarFile
+        ? { file: fallbackNavbarFile, localName: "Navbar" }
+        : undefined;
+    const resolvedFooter = footerResolution
+      ? footerResolution
+      : fallbackFooterFile
+        ? { file: fallbackFooterFile, localName: "Footer" }
+        : undefined;
 
     if (!homePageFile) {
       throw new Error("Missing essential files: homepage");
     }
 
-    const navbarCode = navbarFile
-      ? cleanComponent(navbarFile.content)
+    const navbarCode = resolvedNavbar
+      ? buildAliasedComponentCode(resolvedNavbar.file, "Navbar")
       : "function Navbar() { return null; }";
-    const footerCode = footerFile
-      ? cleanComponent(footerFile.content)
+    const footerCode = resolvedFooter
+      ? buildAliasedComponentCode(resolvedFooter.file, "Footer")
       : "function Footer() { return null; }";
 
     // Detect theme (dark/light) from globals or navbar
     const isDark =
-      navbarFile?.content.includes("bg-gray-950") ||
-      navbarFile?.content.includes("bg-gray-900") ||
+      resolvedNavbar?.file.content.includes("bg-gray-950") ||
+      resolvedNavbar?.file.content.includes("bg-gray-900") ||
       false;
+
+    const layoutHtmlClass = layoutFile
+      ? extractClassNameFromTag(layoutFile.content, "html")
+      : "";
+    const layoutBodyClass = layoutFile
+      ? extractClassNameFromTag(layoutFile.content, "body")
+      : "";
+    const mergedHtmlClass = mergeClassNames(layoutHtmlClass, isDark ? "dark" : "");
+    const mergedBodyClass = mergeClassNames(layoutBodyClass, isDark ? "dark" : "");
 
     // ── Build home page ────────────────────────────────────────
 
-    const homeComponentNames = extractComponentNames(homePageFile.content);
-    const homeSectionCodes = homeComponentNames
-      .filter((n) => n !== "Navbar" && n !== "Footer")
-      .map((name) => {
-        const file = findComponentFile(normalizedFiles, homePageFile, name);
-        return file ? { name, code: cleanComponent(file.content) } : null;
-      })
-      .filter(Boolean) as { name: string; code: string }[];
+    const homeEntryFiles = [
+      homePageFile,
+      ...(resolvedNavbar ? [resolvedNavbar.file] : []),
+      ...(resolvedFooter ? [resolvedFooter.file] : []),
+    ];
+    const homeDependencyFiles = collectTransitiveLocalFiles(
+      normalizedFiles,
+      homeEntryFiles,
+    );
+    const homeSectionCodes = homeDependencyFiles.map((file) => ({
+      name: file.normalizedPath,
+      code: cleanComponent(file.content),
+    }));
 
     const homeHtml = buildPageHtml({
       title: siteName,
+      htmlClass: mergedHtmlClass,
       globalsCss,
+      tailwindConfigObjectLiteral,
       navbarCode,
       footerCode,
+      bodyClass: mergedBodyClass,
+      renderNavbar:
+        !!resolvedNavbar &&
+        !componentTagUsed(homePageFile.content, "Navbar"),
+      renderFooter:
+        !!resolvedFooter &&
+        !componentTagUsed(homePageFile.content, "Footer"),
       sectionCodes: homeSectionCodes,
-      pageCode: null,
+      pageCode: cleanComponent(homePageFile.content),
       sectionNames: homeSectionCodes.map((c) => c.name),
       isDark,
     });
@@ -852,22 +1619,34 @@ export async function POST(request: NextRequest) {
       if (!pathMatch) continue;
       const pagePath = pathMatch[1]; // e.g. "about", "menu"
 
-      const pageComponentNames = extractComponentNames(sp.content);
-      const pageSectionCodes = pageComponentNames
-        .filter((n) => n !== "Navbar" && n !== "Footer")
-        .map((name) => {
-          const file = findComponentFile(normalizedFiles, sp, name);
-          return file ? { name, code: cleanComponent(file.content) } : null;
-        })
-        .filter(Boolean) as { name: string; code: string }[];
+      const pageEntryFiles = [
+        sp,
+        ...(resolvedNavbar ? [resolvedNavbar.file] : []),
+        ...(resolvedFooter ? [resolvedFooter.file] : []),
+      ];
+      const pageDependencyFiles = collectTransitiveLocalFiles(
+        normalizedFiles,
+        pageEntryFiles,
+      );
+      const pageSectionCodes = pageDependencyFiles.map((file) => ({
+        name: file.normalizedPath,
+        code: cleanComponent(file.content),
+      }));
 
       const pageCode = cleanComponent(sp.content);
 
       const pageHtml = buildPageHtml({
         title: `${siteName} - ${pagePath.charAt(0).toUpperCase() + pagePath.slice(1)}`,
+        htmlClass: mergedHtmlClass,
         globalsCss,
+        tailwindConfigObjectLiteral,
         navbarCode,
         footerCode,
+        bodyClass: mergedBodyClass,
+        renderNavbar:
+          !!resolvedNavbar && !componentTagUsed(sp.content, "Navbar"),
+        renderFooter:
+          !!resolvedFooter && !componentTagUsed(sp.content, "Footer"),
         sectionCodes: pageSectionCodes,
         pageCode,
         sectionNames: pageSectionCodes.map((c) => c.name),
@@ -915,18 +1694,7 @@ export async function DELETE(request: NextRequest) {
 
     // Delete via wrangler
     try {
-      execSync(
-        `npx wrangler pages project delete "${projectName}" --yes`,
-        {
-          encoding: "utf-8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
-            CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
-          },
-        },
-      );
+      runWrangler(["pages", "project", "delete", projectName, "--yes"], 30_000);
     } catch (e) {
       // Ignore if project doesn't exist
       console.warn("[cf] Delete warning:", e);

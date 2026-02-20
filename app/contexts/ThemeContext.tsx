@@ -1,12 +1,13 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, ReactNode } from "react";
 
 type Theme = "light" | "dark";
 
 interface ThemeContextType {
   theme: Theme;
   toggleTheme: () => void;
+  setThemeMode: (mode: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -14,14 +15,11 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 const STORAGE_KEY = "pocket-dev-theme";
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("dark");
-
-  // Sync state with actual DOM on mount (the inline script already set the class)
-  useEffect(() => {
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") return "dark";
     const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    const initial = stored === "light" ? "light" : "dark";
-    setTheme(initial);
-  }, []);
+    return stored === "light" ? "light" : "dark";
+  });
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -49,8 +47,30 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setThemeMode = useCallback((mode: Theme) => {
+    setTheme((prev) => {
+      if (prev === mode) return prev;
+
+      document.documentElement.classList.add("theme-transition");
+
+      if (mode === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+
+      localStorage.setItem(STORAGE_KEY, mode);
+
+      setTimeout(() => {
+        document.documentElement.classList.remove("theme-transition");
+      }, 350);
+
+      return mode;
+    });
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, setThemeMode }}>
       {children}
     </ThemeContext.Provider>
   );
