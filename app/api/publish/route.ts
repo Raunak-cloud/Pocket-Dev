@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFileSync } from "child_process";
-import { mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -402,6 +402,160 @@ function mergeClassNames(...values: Array<string | undefined | null>): string {
   return Array.from(new Set(tokens)).join(" ");
 }
 
+function extractArrayLiteralFromIndex(source: string, fromIndex: number): string | null {
+  const start = source.indexOf("[", fromIndex);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString: "'" | '"' | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === inString) {
+        inString = null;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = ch;
+      continue;
+    }
+
+    if (ch === "[") depth++;
+    if (ch === "]") {
+      depth--;
+      if (depth === 0) {
+        return source.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+let lucideIconNodeLiteralCache: Map<string, string> | null = null;
+
+function loadLucideIconNodeLiterals(): Map<string, string> {
+  if (lucideIconNodeLiteralCache) {
+    return lucideIconNodeLiteralCache;
+  }
+
+  const iconByName = new Map<string, string>();
+  try {
+    const lucideCjsPath = join(
+      process.cwd(),
+      "node_modules/lucide-react/dist/cjs/lucide-react.js",
+    );
+    const source = readFileSync(lucideCjsPath, "utf-8");
+    const iconByVariableName = new Map<string, string>();
+
+    const createIconRe =
+      /const\s+([A-Za-z_$][\w$]*)\s*=\s*createLucideIcon\(\s*"([^"]+)"\s*,\s*\[/g;
+    let match: RegExpExecArray | null;
+    while ((match = createIconRe.exec(source)) !== null) {
+      const variableName = match[1];
+      const displayName = match[2];
+      const nodeLiteral = extractArrayLiteralFromIndex(
+        source,
+        match.index + match[0].length - 1,
+      );
+      if (!nodeLiteral) continue;
+
+      iconByVariableName.set(variableName, nodeLiteral);
+      iconByName.set(displayName, nodeLiteral);
+      iconByName.set(variableName, nodeLiteral);
+    }
+
+    const exportAliasRe =
+      /exports\.([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*;/g;
+    while ((match = exportAliasRe.exec(source)) !== null) {
+      const exportName = match[1];
+      const variableName = match[2];
+      const nodeLiteral = iconByVariableName.get(variableName);
+      if (nodeLiteral) {
+        iconByName.set(exportName, nodeLiteral);
+      }
+    }
+  } catch (error) {
+    console.warn("[publish] Failed to load Lucide icon definitions:", error);
+  }
+
+  lucideIconNodeLiteralCache = iconByName;
+  return iconByName;
+}
+
+function extractPotentialJsxComponentNames(code: string): Set<string> {
+  const names = new Set<string>();
+  const plainTagRe = /<\s*([A-Z][A-Za-z0-9_]*)\b/g;
+  const memberTagRe = /<\s*[A-Z][A-Za-z0-9_]*\.([A-Z][A-Za-z0-9_]*)\b/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = plainTagRe.exec(code)) !== null) {
+    names.add(match[1]);
+  }
+  while ((match = memberTagRe.exec(code)) !== null) {
+    names.add(match[1]);
+  }
+
+  return names;
+}
+
+function buildLucideRuntimeAssignments(code: string): string {
+  const iconNodeLiterals = loadLucideIconNodeLiterals();
+  if (iconNodeLiterals.size === 0) return "";
+
+  const candidateNames = extractPotentialJsxComponentNames(code);
+  const iconNames = Array.from(candidateNames)
+    .filter((name) => iconNodeLiterals.has(name))
+    .sort((a, b) => a.localeCompare(b));
+
+  return iconNames
+    .map((name) => {
+      const nodeLiteral = iconNodeLiterals.get(name);
+      if (!nodeLiteral) return "";
+      return `window[${JSON.stringify(name)}] = createLucideIconFromNode(${JSON.stringify(name)}, ${nodeLiteral});`;
+    })
+    .filter(Boolean)
+    .join("\n        ");
+}
+
 function extractObjectLiteralFromIndex(source: string, fromIndex: number): string | null {
   const start = source.indexOf("{", fromIndex);
   if (start === -1) return null;
@@ -596,6 +750,8 @@ ${renderFooter ? "      <Footer />\n" : ""}    </React.Fragment>
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 `;
 
+  const lucideRuntimeAssignments = buildLucideRuntimeAssignments(appCode);
+
   // Base64-encode the code to avoid HTML escaping issues
   const codeBase64 = Buffer.from(appCode).toString("base64");
   const tailwindConfigBase64 = tailwindConfigObjectLiteral
@@ -713,6 +869,113 @@ ${cleanCss(globalsCss)}
         };
         window.Link = window.__pocketNextLink;
         window.Image = window.__pocketNextImage;
+
+        // next/font/google runtime compatibility: generate equivalent className objects and load font CSS.
+        const __pocketSerifFonts = new Set([
+          'Playfair Display',
+          'Merriweather',
+          'Cormorant Garamond',
+          'Libre Baskerville',
+          'Crimson Text',
+          'Lora',
+          'DM Serif Display',
+        ]);
+        const __pocketGoogleFontLoaders = [
+          'Inter',
+          'Poppins',
+          'Roboto',
+          'Lato',
+          'Montserrat',
+          'Nunito',
+          'Raleway',
+          'Oswald',
+          'Open_Sans',
+          'Playfair_Display',
+          'Merriweather',
+          'Cormorant_Garamond',
+          'DM_Sans',
+          'Space_Grotesk',
+          'Manrope',
+          'Plus_Jakarta_Sans',
+          'Work_Sans',
+          'Libre_Baskerville',
+          'PT_Sans',
+          'Noto_Sans',
+          'Source_Sans_3',
+          'Bebas_Neue',
+          'Crimson_Text',
+          'Lora',
+          'Outfit',
+          'Urbanist',
+          'Rubik',
+          'Figtree',
+        ];
+        window.__pocketGoogleFontNames = new Set(__pocketGoogleFontLoaders);
+        const __pocketLoadedGoogleFonts = new Set();
+        window.__pocketCreateGoogleFontLoader = function __pocketCreateGoogleFontLoader(fontFunctionName) {
+          const familyName = String(fontFunctionName || '').replace(/_/g, ' ').trim();
+          const familyQuery = familyName.replace(/\s+/g, '+');
+          const classToken =
+            '__font_' + String(fontFunctionName || '')
+              .toLowerCase()
+              .replace(/[^a-z0-9_]+/g, '_');
+          const fallbackFamily = __pocketSerifFonts.has(familyName) ? 'serif' : 'sans-serif';
+
+          return function nextGoogleFontLoader(options = {}) {
+            const weightValue = options && options.weight;
+            const weightList = Array.isArray(weightValue)
+              ? weightValue
+              : weightValue
+                ? [weightValue]
+                : [];
+            const safeWeights = weightList
+              .map((w) => String(w).trim())
+              .filter((w) => /^\d{3}$/.test(w));
+            const weightQuery = safeWeights.length > 0 ? ':wght@' + safeWeights.join(';') : '';
+            const cacheKey = familyQuery + weightQuery;
+
+            if (!__pocketLoadedGoogleFonts.has(cacheKey)) {
+              const linkEl = document.createElement('link');
+              linkEl.rel = 'stylesheet';
+              linkEl.href = 'https://fonts.googleapis.com/css2?family=' + familyQuery + weightQuery + '&display=swap';
+              document.head.appendChild(linkEl);
+              __pocketLoadedGoogleFonts.add(cacheKey);
+            }
+
+            const styleId = '__pocket_font_style_' + classToken;
+            if (!document.getElementById(styleId)) {
+              const styleEl = document.createElement('style');
+              styleEl.id = styleId;
+              styleEl.textContent = '.' + classToken + '{font-family:"' + familyName + '",' + fallbackFamily + ';}';
+              document.head.appendChild(styleEl);
+            }
+
+            const variableCssName =
+              options && typeof options.variable === 'string' ? options.variable.trim() : '';
+            const variableToken = variableCssName
+              ? classToken + '_var'
+              : '';
+            if (variableCssName && variableToken) {
+              const variableStyleId = '__pocket_font_var_' + classToken;
+              if (!document.getElementById(variableStyleId)) {
+                const variableStyleEl = document.createElement('style');
+                variableStyleEl.id = variableStyleId;
+                variableStyleEl.textContent =
+                  '.' + variableToken + '{' + variableCssName + ':"' + familyName + '",' + fallbackFamily + ';}';
+                document.head.appendChild(variableStyleEl);
+              }
+            }
+
+            return {
+              className: classToken,
+              variable: variableToken,
+              style: { fontFamily: '"' + familyName + '",' + fallbackFamily },
+            };
+          };
+        };
+        __pocketGoogleFontLoaders.forEach((fontFn) => {
+          window[fontFn] = window.__pocketCreateGoogleFontLoader(fontFn);
+        });
 
         // Motion value utilities used by framer-motion hooks
         const createMotionValue = (initialValue = 0) => {
@@ -910,6 +1173,90 @@ ${cleanCss(globalsCss)}
         };
 
         // Framer Motion stubs - simplified animation components
+        const __pocketIsMotionValue = (value) =>
+          value && typeof value.get === 'function' && typeof value.on === 'function';
+        const __pocketResolveMotionValue = (value) =>
+          __pocketIsMotionValue(value) ? value.get() : value;
+        const __pocketUnit = (value, unit) =>
+          typeof value === 'number' ? String(value) + unit : String(value);
+        const __pocketResolveMotionStyle = (...styleSources) => {
+          const resolved = {};
+          const transformParts = [];
+
+          const pushTransform = (part) => {
+            if (part) transformParts.push(part);
+          };
+
+          for (const source of styleSources) {
+            if (!source || typeof source !== 'object') continue;
+            for (const [key, rawValue] of Object.entries(source)) {
+              const value = __pocketResolveMotionValue(rawValue);
+              if (value === undefined || value === null) continue;
+
+              if (key === 'x') {
+                pushTransform('translateX(' + __pocketUnit(value, 'px') + ')');
+                continue;
+              }
+              if (key === 'y') {
+                pushTransform('translateY(' + __pocketUnit(value, 'px') + ')');
+                continue;
+              }
+              if (key === 'z') {
+                pushTransform('translateZ(' + __pocketUnit(value, 'px') + ')');
+                continue;
+              }
+              if (key === 'scale') {
+                pushTransform('scale(' + String(value) + ')');
+                continue;
+              }
+              if (key === 'scaleX') {
+                pushTransform('scaleX(' + String(value) + ')');
+                continue;
+              }
+              if (key === 'scaleY') {
+                pushTransform('scaleY(' + String(value) + ')');
+                continue;
+              }
+              if (key === 'rotate') {
+                pushTransform('rotate(' + __pocketUnit(value, 'deg') + ')');
+                continue;
+              }
+              if (
+                key === 'transition' ||
+                key === 'transitionEnd' ||
+                key === 'whileInView' ||
+                key === 'viewport' ||
+                key === 'variants'
+              ) {
+                continue;
+              }
+
+              resolved[key] = value;
+            }
+          }
+
+          if (transformParts.length > 0) {
+            const existingTransform = resolved.transform;
+            resolved.transform = existingTransform
+              ? String(existingTransform) + ' ' + transformParts.join(' ')
+              : transformParts.join(' ');
+          }
+
+          return resolved;
+        };
+        const __pocketCollectMotionValues = (...styleSources) => {
+          const values = [];
+          for (const source of styleSources) {
+            if (!source || typeof source !== 'object') continue;
+            for (const rawValue of Object.values(source)) {
+              if (__pocketIsMotionValue(rawValue)) {
+                values.push(rawValue);
+              }
+            }
+          }
+          return values;
+        };
+
         window.motion = new Proxy({}, {
           get(target, prop) {
             // Return a component that accepts motion props but renders as regular HTML
@@ -917,6 +1264,7 @@ ${cleanCss(globalsCss)}
               // Start with animate style by default (skip animation), or initial if no animate
               const [currentStyle, setCurrentStyle] = useState(animate || {});
               const [isHovered, setIsHovered] = useState(false);
+              const [, setMotionTick] = useState(0);
 
               useEffect(() => {
                 // Only animate if both initial and animate are provided
@@ -931,12 +1279,32 @@ ${cleanCss(globalsCss)}
                 }
               }, []);
 
-              const mergedStyle = {
-                ...style,
-                ...currentStyle,
-                ...(isHovered && whileHover ? whileHover : {}),
-                transition: transition?.duration ? \`all \${transition.duration}s ease\` : 'all 0.3s ease'
-              };
+              useEffect(() => {
+                const motionValues = __pocketCollectMotionValues(
+                  style,
+                  currentStyle,
+                  isHovered ? whileHover : null,
+                );
+                if (motionValues.length === 0) return undefined;
+
+                const unsubscribers = motionValues.map((value) =>
+                  value.on('change', () => setMotionTick((tick) => tick + 1)),
+                );
+                return () => {
+                  unsubscribers.forEach((unsubscribe) => {
+                    if (typeof unsubscribe === 'function') unsubscribe();
+                  });
+                };
+              }, [style, currentStyle, whileHover, isHovered]);
+
+              const mergedStyle = __pocketResolveMotionStyle(
+                style,
+                currentStyle,
+                isHovered && whileHover ? whileHover : null,
+              );
+              mergedStyle.transition = transition?.duration
+                ? 'all ' + String(transition.duration) + 's ease'
+                : 'all 0.3s ease';
 
               const elementProps = {
                 ...restProps,
@@ -984,6 +1352,33 @@ ${cleanCss(globalsCss)}
           return Icon;
         };
 
+        const createLucideIconFromNode = (displayName, iconNode) => {
+          const Icon = (props = {}) =>
+            React.createElement(
+              'svg',
+              {
+                xmlns: 'http://www.w3.org/2000/svg',
+                width: props.size || props.width || 24,
+                height: props.size || props.height || 24,
+                viewBox: '0 0 24 24',
+                fill: 'none',
+                stroke: props.color || 'currentColor',
+                strokeWidth: props.strokeWidth || 2,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+                className: props.className,
+                style: props.style,
+              },
+              ...iconNode.map((node, idx) => {
+                const [tag, attrs] = node;
+                const key = attrs && attrs.key ? attrs.key : (displayName + '_' + idx);
+                return React.createElement(tag, { ...attrs, key });
+              }),
+            );
+          Icon.displayName = displayName;
+          return Icon;
+        };
+
         // Generic fallback icon for any missing icons
         const createFallbackIcon = (name) => {
           return createIcon('M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z', name);
@@ -1007,6 +1402,9 @@ ${cleanCss(globalsCss)}
         window.ChevronDown = createIcon('M6 9l6 6 6-6', 'ChevronDown');
         window.ChevronUp = createIcon('M18 15l-6-6-6 6', 'ChevronUp');
         window.Check = createIcon('M20 6L9 17l-5-5', 'Check');
+        window.Utensils = createIcon('M3 2v7c0 2.2 1.8 4 4 4h1v9h2v-9h1c2.2 0 4-1.8 4-4V2h-2v7c0 1.1-.9 2-2 2h-1V2H8v9H7c-1.1 0-2-.9-2-2V2H3zM19 2v20h2V2h-2z', 'Utensils');
+        window.UtensilsCrossed = createIcon('M16 2l6 6M10 14L4 8m0 0l4-4m-4 4l-2 2m10 4l8 8m0 0l2-2m-2 2l-4 4M9 3l12 12', 'UtensilsCrossed');
+        window.ChefHat = createIcon('M6 18h12M8 18v-3h8v3M7 15a4 4 0 01-1-7.87A5 5 0 0116.9 6 4 4 0 0117 15H7z', 'ChefHat');
         window.Star = createIcon('M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z', 'Star');
         window.Heart = createIcon('M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z', 'Heart');
         window.ShoppingCart = createIcon('M9 2L7.17 6M20.59 13.41l-1.3 5.2a2 2 0 01-1.94 1.5H6.65a2 2 0 01-1.94-1.5L2.41 8.41A1 1 0 013.36 7h17.28a1 1 0 01.95 1.41z M9 11v6M15 11v6', 'ShoppingCart');
@@ -1116,6 +1514,13 @@ ${cleanCss(globalsCss)}
         window.ToggleLeft = createIcon('M16 4H8a8 8 0 000 16h8a8 8 0 000-16zM8 15a3 3 0 110-6 3 3 0 010 6z', 'ToggleLeft');
         window.ToggleRight = createIcon('M16 4H8a8 8 0 000 16h8a8 8 0 000-16zM16 15a3 3 0 110-6 3 3 0 010 6z', 'ToggleRight');
 
+        // Exact lucide node definitions for all icons used by this page build.
+        // This keeps published icon shapes aligned with preview without manual per-icon patches.
+${lucideRuntimeAssignments
+  ? `        ${lucideRuntimeAssignments}`
+  : "        // No lucide icon usage detected in JSX for this page."
+}
+
         // Create ALL common Lucide icons programmatically to prevent any "not defined" errors
         const commonIconNames = [
           'Accessibility', 'Activity', 'Airplay', 'AlertCircle', 'AlertOctagon', 'AlertTriangle',
@@ -1210,8 +1615,11 @@ ${cleanCss(globalsCss)}
         console.log(code.substring(0, 500));
 
         const transformed = Babel.transform(code, {
-          presets: ['react'],
-          filename: 'app.jsx'
+          presets: [
+            'react',
+            ['typescript', { isTSX: true, allExtensions: true }],
+          ],
+          filename: 'app.tsx'
         });
 
         console.log('=== COMPILED CODE (first 500 chars) ===');
@@ -1223,6 +1631,48 @@ ${cleanCss(globalsCss)}
 
         const compiledCode = transformed.code.replace(/^\\s*["']use strict["'];?\\s*/, '');
 
+        const __pocketBoundWindowFnCache = new Map();
+        const __pocketWindowMethodsNeedingBind = new Set([
+          'setTimeout',
+          'clearTimeout',
+          'setInterval',
+          'clearInterval',
+          'requestAnimationFrame',
+          'cancelAnimationFrame',
+          'requestIdleCallback',
+          'cancelIdleCallback',
+          'addEventListener',
+          'removeEventListener',
+          'dispatchEvent',
+          'matchMedia',
+          'getComputedStyle',
+          'fetch',
+          'atob',
+          'btoa',
+          'open',
+          'postMessage',
+          'scroll',
+          'scrollBy',
+          'scrollTo',
+          'focus',
+          'blur',
+          'print',
+          'alert',
+          'confirm',
+          'prompt',
+        ]);
+        const __pocketGetBoundWindowFn = (target, key, value) => {
+          if (typeof value !== 'function') return value;
+          const keyStr = String(key);
+          if (!__pocketWindowMethodsNeedingBind.has(keyStr)) return value;
+          let bound = __pocketBoundWindowFnCache.get(keyStr);
+          if (!bound) {
+            bound = value.bind(target);
+            __pocketBoundWindowFnCache.set(keyStr, bound);
+          }
+          return bound;
+        };
+
         const pocketGlobals = new Proxy(window, {
           has(target, key) {
             if (typeof key !== 'string') return key in target;
@@ -1231,8 +1681,18 @@ ${cleanCss(globalsCss)}
           },
           get(target, key) {
             if (typeof key !== 'string') return target[key];
-            if (key in target) return target[key];
+            if (key in target) {
+              return __pocketGetBoundWindowFn(target, key, target[key]);
+            }
             if (/^[A-Z]/.test(key)) {
+              if (
+                key.includes('_') ||
+                (window.__pocketGoogleFontNames && window.__pocketGoogleFontNames.has(key))
+              ) {
+                const fontLoader = window.__pocketCreateGoogleFontLoader(key);
+                target[key] = fontLoader;
+                return fontLoader;
+              }
               const fallback = createFallbackIcon(key);
               target[key] = fallback;
               return fallback;
@@ -1277,8 +1737,15 @@ ${cleanCss(globalsCss)}
               const missingName = match[1];
               console.warn(\`⚠ Missing: \${missingName}, creating fallback (attempt \${retryCount + 1}/\${maxRetries})...\`);
 
-              // Create the missing icon/component
-              window[missingName] = createFallbackIcon(missingName);
+              if (
+                missingName.includes('_') ||
+                (window.__pocketGoogleFontNames && window.__pocketGoogleFontNames.has(missingName))
+              ) {
+                window[missingName] = window.__pocketCreateGoogleFontLoader(missingName);
+              } else {
+                // Create the missing icon/component
+                window[missingName] = createFallbackIcon(missingName);
+              }
 
               // Retry execution
               retryCount++;
@@ -1297,10 +1764,24 @@ ${cleanCss(globalsCss)}
           }
         };
 
+        const refreshTailwindRuntime = () => {
+          try {
+            if (window.tailwind && typeof window.tailwind.refresh === 'function') {
+              window.tailwind.refresh();
+            }
+          } catch (tailwindError) {
+            console.warn('Tailwind runtime refresh failed:', tailwindError);
+          }
+        };
+
         const success = executeWithRetry();
         if (!success && lastError) {
           throw lastError;
         }
+
+        refreshTailwindRuntime();
+        setTimeout(refreshTailwindRuntime, 60);
+        setTimeout(refreshTailwindRuntime, 250);
 
         // Fade in after render
         setTimeout(() => {

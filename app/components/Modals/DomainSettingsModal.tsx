@@ -9,6 +9,7 @@ interface DomainSettingsModalProps {
   onConnectDomain: (domain: string) => void;
   hasUnpublishedChanges: boolean;
   isPublishing: boolean;
+  isUnpublishing: boolean;
   onPublish: () => void;
   onUnpublish: () => void;
 }
@@ -22,6 +23,7 @@ export function DomainSettingsModal({
   onConnectDomain,
   hasUnpublishedChanges,
   isPublishing,
+  isUnpublishing,
   onPublish,
   onUnpublish,
 }: DomainSettingsModalProps) {
@@ -227,7 +229,7 @@ export function DomainSettingsModal({
               {hasUnpublishedChanges ? (
                 <button
                   onClick={onPublish}
-                  disabled={isPublishing}
+                  disabled={isPublishing || isUnpublishing}
                   className="px-4 py-2 text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isPublishing ? "Publishing..." : "Publish Changes"}
@@ -235,9 +237,10 @@ export function DomainSettingsModal({
               ) : (
                 <button
                   onClick={onUnpublish}
-                  className="px-4 py-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition text-sm font-medium"
+                  disabled={isUnpublishing}
+                  className="px-4 py-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Unpublish
+                  {isUnpublishing ? "Unpublishing..." : "Unpublish"}
                 </button>
               )}
             </>

@@ -22,6 +22,7 @@ export function usePublishing({
   loadSavedProjects,
 }: UsePublishingProps) {
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isUnpublishing, setIsUnpublishing] = useState(false);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
   const [deploymentId, setDeploymentId] = useState<string | null>(null);
   const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false);
@@ -89,6 +90,8 @@ export function usePublishing({
   const unpublishProject = useCallback(async () => {
     if (!currentProjectId || !user) return;
 
+    setIsUnpublishing(true);
+    setError("");
     try {
       // Delete the Vercel deployment if we have a deployment ID
       if (deploymentId) {
@@ -126,6 +129,8 @@ export function usePublishing({
     } catch (error) {
       console.error("Error unpublishing project:", error);
       setError("Failed to unpublish project. Please try again.");
+    } finally {
+      setIsUnpublishing(false);
     }
   }, [currentProjectId, user, deploymentId, setError, loadSavedProjects]);
 
@@ -157,6 +162,7 @@ export function usePublishing({
   return {
     // State
     isPublishing,
+    isUnpublishing,
     publishedUrl,
     deploymentId,
     hasUnpublishedChanges,
