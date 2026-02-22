@@ -124,6 +124,62 @@ const applyEditHistoryToProject = (
   };
 };
 
+const inferProjectIntegrations = (
+  projectData: ReactProject | null,
+): { auth: string[]; hasDatabase: boolean } => {
+  if (!projectData) {
+    return { auth: [], hasDatabase: false };
+  }
+
+  const allCode = projectData.files.map((f) => f.content).join("\n").toLowerCase();
+  const deps = Object.keys(projectData.dependencies || {}).map((d) => d.toLowerCase());
+
+  const hasGoogleOAuth =
+    /\bsigninwithoauth\b/.test(allCode) ||
+    /\bprovider\s*:\s*["']google["']/.test(allCode) ||
+    /\bgoogle oauth\b/.test(allCode) ||
+    /\bsign in with google\b/.test(allCode);
+  const hasPasswordAuth =
+    /\bsigninwithpassword\b/.test(allCode) ||
+    /\bsignup\s*\(/.test(allCode) ||
+    /\bforgot password\b/.test(allCode) ||
+    /\breset password\b/.test(allCode) ||
+    /\busername\/password\b/.test(allCode) ||
+    /\bpassword\b/.test(allCode);
+
+  const auth: string[] = [];
+  if (hasPasswordAuth) auth.push("username-password");
+  if (hasGoogleOAuth) auth.push("google");
+
+  const hasDatabaseDep = deps.some((dep) =>
+    [
+      "@prisma/client",
+      "prisma",
+      "pg",
+      "postgres",
+      "mysql2",
+      "mongodb",
+      "drizzle-orm",
+      "@supabase/supabase-js",
+    ].includes(dep),
+  );
+  const hasDatabaseCode =
+    /\bdatabase\b/.test(allCode) ||
+    /\bprisma\b/.test(allCode) ||
+    /\bschema\b/.test(allCode) ||
+    /\brow level security\b/.test(allCode) ||
+    /\brls\b/.test(allCode) ||
+    /\.from\(\s*["'`][a-z0-9_-]+["'`]\s*\)/.test(allCode) ||
+    /\binsert\(\s*\{/.test(allCode) ||
+    /\bupdate\(\s*\{/.test(allCode) ||
+    /\bdelete\(\)/.test(allCode);
+
+  return {
+    auth,
+    hasDatabase: hasDatabaseDep || hasDatabaseCode,
+  };
+};
+
 // Main content component
 function ReactGeneratorContent() {
   const {
@@ -330,6 +386,29 @@ function ReactGeneratorContent() {
     exportToVSCode,
     exportToCursor,
   } = editorExportHook;
+
+  useEffect(() => {
+    if (!project) return;
+    const inferred = inferProjectIntegrations(project);
+
+    if (inferred.auth.length > 0) {
+      setEditAppAuth((prev) => {
+        const merged = Array.from(new Set([...prev, ...inferred.auth]));
+        return merged.sort();
+      });
+      setCurrentAppAuth((prev) => {
+        const merged = Array.from(new Set([...prev, ...inferred.auth]));
+        return merged.sort();
+      });
+    }
+
+    if (inferred.hasDatabase) {
+      setCurrentAppDatabase((prev) => {
+        if (prev.length > 0) return prev;
+        return ["supabase-postgres"];
+      });
+    }
+  }, [project]);
 
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
@@ -696,6 +775,8 @@ function ReactGeneratorContent() {
         },
         config: projectData.config,
         authIntegrationCost,
+        generationRunId:
+          (projectData as ReactProject & { projectId?: string }).projectId || null,
       }),
     });
 
@@ -966,6 +1047,9 @@ function ReactGeneratorContent() {
     setHasUnpublishedChanges(false);
     setEditHistory([]);
     setShowEditHistory(false);
+    setCurrentAppAuth([]);
+    setEditAppAuth([]);
+    setCurrentAppDatabase([]);
   };
 
   const handleNewProjectClick = () => {
@@ -1371,8 +1455,10 @@ function ReactGeneratorContent() {
       } = await detectIntegrationIntent(editPrompt);
       setCheckingAuthIntent(false);
 
-      const hasSelectedAuth = editAppAuth.length > 0;
-      const hasSelectedDatabase = currentAppDatabase.length > 0;
+      const inferred = inferProjectIntegrations(project);
+      const hasSelectedAuth = editAppAuth.length > 0 || inferred.auth.length > 0;
+      const hasSelectedDatabase =
+        currentAppDatabase.length > 0 || inferred.hasDatabase;
       const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
       const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
       if (hasBlockedAuth || hasBlockedDatabase) {
@@ -1741,6 +1827,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         (projectId) => {
           setCurrentGenerationProjectId(projectId);
         },
+        currentProjectId || undefined,
       );
 
       setEditProgressMessages((prev) => [
@@ -1766,7 +1853,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       setEditPrompt("");
       clearEditClarificationState();
       setEditFiles([]); // Clear edit files after successful edit
-      setEditAppAuth([]); // Reset edit auth after successful edit
+      setEditAppAuth(inferProjectIntegrations(mergedProject).auth);
 
       // Preview updates via file diff
 
@@ -1989,8 +2076,11 @@ ${pdfUrlList}
       } = await detectIntegrationIntent(prompt);
       setCheckingAuthIntent(false);
 
-      const hasSelectedAuth = currentAppAuth.length > 0;
-      const hasSelectedDatabase = currentAppDatabase.length > 0;
+      const inferred = inferProjectIntegrations(project);
+      const hasSelectedAuth =
+        currentAppAuth.length > 0 || inferred.auth.length > 0;
+      const hasSelectedDatabase =
+        currentAppDatabase.length > 0 || inferred.hasDatabase;
       const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
       const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
       if (hasBlockedAuth || hasBlockedDatabase) {

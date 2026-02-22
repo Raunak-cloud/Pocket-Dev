@@ -60,6 +60,8 @@ export function useProjectManagement(props: UseProjectManagementProps) {
           config: projectData.config || null,
           imageCache: projectData.imageCache || null,
           authIntegrationCost,
+          generationRunId:
+            (projectData as ReactProject & { projectId?: string }).projectId || null,
         }),
       });
 
@@ -176,4 +178,3 @@ export function useProjectManagement(props: UseProjectManagementProps) {
     deleteProject,
   };
 }
-

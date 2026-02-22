@@ -3,6 +3,11 @@ import { execFileSync } from "child_process";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
+import {
+  acquireAuthConfigForBindingKey,
+  getAuthConfigForBindingKey,
+} from "@/lib/supabase-project-pool";
 
 interface ProjectFile {
   path: string;
@@ -63,6 +68,42 @@ function findFirstFileByRegex(
   re: RegExp,
 ): ProjectFileWithNormalizedPath | undefined {
   return files.find((f) => re.test(f.normalizedPath));
+}
+
+function parseDotEnvContent(content: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  const lines = content.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1);
+    env[key] = value;
+  }
+  return env;
+}
+
+function projectLikelyNeedsManagedAuth(
+  files: ProjectFileWithNormalizedPath[],
+  parsedEnv: Record<string, string>,
+): boolean {
+  if (
+    parsedEnv.NEXT_PUBLIC_SUPABASE_URL ||
+    parsedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    parsedEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+  ) {
+    return true;
+  }
+
+  return files.some((file) => {
+    if (/^app\/api\/auth\/.+/.test(file.normalizedPath)) return true;
+    if (/^lib\/supabase\/.+/.test(file.normalizedPath)) return true;
+    return /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY/i.test(
+      file.content,
+    );
+  });
 }
 
 function getImportMap(pageCode: string): Map<string, string> {
@@ -693,6 +734,7 @@ function buildPageHtml(opts: {
   pageCode: string | null; // null for home (sections rendered directly), string for sub-pages
   sectionNames: string[];
   isDark: boolean;
+  runtimePublicEnv?: Record<string, string>;
 }): string {
   const {
     title,
@@ -708,6 +750,7 @@ function buildPageHtml(opts: {
     pageCode,
     sectionNames,
     isDark,
+    runtimePublicEnv: runtimePublicEnvInput,
   } = opts;
 
   // Combine all component code
@@ -770,15 +813,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   const resolvedHtmlClass = (htmlClass || "").trim();
   const resolvedBodyClass = (bodyClass || "").trim();
   const runtimePublicEnv = {
-    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    NEXT_PUBLIC_SUPABASE_ANON_KEY:
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
-    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-      "",
-    NEXT_PUBLIC_POCKET_APP_SLUG: process.env.NEXT_PUBLIC_POCKET_APP_SLUG || "",
+    NEXT_PUBLIC_SUPABASE_URL: "",
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
+    NEXT_PUBLIC_POCKET_APP_SLUG: "",
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
+    ...(runtimePublicEnvInput || {}),
   };
   const runtimePublicEnvLiteral = JSON.stringify(runtimePublicEnv);
 
@@ -893,6 +933,28 @@ ${cleanCss(globalsCss)}
         window.createServerClient = window.createServerClient || ((..._args) => __pocketCreateSupabaseLikeClient());
         window.createSupabaseClient = window.createSupabaseClient || ((..._args) => __pocketCreateSupabaseLikeClient());
         window.createClient = window.createClient || ((..._args) => __pocketCreateSupabaseLikeClient());
+        const __pocketClassMerge = (...inputs) => {
+          const tokens = [];
+          const pushToken = (value) => {
+            if (!value) return;
+            if (Array.isArray(value)) {
+              value.forEach(pushToken);
+              return;
+            }
+            if (typeof value === 'object') {
+              Object.entries(value).forEach(([key, isOn]) => {
+                if (isOn) tokens.push(key);
+              });
+              return;
+            }
+            tokens.push(String(value));
+          };
+          inputs.forEach(pushToken);
+          return tokens.join(' ').trim().replace(/\\s+/g, ' ');
+        };
+        window.clsx = window.clsx || __pocketClassMerge;
+        window.twMerge = window.twMerge || ((...inputs) => __pocketClassMerge(...inputs));
+        window.cn = window.cn || ((...inputs) => window.twMerge(window.clsx(...inputs)));
 
         // Expose React hooks as globals
         const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
@@ -1755,6 +1817,7 @@ ${lucideRuntimeAssignments
             'react',
             ['typescript', { isTSX: true, allExtensions: true }],
           ],
+          sourceType: 'script',
           filename: 'app.tsx'
         });
 
@@ -1768,8 +1831,11 @@ ${lucideRuntimeAssignments
         const compiledCode = transformed.code
           .replace(/^\\s*["']use strict["'];?\\s*/, '')
           .replace(/^\\s*export\\s+\\{[\\s\\S]*?\\}\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+\\*\\s+from\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+\\*\\s+as\\s+\\w+\\s+from\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
           .replace(/^\\s*export\\s+default\\s+/gm, '')
-          .replace(/^\\s*export\\s+/gm, '');
+          .replace(/^\\s*export\\s+/gm, '')
+          .replace(/\\bexport\\s*\\{[^}]*\\}\\s*;?/g, '');
 
         const __pocketBoundWindowFnCache = new Map();
         const __pocketWindowMethodsNeedingBind = new Set([
@@ -2057,6 +2123,54 @@ export async function POST(request: NextRequest) {
     // ── Extract key files ──────────────────────────────────────
 
     const normalizedFiles = withNormalizedPaths(files);
+    const envFile = findFileByCandidates(normalizedFiles, [
+      ".env.local",
+      ".env",
+      "app/.env.local",
+      "src/.env.local",
+    ]);
+    const parsedFileEnv = envFile ? parseDotEnvContent(envFile.content) : {};
+    const tenantSlug =
+      parsedFileEnv.NEXT_PUBLIC_POCKET_APP_SLUG ||
+      getProjectAuthTenantSlug(projectId);
+    const needsManagedAuth = projectLikelyNeedsManagedAuth(
+      normalizedFiles,
+      parsedFileEnv,
+    );
+    let managedAuthConfig = await getAuthConfigForBindingKey(projectId);
+    if (!managedAuthConfig && needsManagedAuth) {
+      managedAuthConfig = await acquireAuthConfigForBindingKey(projectId);
+    }
+    if (needsManagedAuth && !managedAuthConfig) {
+      throw new Error(
+        "Managed Supabase allocation failed. Configure SUPABASE_PREPROVISIONED_POOL or Supabase Management API credentials.",
+      );
+    }
+    const runtimePublicEnv = {
+      NEXT_PUBLIC_SUPABASE_URL:
+        managedAuthConfig?.supabaseUrl ||
+        parsedFileEnv.NEXT_PUBLIC_SUPABASE_URL ||
+        parsedFileEnv.SUPABASE_URL ||
+        process.env.NEXT_PUBLIC_SUPABASE_URL ||
+        process.env.SUPABASE_URL ||
+        "",
+      NEXT_PUBLIC_SUPABASE_ANON_KEY:
+        managedAuthConfig?.anonKey ||
+        parsedFileEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        parsedFileEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        "",
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+        managedAuthConfig?.anonKey ||
+        parsedFileEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        parsedFileEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        "",
+      NEXT_PUBLIC_POCKET_APP_SLUG: tenantSlug,
+      NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
+    };
     const globalsCss =
       findFileByCandidates(normalizedFiles, ["app/globals.css"])?.content || "";
     const tailwindConfigFile = findFileByCandidates(normalizedFiles, [
@@ -2222,6 +2336,7 @@ export async function POST(request: NextRequest) {
       pageCode: cleanComponent(homePageFile.content),
       sectionNames: homeSectionCodes.map((c) => c.name),
       isDark,
+      runtimePublicEnv,
     });
 
     const deployFiles = new Map<string, string>();
@@ -2272,6 +2387,7 @@ export async function POST(request: NextRequest) {
         pageCode,
         sectionNames: pageSectionCodes.map((c) => c.name),
         isDark,
+        runtimePublicEnv,
       });
 
       deployFiles.set(`${pagePath}/index.html`, pageHtml);

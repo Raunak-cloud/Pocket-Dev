@@ -63,6 +63,27 @@ model Project {
   @@map("projects")
 }
 
+model SupabaseProjectPool {
+  id                       String   @id @default(cuid())
+  projectRef               String   @unique
+  organizationId           String?
+  region                   String?
+  status                   String   @default("provisioning") // provisioning | ready | assigned | failed | recycling
+  bindingKey               String?  @unique // generation run id or persisted project id
+  supabaseUrl              String
+  anonKey                  String
+  serviceRoleKeyEncrypted  String?
+  dbPasswordEncrypted      String?
+  databaseUrlEncrypted     String?
+  lastError                String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([status])
+  @@index([bindingKey])
+  @@map("supabase_project_pool")
+}
+
 // Support Ticket model - migrated from Firestore supportTickets collection
 model SupportTicket {
   id                      String    @id @default(cuid())
@@ -123,4 +144,3 @@ model Maintenance {
 
   @@map("maintenance")
 }
-

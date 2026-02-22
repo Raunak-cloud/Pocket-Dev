@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { deductAppTokens } from '@/lib/db-utils';
+import { rebindAuthConfigBindingKey } from '@/lib/supabase-project-pool';
 
 export async function POST(req: Request) {
   try {
@@ -28,7 +29,13 @@ export async function POST(req: Request) {
       lintReport,
       config,
       imageCache,
+      generationRunId,
     } = body;
+
+    const generationRunBindingKey =
+      typeof generationRunId === "string" && generationRunId.trim().length > 0
+        ? generationRunId.trim()
+        : null;
 
     // Use Prisma transaction to create project and update user atomically
     const result = await prisma.$transaction(async (tx) => {
@@ -65,6 +72,10 @@ export async function POST(req: Request) {
       return project;
     });
 
+    if (generationRunBindingKey) {
+      await rebindAuthConfigBindingKey(generationRunBindingKey, result.id);
+    }
+
     return NextResponse.json({ projectId: result.id });
   } catch (error) {
     console.error('[POST /api/projects/create] Error:', error);
@@ -74,5 +85,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
-

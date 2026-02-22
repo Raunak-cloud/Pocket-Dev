@@ -127,8 +127,12 @@ export async function generateCodeWithInngest(
   userId: string,
   onProgress?: (message: string) => void,
   onRunStart?: (projectId: string) => void,
+  fixedProjectId?: string,
 ): Promise<GenerateCodeResult> {
-  const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const projectId =
+    fixedProjectId && fixedProjectId.trim().length > 0
+      ? fixedProjectId.trim()
+      : `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   onRunStart?.(projectId);
 
   onProgress?.("[0/7] Queueing generation job...");

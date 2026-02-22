@@ -9,6 +9,11 @@ import { inngest } from "@/lib/inngest-client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
+import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
+import {
+  acquireAuthConfigForBindingKey,
+  type ManagedSupabaseAuthConfig,
+} from "@/lib/supabase-project-pool";
 import ts from "typescript";
 
 const MODEL = "gemini-3-flash-preview";
@@ -39,6 +44,13 @@ interface LintIssue {
   rule: string | null;
   message: string;
 }
+
+type IntegrationRequirements = {
+  requiresAuth: boolean;
+  requiresDatabase: boolean;
+  requiresGoogleOAuth: boolean;
+  requiresPasswordAuth: boolean;
+};
 
 const SYSTEM_PROMPT = `You are a principal Next.js App Router engineer and product UI designer.
 
@@ -82,21 +94,14 @@ PLATFORM CONTRACT (strict):
   * Authentication CTAs should ONLY appear when the user's request explicitly mentions: "login", "user accounts", "sign in", "authentication", "user management", "dashboard", "user profiles", or similar auth-related functionality
   * If the user does NOT mention authentication, build a fully functional public website WITHOUT any auth CTAs
   * Only implement auth if the user explicitly requests it (login, user accounts, dashboards, etc.)
-  * Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
-  * CRITICAL: Use ONLY anon key (NEXT_PUBLIC_SUPABASE_ANON_KEY), never service role key
-  * MULTI-TENANT ISOLATION: All apps share Supabase with tenant isolation
-  * After auth.signUp(), insert into user_tenants(user_id, tenant_slug) with NEXT_PUBLIC_POCKET_APP_SLUG
-  * MIDDLEWARE: Verify both authentication AND tenant membership
-  * All user data tables MUST include tenant_slug column with NOT NULL constraint
-  * Enable Row Level Security (RLS) on all user data tables
-  * RLS policies must check: current_tenant_slug() = tenant_slug AND user_belongs_to_tenant()
-  * Set session context: SET LOCAL app.current_tenant = NEXT_PUBLIC_POCKET_APP_SLUG
-  * If user authenticated but not in tenant → redirect to /unauthorized
-  * Create lib/supabase/client.ts for browser client, lib/supabase/server.ts for server client
-  * Use createServerClient with cookie handlers in middleware.ts for route protection
-  * Implement OAuth sign-in (Google/GitHub) in a sign-in component
-  * Store user sessions in httpOnly cookies (handled automatically by @supabase/ssr)
-  * Example middleware pattern: getUser() → check tenant membership → redirect to /sign-in or /unauthorized if invalid
+  * IMPORTANT: Auth infra is scaffolded by the platform; AI must NOT invent custom auth internals
+  * Only wire UI CTAs/links to these routes:
+    - "/sign-in"
+    - "/signup"
+    - POST "/api/auth/signout" for logout buttons/forms
+  * Never mount a global auth modal in app/layout or all pages; auth UI should appear only on sign-in/sign-up pages or user-triggered actions
+  * Do NOT generate custom Supabase auth clients, middleware, callback handlers, or custom auth API routes
+  * Do NOT hardcode secrets or service-role keys
 - Do not output malformed PostCSS config shapes.
 - Navigation must work on desktop and mobile (include hamburger toggle with open/close behavior on small screens).
 - Avoid horizontal overflow on mobile.
@@ -131,6 +136,68 @@ function getGeminiClient() {
 
 function isValidSiteTheme(value: string): value is SiteTheme {
   return ["food", "fashion", "interior", "automotive", "people", "generic"].includes(value);
+}
+
+function detectIntegrationRequirements(promptText: string): IntegrationRequirements {
+  const text = promptText.toLowerCase();
+  const requiresAuth =
+    text.includes("🔐 authentication requirement") ||
+    /\bauthentication\b|\blog[\s-]?in\b|\bsign[\s-]?in\b|\bsign[\s-]?up\b|\boauth\b/.test(
+      text,
+    );
+  const requiresDatabase =
+    text.includes("🗄️ database requirement") ||
+    /\bdatabase\b|\bpostgres\b|\bprisma\b|\bschema\b|\bcrud\b/.test(text);
+
+  return {
+    requiresAuth,
+    requiresDatabase,
+    requiresGoogleOAuth:
+      /\bgoogle oauth\b|\bsign in with google\b|\bprovider\s*:\s*google\b/.test(
+        text,
+      ),
+    requiresPasswordAuth:
+      /\busername\/password\b|\bpassword\b|\bforgot password\b|\breset password\b/.test(
+        text,
+      ),
+  };
+}
+
+function projectNeedsManagedSupabase(
+  files: GeneratedFile[],
+  dependencies: Record<string, string>,
+  requirements: IntegrationRequirements,
+): boolean {
+  if (requirements.requiresAuth || requirements.requiresDatabase) {
+    return true;
+  }
+
+  const joined = files.map((file) => `${file.path}\n${file.content}`).join("\n");
+  const hasSupabaseSignals =
+    /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|lib\/supabase\/client|lib\/supabase\/server|app\/api\/auth\//i.test(
+      joined,
+    ) ||
+    Object.keys(dependencies).some((pkg) =>
+      ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
+    );
+
+  const hasDatabaseSignals =
+    /DATABASE_URL|prisma\/schema\.prisma|@prisma\/client|drizzle|postgres|mysql|mongodb/i.test(
+      joined,
+    ) ||
+    Object.keys(dependencies).some((pkg) =>
+      [
+        "@prisma/client",
+        "prisma",
+        "pg",
+        "postgres",
+        "mysql2",
+        "mongodb",
+        "drizzle-orm",
+      ].includes(pkg),
+    );
+
+  return hasSupabaseSignals || hasDatabaseSignals;
 }
 
 async function detectThemeWithGemini(userPrompt: string): Promise<SiteTheme> {
@@ -646,8 +713,19 @@ async function repairProjectFromLintFeedback(args: {
   files: GeneratedFile[];
   dependencies: Record<string, string>;
   lintIssues: LintIssue[];
+  requirements?: IntegrationRequirements;
+  projectId?: string;
+  managedAuthConfig?: ManagedSupabaseAuthConfig | null;
 }) {
-  const { originalPrompt, files, dependencies, lintIssues } = args;
+  const {
+    originalPrompt,
+    files,
+    dependencies,
+    lintIssues,
+    requirements,
+    projectId,
+    managedAuthConfig,
+  } = args;
   const hasNavigationUxIssue = lintIssues.some((issue) =>
     /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|responsive-breakpoints|mobile-overflow-guard)$/.test(
       issue.rule ?? "",
@@ -699,7 +777,13 @@ ${
   const { dependencies: repairedDependencies, files: parsedFiles } =
     parseAndNormalizeProjectFromTextOrThrow(text);
   let repairedFiles = parsedFiles;
-  repairedFiles = ensureRequiredFiles(repairedFiles, repairedDependencies);
+  repairedFiles = ensureRequiredFiles(
+    repairedFiles,
+    repairedDependencies,
+    requirements,
+    projectId,
+    managedAuthConfig,
+  );
   validateProjectStructureOrThrow(repairedFiles);
   validateSyntaxOrThrow(repairedFiles);
 
@@ -709,7 +793,20 @@ ${
 function ensureRequiredFiles(
   files: GeneratedFile[],
   dependencies: Record<string, string>,
+  requirements?: IntegrationRequirements,
+  projectId?: string,
+  managedAuthConfig?: ManagedSupabaseAuthConfig | null,
 ): GeneratedFile[] {
+  const requested: IntegrationRequirements = requirements || {
+    requiresAuth: false,
+    requiresDatabase: false,
+    requiresGoogleOAuth: false,
+    requiresPasswordAuth: false,
+  };
+  const derivedTenantSlug = projectId
+    ? getProjectAuthTenantSlug(projectId)
+    : "";
+
   function parseEnvContent(content: string): Map<string, string> {
     const vars = new Map<string, string>();
     const lines = content.split(/\r?\n/);
@@ -796,14 +893,21 @@ export async function createClient() {
     );
   }
 
-  const cookieStore = await cookies();
+  let cookieStore: Awaited<ReturnType<typeof cookies>> | null = null;
+  try {
+    cookieStore = await cookies();
+  } catch {
+    // Called outside request scope (build/static tooling): return stateless client.
+    cookieStore = null;
+  }
 
   return createServerClient(supabaseUrl, supabasePublishableKey, {
     cookies: {
       getAll() {
-        return cookieStore.getAll();
+        return cookieStore?.getAll() ?? [];
       },
       setAll(cookiesToSet) {
+        if (!cookieStore) return;
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
             cookieStore.set(name, value, options);
@@ -865,6 +969,9 @@ ${canonicalSupabaseAnonDecl}
         canonicalSupabaseAnonDecl,
       );
 
+    // Clean up stray statements produced by partial env replacement.
+    patched = patched.replace(/^\s*supabase(?:Url|AnonKey)\s*;\s*$/gm, "");
+
     if (!/if\s*\(!supabaseUrl\s*\|\|\s*!supabaseAnonKey\)/.test(patched)) {
       patched = patched
         .replace(
@@ -922,8 +1029,17 @@ ${canonicalSupabaseAnonDecl}
   }
 
   const fileMap = new Map(files.map((f) => [f.path, f]));
+  const upsertFile = (path: string, content: string) => {
+    const idx = files.findIndex((f) => f.path === path);
+    if (idx >= 0) {
+      files[idx] = { path, content };
+      return;
+    }
+    files.push({ path, content });
+  };
   const allText = files.map((f) => f.content).join("\n");
   const hasAuthIntegration =
+    requested.requiresAuth ||
     /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|lib\/supabase\/client|lib\/supabase\/server/i.test(
       allText,
     ) ||
@@ -931,6 +1047,7 @@ ${canonicalSupabaseAnonDecl}
       ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
     );
   const hasDatabaseIntegration =
+    requested.requiresDatabase ||
     /@prisma\/client|prisma|drizzle|postgres|mysql|mongodb|DATABASE_URL|from\(["']\w+["']\)/i.test(
       allText,
     ) ||
@@ -947,6 +1064,12 @@ ${canonicalSupabaseAnonDecl}
     );
 
   if (!fileMap.has("package.json")) {
+    if (hasAuthIntegration) {
+      dependencies["@supabase/supabase-js"] =
+        dependencies["@supabase/supabase-js"] || "^2.57.4";
+      dependencies["@supabase/ssr"] = dependencies["@supabase/ssr"] || "^0.7.0";
+    }
+
     files.push({
       path: "package.json",
       content: JSON.stringify(
@@ -974,6 +1097,10 @@ ${canonicalSupabaseAnonDecl}
         2,
       ),
     });
+  } else if (hasAuthIntegration) {
+    dependencies["@supabase/supabase-js"] =
+      dependencies["@supabase/supabase-js"] || "^2.57.4";
+    dependencies["@supabase/ssr"] = dependencies["@supabase/ssr"] || "^0.7.0";
   }
 
   if (!fileMap.has("tailwind.config.ts")) {
@@ -1081,10 +1208,10 @@ html, body {
   }
 
   // Ensure tenant helper exists for multi-tenant apps with auth
-  if (hasAuthIntegration && !fileMap.has("lib/supabase/tenant.ts")) {
-    files.push({
-      path: "lib/supabase/tenant.ts",
-      content: `import { createClient } from "./server";
+  if (hasAuthIntegration) {
+    upsertFile(
+      "lib/supabase/tenant.ts",
+      `import { createClient } from "./server";
 
 /**
  * Get the current tenant slug from environment
@@ -1128,7 +1255,531 @@ export async function getCurrentUser() {
 export async function isUserTenantMember(): Promise<boolean> {
   const user = await getCurrentUser();
   return user !== null;
-}`,
+}
+`,
+    );
+  }
+
+  if (hasAuthIntegration) {
+    upsertFile("lib/supabase/client.ts", buildBrowserSupabaseClientContent(true));
+  }
+
+  if (hasAuthIntegration) {
+    upsertFile("lib/supabase/server.ts", buildServerSupabaseClientContent());
+  }
+
+  if (hasAuthIntegration) {
+    upsertFile(
+      "middleware.ts",
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
+
+export async function middleware(request: NextRequest) {
+  if (!supabaseUrl || !supabaseAnonKey || !tenantSlug) {
+    return NextResponse.next();
+  }
+
+  const pathname = request.nextUrl.pathname;
+  const isPublicAsset =
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/api") ||
+    pathname.includes(".");
+  if (isPublicAsset) {
+    return NextResponse.next();
+  }
+
+  const response = NextResponse.next();
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          response.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const isAuthPage =
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/signup") ||
+    pathname.startsWith("/auth");
+  const protectedPrefixes = ["/dashboard", "/account", "/settings", "/app", "/protected"];
+  const requiresAuth = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
+
+  if (!user && requiresAuth) {
+    const signInUrl = new URL("/sign-in", request.url);
+    signInUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(signInUrl);
+  }
+
+  if (user && requiresAuth && !isAuthPage) {
+    try {
+      const { data: membership } = await supabase
+        .from("user_tenants")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("tenant_slug", tenantSlug)
+        .maybeSingle();
+
+      if (!membership && !isAuthPage && !pathname.startsWith("/unauthorized")) {
+        return NextResponse.redirect(new URL("/unauthorized", request.url));
+      }
+    } catch {
+      // If table is not created yet, do not hard fail middleware.
+    }
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+`,
+    );
+  }
+
+  if (hasAuthIntegration) {
+    upsertFile(
+      "app/auth/callback/route.ts",
+      `import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function GET(request: Request) {
+  const { searchParams, origin } = new URL(request.url);
+  const code = searchParams.get("code");
+  const next = searchParams.get("next") ?? "/";
+  const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
+
+  if (code) {
+    const supabase = await createClient();
+    await supabase.auth.exchangeCodeForSession(code);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (user && tenantSlug) {
+      await supabase.from("user_tenants").upsert(
+        {
+          user_id: user.id,
+          tenant_slug: tenantSlug,
+        },
+        { onConflict: "user_id,tenant_slug" },
+      );
+    }
+  }
+
+  return NextResponse.redirect(\`\${origin}\${next}\`);
+}
+`,
+    );
+
+    upsertFile(
+      "app/api/auth/signin/route.ts",
+      `import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function POST(request: Request) {
+  try {
+    const { email, password, next } = await request.json();
+    const supabase = await createClient();
+    const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
+
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.signInWithPassword({
+      email: String(email || ""),
+      password: String(password || ""),
+    });
+
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    if (user?.id && tenantSlug) {
+      const { error: membershipError } = await supabase.from("user_tenants").upsert(
+        {
+          user_id: user.id,
+          tenant_slug: tenantSlug,
+        },
+        { onConflict: "user_id,tenant_slug" },
+      );
+
+      if (membershipError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Signed in, but tenant setup failed. Run supabase/schema.sql and ensure RLS policies are applied.",
+            details: membershipError.message,
+          },
+          { status: 500 },
+        );
+      }
+    }
+
+    return NextResponse.json({ success: true, next: typeof next === "string" ? next : "/" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected server error";
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
+`,
+    );
+
+    upsertFile(
+      "app/api/auth/signup/route.ts",
+      `import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function POST(request: Request) {
+  try {
+    const { email, password, next } = await request.json();
+    const supabase = await createClient();
+    const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
+
+    const {
+      data: { user, session },
+      error,
+    } = await supabase.auth.signUp({
+      email: String(email || ""),
+      password: String(password || ""),
+    });
+
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    // Membership insert can fail immediately after sign-up when email confirmation is enabled
+    // because no authenticated session is established yet. In that case, we defer membership
+    // creation to sign-in/callback and do not fail signup.
+    if (user?.id && tenantSlug && session) {
+      const { error: membershipError } = await supabase.from("user_tenants").upsert(
+        {
+          user_id: user.id,
+          tenant_slug: tenantSlug,
+        },
+        { onConflict: "user_id,tenant_slug" },
+      );
+
+      if (membershipError) {
+        console.warn("[auth/signup] tenant membership upsert failed:", membershipError.message);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      next: typeof next === "string" ? next : "/sign-in",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected server error";
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
+`,
+    );
+
+    upsertFile(
+      "app/api/auth/signout/route.ts",
+      `import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function POST() {
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  return NextResponse.json({ success: true, next: "/sign-in" });
+}
+`,
+    );
+
+    upsertFile(
+      "app/api/auth/oauth/route.ts",
+      `import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+export async function GET(request: Request) {
+  const { searchParams, origin } = new URL(request.url);
+  const provider = searchParams.get("provider") || "google";
+  const next = searchParams.get("next") || "/";
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: provider as "google",
+    options: {
+      redirectTo: \`\${origin}/auth/callback?next=\${encodeURIComponent(next)}\`,
+    },
+  });
+
+  if (error || !data?.url) {
+    return NextResponse.redirect(new URL("/sign-in?error=oauth_failed", origin));
+  }
+
+  return NextResponse.redirect(data.url);
+}
+`,
+    );
+
+    upsertFile(
+      "app/sign-in/page.tsx",
+      `"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+
+export default function SignInPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const res = await fetch("/api/auth/signin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, next: "/" }),
+    });
+    const raw = await res.text();
+    let data: { success?: boolean; error?: string; next?: string } = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = {};
+    }
+
+    setLoading(false);
+    if (!res.ok || !data?.success) {
+      const fallback =
+        raw && raw.length < 600 ? raw : \`Sign-in failed (\${res.status})\`;
+      setError(data?.error || fallback);
+      return;
+    }
+
+    window.location.href = data?.next || "/";
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-6">
+        <div className="space-y-2">
+          <h1 className="text-2xl font-semibold">Welcome back</h1>
+          <p className="text-sm text-slate-400">Sign in to continue.</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
+            required
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
+            required
+          />
+
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-blue-600 px-3 py-2 font-medium disabled:opacity-50"
+          >
+            {loading ? "Signing in..." : "Sign In"}
+          </button>
+        </form>
+
+        <a
+          href="/api/auth/oauth?provider=google&next=%2F"
+          className="block w-full rounded-lg border border-slate-700 px-3 py-2 text-center"
+        >
+          Continue with Google
+        </a>
+
+        <p className="text-sm text-slate-400">
+          No account?{" "}
+          <Link href="/signup" className="text-blue-400 hover:text-blue-300">
+            Create one
+          </Link>
+        </p>
+      </div>
+    </main>
+  );
+}
+`,
+    );
+
+    upsertFile(
+      "app/signup/page.tsx",
+      `"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+
+export default function SignupPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, next: "/sign-in" }),
+    });
+    const raw = await res.text();
+    let data: { success?: boolean; error?: string; next?: string } = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = {};
+    }
+
+    setLoading(false);
+    if (!res.ok || !data?.success) {
+      const fallback =
+        raw && raw.length < 600 ? raw : \`Sign-up failed (\${res.status})\`;
+      setError(data?.error || fallback);
+      return;
+    }
+
+    window.location.href = data?.next || "/sign-in";
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-6">
+        <div className="space-y-2">
+          <h1 className="text-2xl font-semibold">Create account</h1>
+          <p className="text-sm text-slate-400">Start using your app.</p>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
+            required
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
+            required
+          />
+
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-blue-600 px-3 py-2 font-medium disabled:opacity-50"
+          >
+            {loading ? "Creating..." : "Create account"}
+          </button>
+        </form>
+
+        <p className="text-sm text-slate-400">
+          Already have an account?{" "}
+          <Link href="/sign-in" className="text-blue-400 hover:text-blue-300">
+            Sign in
+          </Link>
+        </p>
+      </div>
+    </main>
+  );
+}
+`,
+    );
+  }
+
+  if (hasAuthIntegration) {
+    upsertFile(
+      "app/unauthorized/page.tsx",
+      `export default function UnauthorizedPage() {
+  return (
+    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+      <div className="max-w-lg text-center">
+        <h1 className="text-2xl font-semibold mb-2">Access denied</h1>
+        <p className="text-slate-300">
+          Your account is authenticated but not a member of this app tenant.
+        </p>
+      </div>
+    </main>
+  );
+}
+`,
+    );
+  }
+
+  if ((hasAuthIntegration || hasDatabaseIntegration) && !fileMap.has("supabase/schema.sql")) {
+    files.push({
+      path: "supabase/schema.sql",
+      content: `-- Generated multi-tenant schema bootstrap
+-- Run this SQL in Supabase SQL editor for the generated app.
+
+create table if not exists public.user_tenants (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  tenant_slug text not null,
+  created_at timestamptz not null default now(),
+  unique(user_id, tenant_slug)
+);
+
+alter table public.user_tenants enable row level security;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'user_tenants' and policyname = 'Users can view own tenant memberships'
+  ) then
+    create policy "Users can view own tenant memberships"
+      on public.user_tenants for select using (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies where schemaname = 'public' and tablename = 'user_tenants' and policyname = 'Allow authenticated users to join tenants'
+  ) then
+    create policy "Allow authenticated users to join tenants"
+      on public.user_tenants for insert with check (auth.uid() = user_id);
+  end if;
+end $$;
+`,
     });
   }
 
@@ -1165,15 +1816,25 @@ export async function isUserTenantMember(): Promise<boolean> {
 
   if (hasAuthIntegration || hasDatabaseIntegration) {
     const envValues: Record<string, string> = {};
+    const existingEnvFile = files.find((f) => f.path === ".env.local");
+    const existingEnv = parseEnvContent(existingEnvFile?.content || "");
 
     if (hasAuthIntegration) {
       const supabaseUrl =
-        process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+        managedAuthConfig?.supabaseUrl ||
+        process.env.NEXT_PUBLIC_SUPABASE_URL ||
+        process.env.SUPABASE_URL ||
+        "";
       const supabasePublishable =
+        managedAuthConfig?.anonKey ||
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
         process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
         "";
-      const appSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG || "";
+      const appSlug =
+        existingEnv.get("NEXT_PUBLIC_POCKET_APP_SLUG") ||
+        derivedTenantSlug ||
+        process.env.NEXT_PUBLIC_POCKET_APP_SLUG ||
+        "";
 
       if (supabaseUrl) {
         envValues.NEXT_PUBLIC_SUPABASE_URL = supabaseUrl;
@@ -1188,8 +1849,16 @@ export async function isUserTenantMember(): Promise<boolean> {
       }
     }
 
-    if (hasDatabaseIntegration && process.env.DATABASE_URL) {
-      envValues.DATABASE_URL = process.env.DATABASE_URL;
+    if (hasDatabaseIntegration) {
+      const managedDatabaseUrl = managedAuthConfig?.databaseUrl || "";
+      const legacyDatabaseUrl =
+        !managedAuthConfig &&
+        (existingEnv.get("DATABASE_URL") || process.env.DATABASE_URL || "");
+      if (managedDatabaseUrl) {
+        envValues.DATABASE_URL = managedDatabaseUrl;
+      } else if (legacyDatabaseUrl) {
+        envValues.DATABASE_URL = legacyDatabaseUrl;
+      }
     }
 
     if (Object.keys(envValues).length > 0) {
@@ -1321,16 +1990,16 @@ function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
 
     const hasNestedMenuScrolling = navFiles.some(
       (f) =>
-        /className\s*=\s*["'`][^"'`]*(?:mobile-menu|menu|drawer)[^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*["'`]/i.test(
+        /className\s*=\s*["'\x60][^"'\x60]*(?:mobile-menu|menu|drawer)[^"'\x60]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'\x60]*["'\x60]/i.test(
           f.content,
         ) ||
-        /className\s*=\s*["'`][^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*(?:mobile-menu|menu|drawer)[^"'`]*["'`]/i.test(
+        /className\s*=\s*["'\x60][^"'\x60]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'\x60]*(?:mobile-menu|menu|drawer)[^"'\x60]*["'\x60]/i.test(
           f.content,
         ),
     );
     const hasScrollableNavContainer = navFiles.some(
       (f) =>
-        /<(?:nav|header)[^>]*className\s*=\s*["'`][^"'`]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'`]*["'`]/i.test(
+        /<(?:nav|header)[^>]*className\s*=\s*["'\x60][^"'\x60]*(?:overflow-y-(?:auto|scroll)|overflow-(?:auto|scroll))[^"'\x60]*["'\x60]/i.test(
           f.content,
         ) ||
         /<(?:nav|header)[^>]*style=\{\{[^}]*overflowY\s*:\s*["'](?:auto|scroll)["']/i.test(
@@ -1572,6 +2241,16 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
+    const integrationRequirements = detectIntegrationRequirements(prompt);
+    const needsManagedAuth =
+      integrationRequirements.requiresAuth ||
+      integrationRequirements.requiresDatabase;
+    let managedAuthConfig: ManagedSupabaseAuthConfig | null = null;
+    if (needsManagedAuth) {
+      managedAuthConfig = await step.run("allocate-managed-supabase", async () => {
+        return await acquireAuthConfigForBindingKey(projectId);
+      });
+    }
 
     // Check if cancelled before starting
     if (await checkIfCancelled(projectId)) {
@@ -1597,10 +2276,10 @@ STRICT IMPLEMENTATION RULES:
   * Do NOT add authentication buttons, forms, or CTAs by default - only add them when the user specifically mentions: "login", "authentication", "user accounts", "sign in", "user management", "dashboard", "user profiles"
   * If the user does NOT mention authentication, create a fully functional public website WITHOUT any auth-related UI elements
   * Only add auth if the user's request implies user accounts (e.g., "dashboard", "user profile", "login")
-  * If auth is needed, use Supabase Auth (@supabase/supabase-js v2 + @supabase/ssr)
-  * Create proper client/server separation with cookie-based sessions
-  * Protect routes with middleware checking supabase.auth.getUser()
-  * Use Row Level Security (RLS) policies if database tables are involved
+  * Auth internals are prebuilt by platform scaffolding; do not generate custom auth internals
+  * If auth UI is needed, only link CTAs/buttons to: "/sign-in", "/signup"
+  * For logout buttons, submit POST to "/api/auth/signout"
+  * Do not place always-visible auth modals globally; auth surfaces only during sign-in/sign-up operations
 - Preserve accessibility, semantic HTML, and responsive behavior.
 - Do not output lockfiles or unsafe file paths.
 - All returned code must parse without TypeScript/JavaScript syntax errors.
@@ -1735,6 +2414,9 @@ DESIGN DIRECTION:
         let files = ensureRequiredFiles(
           normalizedProject.files,
           normalizedProject.dependencies,
+          integrationRequirements,
+          projectId,
+          managedAuthConfig,
         );
         let dependencies = normalizedProject.dependencies;
 
@@ -1768,6 +2450,9 @@ DESIGN DIRECTION:
             files = ensureRequiredFiles(
               repairedProject.files,
               repairedProject.dependencies,
+              integrationRequirements,
+              projectId,
+              managedAuthConfig,
             );
             dependencies = repairedProject.dependencies;
           }
@@ -1796,6 +2481,9 @@ DESIGN DIRECTION:
             files,
             dependencies,
             lintIssues: syntaxIssues,
+            requirements: integrationRequirements,
+            projectId,
+            managedAuthConfig,
           });
           files = repaired.files;
           dependencies = repaired.dependencies;
@@ -1828,6 +2516,9 @@ DESIGN DIRECTION:
             files,
             dependencies,
             lintIssues: uxIssues,
+            requirements: integrationRequirements,
+            projectId,
+            managedAuthConfig,
           });
           files = repaired.files;
           dependencies = repaired.dependencies;
@@ -1838,12 +2529,32 @@ DESIGN DIRECTION:
         return { files, dependencies };
       },
     );
-    const files = parsedProject.files;
+    let files = parsedProject.files;
     let dependencies = parsedProject.dependencies;
+
+    if (
+      !managedAuthConfig &&
+      projectNeedsManagedSupabase(files, dependencies, integrationRequirements)
+    ) {
+      managedAuthConfig = await step.run(
+        "allocate-managed-supabase-from-project-output",
+        async () => {
+          return await acquireAuthConfigForBindingKey(projectId);
+        },
+      );
+
+      files = ensureRequiredFiles(
+        files,
+        dependencies,
+        integrationRequirements,
+        projectId,
+        managedAuthConfig,
+      );
+    }
 
     // Step 4: Lint and fix code (parallel linting for all files)
     await sendProgress(projectId, "[5/7] Running code quality checks...");
-    const { fixedFiles, lintReport } = await step.run(
+    const { fixedFiles } = await step.run(
       "lint-and-repair",
       async () => {
         console.log(`Starting linting for ${files.length} files...`);
@@ -1872,6 +2583,9 @@ DESIGN DIRECTION:
             files: workingFiles,
             dependencies: workingDependencies,
             lintIssues: lintResult.lintIssues,
+            requirements: integrationRequirements,
+            projectId,
+            managedAuthConfig,
           });
 
           workingFiles = repaired.files;
@@ -1893,6 +2607,23 @@ DESIGN DIRECTION:
         };
       },
     );
+
+    const finalFiles = ensureRequiredFiles(
+      fixedFiles,
+      dependencies,
+      integrationRequirements,
+      projectId,
+      managedAuthConfig,
+    );
+    validateSyntaxOrThrow(finalFiles);
+
+    const finalLint = await lintAllFiles(finalFiles);
+    if (finalLint.lintReport.errors > 0) {
+      const firstIssue = finalLint.lintIssues[0];
+      throw new Error(
+        `Post-scaffold lint failed. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+      );
+    }
     // Step 5: Notify completion via API
     await sendProgress(projectId, "[6/7] Finalizing and saving your app...");
     await step.run("notify-completion", async () => {
@@ -1910,9 +2641,9 @@ DESIGN DIRECTION:
           projectId,
           event: "generate.completed",
           data: {
-            files: fixedFiles,
+            files: finalFiles,
             dependencies,
-            lintReport,
+            lintReport: finalLint.lintReport,
             model: "gemini",
             originalPrompt: prompt,
             detectedTheme: detectedTheme,
@@ -1936,9 +2667,9 @@ DESIGN DIRECTION:
     await sendProgress(projectId, "[7/7] Ready to preview.");
 
     return {
-      files: fixedFiles,
+      files: finalFiles,
       dependencies,
-      lintReport,
+      lintReport: finalLint.lintReport,
       model: "gemini",
       originalPrompt: prompt,
       detectedTheme: detectedTheme,

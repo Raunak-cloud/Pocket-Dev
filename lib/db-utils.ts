@@ -1,6 +1,17 @@
 ﻿import { prisma } from './prisma';
 import type { AuthUser } from '@/lib/supabase-auth/server';
 
+function isMissingTokenTransactionsTableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const maybeCode = (error as { code?: string }).code;
+  const maybeMessage = String((error as { message?: string }).message || '');
+  return (
+    maybeCode === 'P2021' ||
+    (maybeMessage.includes('token_transactions') &&
+      maybeMessage.toLowerCase().includes('does not exist'))
+  );
+}
+
 /**
  * Get user data from Prisma database by auth user ID
  */
@@ -99,19 +110,28 @@ export async function deductAppTokens(
         data: { appTokens: newBalance },
       });
 
-      // Log transaction
-      await tx.tokenTransaction.create({
-        data: {
-          userId,
-          type: 'deduction',
-          tokenType: 'app',
-          amount: -amount,
-          balanceBefore: currentBalance,
-          balanceAfter: newBalance,
-          reason,
-          projectId: projectId || null,
-        },
-      });
+      // Log transaction (best effort if token_transactions table is missing)
+      try {
+        await tx.tokenTransaction.create({
+          data: {
+            userId,
+            type: 'deduction',
+            tokenType: 'app',
+            amount: -amount,
+            balanceBefore: currentBalance,
+            balanceAfter: newBalance,
+            reason,
+            projectId: projectId || null,
+          },
+        });
+      } catch (logError) {
+        if (!isMissingTokenTransactionsTableError(logError)) {
+          throw logError;
+        }
+        console.warn(
+          '[db-utils] token_transactions table missing; skipped app token transaction log'
+        );
+      }
     });
 
     return { success: true };
@@ -153,18 +173,27 @@ export async function deductIntegrationToken(
         data: { integrationTokens: newBalance },
       });
 
-      // Log transaction
-      await tx.tokenTransaction.create({
-        data: {
-          userId,
-          type: 'deduction',
-          tokenType: 'integration',
-          amount: -1,
-          balanceBefore: currentBalance,
-          balanceAfter: newBalance,
-          reason,
-        },
-      });
+      // Log transaction (best effort if token_transactions table is missing)
+      try {
+        await tx.tokenTransaction.create({
+          data: {
+            userId,
+            type: 'deduction',
+            tokenType: 'integration',
+            amount: -1,
+            balanceBefore: currentBalance,
+            balanceAfter: newBalance,
+            reason,
+          },
+        });
+      } catch (logError) {
+        if (!isMissingTokenTransactionsTableError(logError)) {
+          throw logError;
+        }
+        console.warn(
+          '[db-utils] token_transactions table missing; skipped integration token transaction log'
+        );
+      }
     });
 
     return { success: true };
@@ -189,12 +218,23 @@ export async function creditTokens(
     await prisma.$transaction(async (tx) => {
       // Check for duplicate transaction (idempotency)
       if (stripePaymentIntentId) {
-        const existingTx = await tx.tokenTransaction.findUnique({
-          where: { stripePaymentIntentId },
-        });
-        if (existingTx) {
-          console.log(`[db-utils] Duplicate transaction detected: ${stripePaymentIntentId}`);
-          return; // Already processed
+        try {
+          const existingTx = await tx.tokenTransaction.findUnique({
+            where: { stripePaymentIntentId },
+          });
+          if (existingTx) {
+            console.log(
+              `[db-utils] Duplicate transaction detected: ${stripePaymentIntentId}`
+            );
+            return; // Already processed
+          }
+        } catch (logError) {
+          if (!isMissingTokenTransactionsTableError(logError)) {
+            throw logError;
+          }
+          console.warn(
+            '[db-utils] token_transactions table missing; skipping duplicate-check guard'
+          );
         }
       }
 
@@ -218,19 +258,28 @@ export async function creditTokens(
         },
       });
 
-      // Log transaction
-      await tx.tokenTransaction.create({
-        data: {
-          userId,
-          type: 'credit',
-          tokenType,
-          amount,
-          balanceBefore: currentBalance,
-          balanceAfter: newBalance,
-          reason,
-          stripePaymentIntentId: stripePaymentIntentId || null,
-        },
-      });
+      // Log transaction (best effort if token_transactions table is missing)
+      try {
+        await tx.tokenTransaction.create({
+          data: {
+            userId,
+            type: 'credit',
+            tokenType,
+            amount,
+            balanceBefore: currentBalance,
+            balanceAfter: newBalance,
+            reason,
+            stripePaymentIntentId: stripePaymentIntentId || null,
+          },
+        });
+      } catch (logError) {
+        if (!isMissingTokenTransactionsTableError(logError)) {
+          throw logError;
+        }
+        console.warn(
+          '[db-utils] token_transactions table missing; skipped credit transaction log'
+        );
+      }
     });
 
     return { success: true };
@@ -267,5 +316,3 @@ export async function checkAppTokenBalance(
     return { sufficient: false, balance: 0 };
   }
 }
-
-

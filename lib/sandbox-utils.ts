@@ -45,6 +45,17 @@ export function hasAuthentication(project: ReactProject): boolean {
 
 export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
   const files: SandboxFiles = {};
+  const sourceEnvFile = project.files.find((f) => f.path === ".env.local");
+  const sourceEnv = new Map<string, string>();
+  if (sourceEnvFile?.content) {
+    sourceEnvFile.content.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) return;
+      sourceEnv.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1));
+    });
+  }
 
   const managedConfigFiles = new Set([
     "package.json",
@@ -324,12 +335,20 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
   );
   if (hasAuthIntegration) {
     const supabaseUrl =
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+      sourceEnv.get("NEXT_PUBLIC_SUPABASE_URL") ||
+      sourceEnv.get("SUPABASE_URL") ||
+      process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      "https://placeholder.supabase.co";
     const supabasePublishableKey =
+      sourceEnv.get("NEXT_PUBLIC_SUPABASE_ANON_KEY") ||
+      sourceEnv.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") ||
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
       "placeholder-anon-key";
-    const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG || "demo-tenant";
+    const tenantSlug =
+      sourceEnv.get("NEXT_PUBLIC_POCKET_APP_SLUG") ||
+      process.env.NEXT_PUBLIC_POCKET_APP_SLUG ||
+      "demo-tenant";
 
     files[".env.local"] = `NEXT_PUBLIC_SUPABASE_URL=${supabaseUrl}
 SUPABASE_URL=${supabaseUrl}

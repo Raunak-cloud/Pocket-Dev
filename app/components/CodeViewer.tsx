@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 
 interface GeneratedFile {
@@ -13,10 +13,130 @@ interface CodeViewerProps {
   onClose: () => void;
 }
 
+type TreeNode =
+  | {
+      kind: "directory";
+      name: string;
+      path: string;
+      children: TreeNode[];
+      depth: number;
+    }
+  | {
+      kind: "file";
+      name: string;
+      path: string;
+      file: GeneratedFile;
+      depth: number;
+    };
+
+type MutableTreeDirectory = {
+  name: string;
+  path: string;
+  children: Map<string, MutableTreeDirectory | GeneratedFile>;
+};
+
+function getAncestorDirectoryPaths(filePath: string): string[] {
+  const parts = filePath.split("/").filter(Boolean);
+  const ancestors: string[] = [];
+  for (let i = 0; i < parts.length - 1; i++) {
+    ancestors.push(parts.slice(0, i + 1).join("/"));
+  }
+  return ancestors;
+}
+
+function buildTree(files: GeneratedFile[]): TreeNode[] {
+  const root: MutableTreeDirectory = {
+    name: "",
+    path: "",
+    children: new Map(),
+  };
+
+  for (const file of files) {
+    const parts = file.path.split("/").filter(Boolean);
+    if (parts.length === 0) continue;
+
+    let current = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const dirName = parts[i];
+      const dirPath = parts.slice(0, i + 1).join("/");
+      const existing = current.children.get(dirName);
+      if (
+        !existing ||
+        !(
+          typeof existing === "object" &&
+          "children" in existing &&
+          existing.children instanceof Map
+        )
+      ) {
+        const nextDir: MutableTreeDirectory = {
+          name: dirName,
+          path: dirPath,
+          children: new Map(),
+        };
+        current.children.set(dirName, nextDir);
+        current = nextDir;
+      } else {
+        current = existing as MutableTreeDirectory;
+      }
+    }
+
+    const fileName = parts[parts.length - 1];
+    current.children.set(fileName, file);
+  }
+
+  const toNodes = (dir: MutableTreeDirectory, depth: number): TreeNode[] => {
+    const directories: TreeNode[] = [];
+    const fileNodes: TreeNode[] = [];
+
+    for (const [name, child] of dir.children) {
+      if (
+        typeof child === "object" &&
+        "children" in child &&
+        child.children instanceof Map
+      ) {
+        directories.push({
+          kind: "directory",
+          name: child.name || name,
+          path: child.path,
+          depth,
+          children: toNodes(child as MutableTreeDirectory, depth + 1),
+        });
+      } else {
+        const file = child as GeneratedFile;
+        fileNodes.push({
+          kind: "file",
+          name,
+          path: file.path,
+          file,
+          depth,
+        });
+      }
+    }
+
+    directories.sort((a, b) => a.name.localeCompare(b.name));
+    fileNodes.sort((a, b) => a.name.localeCompare(b.name));
+    return [...directories, ...fileNodes];
+  };
+
+  return toNodes(root, 0);
+}
+
 export default function CodeViewer({ files, onClose }: CodeViewerProps) {
-  const [selectedFile, setSelectedFile] = useState(files[0]);
+  const [selectedFilePath, setSelectedFilePath] = useState<string>(
+    files[0]?.path || "",
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [copied, setCopied] = useState(false);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => {
+    const topLevel = new Set<string>();
+    for (const file of files) {
+      const parts = file.path.split("/").filter(Boolean);
+      if (parts.length > 1) {
+        topLevel.add(parts[0]);
+      }
+    }
+    return topLevel;
+  });
 
   const handleClose = useCallback(() => onClose(), [onClose]);
 
@@ -61,16 +181,97 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
     file.path.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Group files by directory
-  const filesByDirectory = filteredFiles.reduce(
-    (acc, file) => {
-      const dir = file.path.includes("/") ? file.path.split("/")[0] : "root";
-      if (!acc[dir]) acc[dir] = [];
-      acc[dir].push(file);
-      return acc;
-    },
-    {} as Record<string, GeneratedFile[]>
-  );
+  const fileTree = useMemo(() => buildTree(filteredFiles), [filteredFiles]);
+  const selectedFile =
+    files.find((f) => f.path === selectedFilePath) || files[0];
+
+  const autoExpandedFromSearch = useMemo(() => {
+    if (!searchQuery) return new Set<string>();
+    const dirs = new Set<string>();
+    for (const file of filteredFiles) {
+      for (const ancestor of getAncestorDirectoryPaths(file.path)) {
+        dirs.add(ancestor);
+      }
+    }
+    return dirs;
+  }, [filteredFiles, searchQuery]);
+
+  const effectiveExpandedDirs = new Set(expandedDirs);
+  for (const dir of autoExpandedFromSearch) effectiveExpandedDirs.add(dir);
+  if (selectedFile?.path) {
+    for (const ancestor of getAncestorDirectoryPaths(selectedFile.path)) {
+      effectiveExpandedDirs.add(ancestor);
+    }
+  }
+
+  const isDirectoryExpanded = (dirPath: string) =>
+    effectiveExpandedDirs.has(dirPath);
+
+  const toggleDirectory = (dirPath: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+  };
+
+  const renderTreeNodes = (nodes: TreeNode[]): JSX.Element[] => {
+    return nodes.flatMap((node) => {
+      if (node.kind === "directory") {
+        const expanded = isDirectoryExpanded(node.path);
+        const dirRow = (
+          <button
+            key={`dir:${node.path}`}
+            onClick={() => toggleDirectory(node.path)}
+            className="w-full text-left px-2 py-1.5 rounded-md text-sm text-slate-300 hover:bg-slate-800 transition-colors"
+            style={{ paddingLeft: `${8 + node.depth * 14}px` }}
+          >
+            <div className="flex items-center gap-2">
+              <svg
+                className={`w-3 h-3 text-slate-500 transition-transform ${expanded ? "rotate-90" : ""}`}
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M6.293 4.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L11.586 11 6.293 5.707a1 1 0 010-1.414z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <svg className="w-4 h-4 text-amber-300/80 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h3l2 2h9a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+              </svg>
+              <span className="truncate">{node.name}</span>
+            </div>
+          </button>
+        );
+
+        if (!expanded) return [dirRow];
+        return [dirRow, ...renderTreeNodes(node.children)];
+      }
+
+      return [
+        <button
+          key={`file:${node.path}`}
+          onClick={() => setSelectedFilePath(node.path)}
+          className={`w-full text-left px-2 py-1.5 rounded-md text-sm transition-colors ${
+            selectedFile?.path === node.path
+              ? "bg-blue-600 text-white"
+              : "text-slate-300 hover:bg-slate-800"
+          }`}
+          style={{ paddingLeft: `${24 + node.depth * 14}px` }}
+        >
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 flex-shrink-0 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span className="truncate">{node.name}</span>
+          </div>
+        </button>,
+      ];
+    });
+  };
 
   const lines = selectedFile?.content.split("\n") || [];
 
@@ -130,31 +331,13 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
               />
             </div>
             <div className="flex-1 overflow-y-auto p-2">
-              {Object.entries(filesByDirectory).map(([dir, dirFiles]) => (
-                <div key={dir} className="mb-3">
-                  <div className="px-2 py-1 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    {dir}
-                  </div>
-                  {dirFiles.map((file) => (
-                    <button
-                      key={file.path}
-                      onClick={() => setSelectedFile(file)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                        selectedFile?.path === file.path
-                          ? "bg-blue-600 text-white"
-                          : "text-slate-300 hover:bg-slate-800"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <span className="truncate">{file.path.split("/").pop()}</span>
-                      </div>
-                    </button>
-                  ))}
+              {fileTree.length > 0 ? (
+                <div className="space-y-0.5">{renderTreeNodes(fileTree)}</div>
+              ) : (
+                <div className="px-3 py-3 text-sm text-slate-500">
+                  No files found
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
