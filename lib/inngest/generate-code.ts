@@ -710,6 +710,176 @@ function ensureRequiredFiles(
   files: GeneratedFile[],
   dependencies: Record<string, string>,
 ): GeneratedFile[] {
+  function parseEnvContent(content: string): Map<string, string> {
+    const vars = new Map<string, string>();
+    const lines = content.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1);
+      vars.set(key, value);
+    }
+    return vars;
+  }
+
+  function buildEnvContent(existing?: string, required?: Record<string, string>): string {
+    const env = parseEnvContent(existing || "");
+    for (const [key, value] of Object.entries(required || {})) {
+      if (value && value.length > 0) {
+        env.set(key, value);
+      }
+    }
+
+    const lines = Array.from(env.entries()).map(([key, value]) => `${key}=${value}`);
+    return `${lines.join("\n")}\n`;
+  }
+
+  function buildBrowserSupabaseClientContent(useSsr: boolean): string {
+    if (useSsr) {
+      return `import { createBrowserClient } from "@supabase/ssr";
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+export function createClient() {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error(
+      "Missing Supabase env. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    );
+  }
+
+  return createBrowserClient(supabaseUrl, supabasePublishableKey);
+}
+`;
+    }
+
+    return `import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+export function createClient() {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error(
+      "Missing Supabase env. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    );
+  }
+
+  return createSupabaseClient(supabaseUrl, supabasePublishableKey);
+}
+`;
+  }
+
+  function buildServerSupabaseClientContent(): string {
+    return `import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+export async function createClient() {
+  if (!supabaseUrl || !supabasePublishableKey) {
+    throw new Error(
+      "Missing Supabase env. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.",
+    );
+  }
+
+  const cookieStore = await cookies();
+
+  return createServerClient(supabaseUrl, supabasePublishableKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // setAll can be called from a Server Component where cookie mutation is not allowed.
+        }
+      },
+    },
+  });
+}
+`;
+  }
+
+  function normalizeMiddlewareSupabaseEnv(content: string): string {
+    if (!/createServerClient/.test(content)) return content;
+
+    let patched = content;
+
+    const canonicalSupabaseUrlDecl = `const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;`;
+    const canonicalSupabaseAnonDecl = `const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;`;
+
+    const hasSupabaseUrlDecl = /\b(?:const|let|var)\s+supabaseUrl\b/.test(
+      patched,
+    );
+    const hasSupabaseAnonDecl = /\b(?:const|let|var)\s+supabaseAnonKey\b/.test(
+      patched,
+    );
+
+    if (!hasSupabaseUrlDecl || !hasSupabaseAnonDecl) {
+      patched = patched.replace(
+        /(import\s+\{\s*NextResponse\s*\}\s+from\s+["']next\/server["'];?\s*\n)/,
+        `$1${canonicalSupabaseUrlDecl}
+${canonicalSupabaseAnonDecl}
+`,
+      );
+    }
+
+    patched = patched
+      .replace(/process\.env\.NEXT_PUBLIC_SUPABASE_URL!?/g, "supabaseUrl")
+      .replace(/process\.env\.SUPABASE_URL!?/g, "supabaseUrl")
+      .replace(/process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY!?/g, "supabaseAnonKey")
+      .replace(
+        /process\.env\.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!?/g,
+        "supabaseAnonKey",
+      );
+
+    // Canonicalize declarations even if they currently self-reference or use legacy keys.
+    patched = patched
+      .replace(
+        /\b(?:const|let|var)\s+supabaseUrl(?:\s*:\s*[^=]+)?\s*=\s*[^;\n]+;?/g,
+        canonicalSupabaseUrlDecl,
+      )
+      .replace(
+        /\b(?:const|let|var)\s+supabaseAnonKey(?:\s*:\s*[^=]+)?\s*=\s*[^;\n]+;?/g,
+        canonicalSupabaseAnonDecl,
+      );
+
+    if (!/if\s*\(!supabaseUrl\s*\|\|\s*!supabaseAnonKey\)/.test(patched)) {
+      patched = patched
+        .replace(
+          /export\s+async\s+function\s+middleware\s*\([^)]*\)\s*\{/,
+          (m) => `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
+        )
+        .replace(
+          /export\s+function\s+middleware\s*\([^)]*\)\s*\{/,
+          (m) => `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
+        );
+    }
+
+    return patched;
+  }
+
   function ensureMobileOverflowGuard(content: string): string {
     if (/overflow-x\s*:\s*hidden/i.test(content)) {
       return content;
@@ -752,6 +922,29 @@ function ensureRequiredFiles(
   }
 
   const fileMap = new Map(files.map((f) => [f.path, f]));
+  const allText = files.map((f) => f.content).join("\n");
+  const hasAuthIntegration =
+    /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|lib\/supabase\/client|lib\/supabase\/server/i.test(
+      allText,
+    ) ||
+    Object.keys(dependencies).some((pkg) =>
+      ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
+    );
+  const hasDatabaseIntegration =
+    /@prisma\/client|prisma|drizzle|postgres|mysql|mongodb|DATABASE_URL|from\(["']\w+["']\)/i.test(
+      allText,
+    ) ||
+    Object.keys(dependencies).some((pkg) =>
+      [
+        "@prisma/client",
+        "prisma",
+        "pg",
+        "postgres",
+        "mysql2",
+        "mongodb",
+        "drizzle-orm",
+      ].includes(pkg),
+    );
 
   if (!fileMap.has("package.json")) {
     files.push({
@@ -888,7 +1081,7 @@ html, body {
   }
 
   // Ensure tenant helper exists for multi-tenant apps with auth
-  if (!fileMap.has("lib/supabase/tenant.ts")) {
+  if (hasAuthIntegration && !fileMap.has("lib/supabase/tenant.ts")) {
     files.push({
       path: "lib/supabase/tenant.ts",
       content: `import { createClient } from "./server";
@@ -937,6 +1130,82 @@ export async function isUserTenantMember(): Promise<boolean> {
   return user !== null;
 }`,
     });
+  }
+
+  files = files.map((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
+    if (normalizedPath === "lib/supabase/client.ts") {
+      const useSsr = /@supabase\/ssr/.test(file.content);
+      return { ...file, content: buildBrowserSupabaseClientContent(useSsr) };
+    }
+    if (normalizedPath === "lib/supabase/client.js") {
+      const useSsr = /@supabase\/ssr/.test(file.content);
+      return { ...file, content: buildBrowserSupabaseClientContent(useSsr) };
+    }
+    if (
+      normalizedPath === "lib/supabase/server.ts" &&
+      /@supabase\/ssr/.test(file.content)
+    ) {
+      return { ...file, content: buildServerSupabaseClientContent() };
+    }
+    if (
+      normalizedPath === "lib/supabase/server.js" &&
+      /@supabase\/ssr/.test(file.content)
+    ) {
+      return { ...file, content: buildServerSupabaseClientContent() };
+    }
+    if (
+      normalizedPath === "middleware.ts" ||
+      normalizedPath === "middleware.js"
+    ) {
+      return { ...file, content: normalizeMiddlewareSupabaseEnv(file.content) };
+    }
+    return file;
+  });
+
+  if (hasAuthIntegration || hasDatabaseIntegration) {
+    const envValues: Record<string, string> = {};
+
+    if (hasAuthIntegration) {
+      const supabaseUrl =
+        process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+      const supabasePublishable =
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        "";
+      const appSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG || "";
+
+      if (supabaseUrl) {
+        envValues.NEXT_PUBLIC_SUPABASE_URL = supabaseUrl;
+        envValues.SUPABASE_URL = supabaseUrl;
+      }
+      if (supabasePublishable) {
+        envValues.NEXT_PUBLIC_SUPABASE_ANON_KEY = supabasePublishable;
+        envValues.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = supabasePublishable;
+      }
+      if (appSlug) {
+        envValues.NEXT_PUBLIC_POCKET_APP_SLUG = appSlug;
+      }
+    }
+
+    if (hasDatabaseIntegration && process.env.DATABASE_URL) {
+      envValues.DATABASE_URL = process.env.DATABASE_URL;
+    }
+
+    if (Object.keys(envValues).length > 0) {
+      const envIndex = files.findIndex((f) => f.path === ".env.local");
+      if (envIndex >= 0) {
+        files[envIndex] = {
+          ...files[envIndex],
+          content: buildEnvContent(files[envIndex].content, envValues),
+        };
+      } else {
+        files.push({
+          path: ".env.local",
+          content: buildEnvContent("", envValues),
+        });
+      }
+    }
   }
 
   files = ensureProviderGuardsForGeneratedFiles(files);

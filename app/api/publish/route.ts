@@ -769,6 +769,18 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     : null;
   const resolvedHtmlClass = (htmlClass || "").trim();
   const resolvedBodyClass = (bodyClass || "").trim();
+  const runtimePublicEnv = {
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    NEXT_PUBLIC_SUPABASE_ANON_KEY:
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      "",
+    NEXT_PUBLIC_POCKET_APP_SLUG: process.env.NEXT_PUBLIC_POCKET_APP_SLUG || "",
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
+  };
+  const runtimePublicEnvLiteral = JSON.stringify(runtimePublicEnv);
 
   return `<!DOCTYPE html>
 <html lang="en"${resolvedHtmlClass ? ` class="${escHtml(resolvedHtmlClass)}"` : ""}>
@@ -815,6 +827,73 @@ ${cleanCss(globalsCss)}
 
   <script>
     try {
+        const __pocketRuntimeEnv = ${runtimePublicEnvLiteral};
+        window.process = window.process || {};
+        window.process.env = { ...(window.process.env || {}), ...__pocketRuntimeEnv };
+        try { globalThis.process = window.process; } catch {}
+
+        const __pocketSupabaseResult = () => ({ data: null, error: null });
+        const __pocketMakeSupabaseQueryBuilder = () => {
+          const qb = {
+            select() { return qb; },
+            insert() { return qb; },
+            update() { return qb; },
+            upsert() { return qb; },
+            delete() { return qb; },
+            eq() { return qb; },
+            neq() { return qb; },
+            gt() { return qb; },
+            gte() { return qb; },
+            lt() { return qb; },
+            lte() { return qb; },
+            like() { return qb; },
+            ilike() { return qb; },
+            in() { return qb; },
+            contains() { return qb; },
+            containedBy() { return qb; },
+            is() { return qb; },
+            not() { return qb; },
+            or() { return qb; },
+            order() { return qb; },
+            limit() { return qb; },
+            range() { return qb; },
+            maybeSingle: async () => __pocketSupabaseResult(),
+            single: async () => __pocketSupabaseResult(),
+          };
+          qb.then = (resolve) => Promise.resolve(resolve(__pocketSupabaseResult()));
+          qb.catch = () => Promise.resolve(__pocketSupabaseResult());
+          return qb;
+        };
+        const __pocketCreateSupabaseLikeClient = () => ({
+          auth: {
+            getUser: async () => ({ data: { user: null }, error: null }),
+            getSession: async () => ({ data: { session: null }, error: null }),
+            signInWithPassword: async () => __pocketSupabaseResult(),
+            signInWithOAuth: async () => __pocketSupabaseResult(),
+            signUp: async () => __pocketSupabaseResult(),
+            signOut: async () => __pocketSupabaseResult(),
+            onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+          },
+          from() {
+            return __pocketMakeSupabaseQueryBuilder();
+          },
+          rpc: async () => __pocketSupabaseResult(),
+          storage: {
+            from() {
+              return {
+                upload: async () => __pocketSupabaseResult(),
+                download: async () => __pocketSupabaseResult(),
+                remove: async () => __pocketSupabaseResult(),
+                getPublicUrl: () => ({ data: { publicUrl: "" } }),
+              };
+            },
+          },
+        });
+        window.createBrowserClient = window.createBrowserClient || ((..._args) => __pocketCreateSupabaseLikeClient());
+        window.createServerClient = window.createServerClient || ((..._args) => __pocketCreateSupabaseLikeClient());
+        window.createSupabaseClient = window.createSupabaseClient || ((..._args) => __pocketCreateSupabaseLikeClient());
+        window.createClient = window.createClient || ((..._args) => __pocketCreateSupabaseLikeClient());
+
         // Expose React hooks as globals
         const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
         Object.assign(window, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext });
@@ -879,6 +958,44 @@ ${cleanCss(globalsCss)}
         };
         window.Link = window.__pocketNextLink;
         window.Image = window.__pocketNextImage;
+        window.useRouter = window.useRouter || function useRouter() {
+          return {
+            push: (href) => {
+              if (!href) return;
+              try {
+                window.location.assign(String(href));
+              } catch {}
+            },
+            replace: (href) => {
+              if (!href) return;
+              try {
+                window.location.replace(String(href));
+              } catch {}
+            },
+            back: () => window.history.back(),
+            forward: () => window.history.forward(),
+            refresh: () => window.location.reload(),
+            prefetch: async () => undefined,
+          };
+        };
+        window.usePathname = window.usePathname || function usePathname() {
+          return window.location.pathname || "/";
+        };
+        window.useSearchParams =
+          window.useSearchParams ||
+          function useSearchParams() {
+            return new URLSearchParams(window.location.search || "");
+          };
+        window.useParams = window.useParams || function useParams() {
+          return {};
+        };
+        window.redirect = window.redirect || function redirect(href) {
+          if (!href) return;
+          window.location.assign(String(href));
+        };
+        window.notFound = window.notFound || function notFound() {
+          throw new Error("Not Found");
+        };
 
         // next/font/google runtime compatibility: generate equivalent className objects and load font CSS.
         const __pocketSerifFonts = new Set([
