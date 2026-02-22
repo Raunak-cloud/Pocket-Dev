@@ -12,79 +12,115 @@ interface GenerationProgressProps {
   onToggleMinimize?: () => void;
 }
 
-const GENERATION_STEPS = [
+interface ProgressStep {
+  id: string;
+  label: string;
+  detail: string;
+  icon: string;
+  keywords: string[];
+}
+
+const GENERATION_STEPS: ProgressStep[] = [
   {
-    id: "analyze",
-    label: "Analyzing requirements",
+    id: "understand",
+    label: "Understanding your request",
+    detail: "Reviewing your idea, goals, and visual direction.",
     icon: "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z",
+    keywords: ["understanding", "analyz", "requirement", "planning"],
   },
   {
-    id: "architecture",
-    label: "Designing architecture",
-    icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
+    id: "create",
+    label: "Creating your website",
+    detail: "Generating the core structure and components.",
+    icon: "M13 10V3L4 14h7v7l9-11h-7z",
+    keywords: ["creating", "generat", "building", "website"],
   },
   {
-    id: "components",
-    label: "Creating components",
-    icon: "M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z",
-  },
-  {
-    id: "pages",
-    label: "Building pages",
+    id: "prepare",
+    label: "Preparing project files",
+    detail: "Organizing files and dependencies for your app.",
     icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    keywords: ["preparing", "parse", "file", "project files"],
   },
   {
-    id: "styling",
-    label: "Styling with Tailwind",
-    icon: "M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01",
+    id: "refine",
+    label: "Refining reliability and layout",
+    detail: "Improving responsiveness and interaction quality.",
+    icon: "M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z",
+    keywords: ["reliability", "responsive", "layout", "navigation", "syntax"],
   },
   {
-    id: "routing",
-    label: "Setting up routing",
-    icon: "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1",
-  },
-  {
-    id: "checks",
-    label: "Running final checks",
+    id: "quality",
+    label: "Running code quality checks",
+    detail: "Verifying consistency and implementation quality.",
     icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+    keywords: ["quality", "lint", "checking", "polishing"],
+  },
+  {
+    id: "finalize",
+    label: "Finalizing and saving",
+    detail: "Saving your generated app and preparing the preview.",
+    icon: "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4",
+    keywords: ["finalizing", "saving", "persist", "merging"],
+  },
+  {
+    id: "ready",
+    label: "Ready to preview",
+    detail: "Your app is prepared and ready.",
+    icon: "M5 13l4 4L19 7",
+    keywords: ["ready", "complete", "done", "preview"],
   },
 ];
 
-const EDITING_STEPS = [
+const EDITING_STEPS: ProgressStep[] = [
   {
-    id: "understand",
-    label: "Understanding changes",
+    id: "understand-edit",
+    label: "Understanding your edits",
+    detail: "Reviewing the requested changes and scope.",
     icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+    keywords: ["understanding", "analyz", "edit"],
   },
   {
-    id: "planning",
-    label: "Planning modifications",
-    icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
-  },
-  {
-    id: "updating",
-    label: "Updating components",
+    id: "apply-edit",
+    label: "Applying requested updates",
+    detail: "Implementing changes in the right components.",
     icon: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+    keywords: ["creating", "generat", "update", "modif"],
   },
   {
-    id: "refining",
-    label: "Refining layout",
+    id: "prepare-edit",
+    label: "Preparing updated files",
+    detail: "Aligning file structure for your latest changes.",
+    icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    keywords: ["preparing", "parse", "file"],
+  },
+  {
+    id: "refine-edit",
+    label: "Refining layout and behavior",
+    detail: "Improving responsiveness and interaction flow.",
     icon: "M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z",
+    keywords: ["responsive", "layout", "navigation", "reliability", "syntax"],
   },
   {
-    id: "polishing",
-    label: "Polishing styles",
-    icon: "M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01",
-  },
-  {
-    id: "integrating",
-    label: "Integrating features",
-    icon: "M17 14v6m-3-3h6M6 10h2a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2zm10 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2a2 2 0 00-2 2v2a2 2 0 002 2zM6 20h2a2 2 0 002-2v-2a2 2 0 00-2-2H6a2 2 0 00-2 2v2a2 2 0 002 2z",
-  },
-  {
-    id: "testing",
-    label: "Testing changes",
+    id: "quality-edit",
+    label: "Running code quality checks",
+    detail: "Confirming stable edits before save.",
     icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+    keywords: ["quality", "lint", "checking", "polishing"],
+  },
+  {
+    id: "save-edit",
+    label: "Finalizing and saving edits",
+    detail: "Applying your updates to the latest version.",
+    icon: "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4",
+    keywords: ["finalizing", "saving", "persist", "merge", "applying"],
+  },
+  {
+    id: "ready-edit",
+    label: "Edits ready",
+    detail: "Your updated app is ready to preview.",
+    icon: "M5 13l4 4L19 7",
+    keywords: ["ready", "complete", "done", "preview"],
   },
 ];
 
@@ -92,100 +128,51 @@ const STEP_PATTERN = /\[(\d+)\s*\/\s*(\d+)\]/;
 
 function dedupeConsecutive(messages: string[]): string[] {
   const output: string[] = [];
-  for (const msg of messages) {
-    if (output.length === 0 || output[output.length - 1] !== msg) {
-      output.push(msg);
+  for (const message of messages) {
+    if (output.length === 0 || output[output.length - 1] !== message) {
+      output.push(message);
     }
   }
   return output;
 }
 
-function normalizeProgressLabel(message: string): string {
-  return message
-    .replace(STEP_PATTERN, "")
-    .replace(/^[^\w]+/, "")
-    .trim();
+function normalizeMessage(message: string): string {
+  return message.replace(STEP_PATTERN, "").trim().toLowerCase();
 }
 
-function inferStepFromMessage(
-  message: string,
-  isEditMode: boolean,
-): { step: number; total: number } {
-  if (!message.trim()) {
-    return { step: 0, total: 7 };
-  }
+function inferStepIndex(message: string, steps: ProgressStep[]): number {
+  if (!message.trim()) return 0;
 
   const explicit = message.match(STEP_PATTERN);
   if (explicit) {
-    const step = Number.parseInt(explicit[1], 10);
-    const total = Number.parseInt(explicit[2], 10);
-    if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
-      return { step: Math.min(step, total), total };
-    }
+    const rawStep = Number.parseInt(explicit[1], 10);
+    const step = Number.isFinite(rawStep) ? rawStep - 1 : 0;
+    return Math.max(0, Math.min(step, steps.length - 1));
   }
 
-  const msg = message.toLowerCase();
-  const total = 7;
-  if (msg.includes("queue") || msg.includes("start")) return { step: 0, total };
-  if (msg.includes("analyz")) return { step: 1, total };
-  if (msg.includes("generat")) return { step: 2, total };
-  if (msg.includes("prepar") || msg.includes("parse"))
-    return { step: 3, total };
-  if (
-    msg.includes("syntax") ||
-    msg.includes("mobile") ||
-    msg.includes("navigation")
-  ) {
-    return { step: 4, total };
+  const normalized = normalizeMessage(message);
+  const matchedIndex = steps.findIndex((step) =>
+    step.keywords.some((keyword) => normalized.includes(keyword)),
+  );
+  if (matchedIndex !== -1) {
+    return matchedIndex;
   }
-  if (
-    msg.includes("lint") ||
-    msg.includes("quality") ||
-    msg.includes("check")
-  ) {
-    return { step: 5, total };
-  }
-  if (
-    msg.includes("persist") ||
-    msg.includes("save") ||
-    msg.includes("final")
-  ) {
-    return { step: 6, total };
-  }
-  if (msg.includes("complete") || msg.includes("done"))
-    return { step: 7, total };
 
-  if (isEditMode) return { step: 3, total };
-  return { step: 2, total };
+  if (
+    normalized.includes("ready") ||
+    normalized.includes("complete") ||
+    normalized.includes("done")
+  ) {
+    return steps.length - 1;
+  }
+
+  return 0;
 }
-// Map progress messages to appropriate icons
-function getIconForMessage(message: string): string {
-  const msg = message.toLowerCase();
 
-  if (msg.includes("analyz")) {
-    return "M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z";
-  }
-  if (msg.includes("generat") || msg.includes("ai")) {
-    return "M13 10V3L4 14h7v7l9-11h-7z";
-  }
-  if (msg.includes("prepar") || msg.includes("file") || msg.includes("parse")) {
-    return "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z";
-  }
-  if (
-    msg.includes("check") ||
-    msg.includes("lint") ||
-    msg.includes("quality")
-  ) {
-    return "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z";
-  }
-  if (msg.includes("finali") || msg.includes("complet")) {
-    return "M5 13l4 4L19 7";
-  }
-  if (msg.includes("sav") || msg.includes("persist")) {
-    return "M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4";
-  }
-
-  return "M13 10V3L4 14h7v7l9-11h-7z";
+function getProgressValue(stepIndex: number, totalSteps: number): number {
+  const raw = ((stepIndex + 1) / totalSteps) * 100;
+  if (stepIndex >= totalSteps - 1) return 100;
+  return Math.min(Math.max(raw, 8), 97);
 }
 
 export default function GenerationProgress({
@@ -196,57 +183,40 @@ export default function GenerationProgress({
   onToggleMinimize,
 }: GenerationProgressProps) {
   const isEditMode = prompt.toLowerCase().startsWith("editing:");
-
-  // Use actual progress messages if available, otherwise fallback to hardcoded steps
-  const cleanedMessages = dedupeConsecutive(progressMessages);
-  const useRealProgress = cleanedMessages.length > 0;
-  const steps = useRealProgress
-    ? cleanedMessages.map((msg, i) => ({
-        id: `step-${i}`,
-        label: normalizeProgressLabel(msg),
-        icon: getIconForMessage(msg),
-      }))
-    : isEditMode
-      ? EDITING_STEPS
-      : GENERATION_STEPS;
-
-  const latestMessage = cleanedMessages[cleanedMessages.length - 1] || "";
-  const inferred = inferStepFromMessage(latestMessage, isEditMode);
-  const currentStep = useRealProgress ? Math.max(1, steps.length) : 1;
-  const rawProgress =
-    inferred.total > 0 ? (inferred.step / inferred.total) * 100 : 0;
-  const progress = Math.min(
-    Math.max(rawProgress, 3),
-    inferred.step >= inferred.total ? 100 : 97,
-  );
   const cleanPrompt = isEditMode
     ? prompt.substring("Editing:".length).trim()
     : prompt;
-
-  const stageSummary = latestMessage
-    ? `${normalizeProgressLabel(latestMessage)} (${Math.min(inferred.step, inferred.total)}/${inferred.total})`
-    : "Preparing generation pipeline...";
+  const steps = isEditMode ? EDITING_STEPS : GENERATION_STEPS;
+  const cleanedMessages = dedupeConsecutive(progressMessages);
+  const latestMessage = cleanedMessages[cleanedMessages.length - 1] || "";
+  const currentStepIndex = inferStepIndex(latestMessage, steps);
+  const currentStep = steps[currentStepIndex];
+  const progress = getProgressValue(currentStepIndex, steps.length);
 
   const showCodeEditor =
     latestMessage.toLowerCase().includes("install") &&
     latestMessage.toLowerCase().includes("dependencies");
 
   const getAppType = () => {
-    const lp = cleanPrompt.toLowerCase();
-    if (lp.includes("e-commerce") || lp.includes("shop"))
+    const lowerPrompt = cleanPrompt.toLowerCase();
+    if (lowerPrompt.includes("e-commerce") || lowerPrompt.includes("shop")) {
       return "E-Commerce App";
-    if (lp.includes("restaurant") || lp.includes("food"))
+    }
+    if (lowerPrompt.includes("restaurant") || lowerPrompt.includes("food")) {
       return "Restaurant App";
-    if (lp.includes("portfolio")) return "Portfolio App";
-    if (lp.includes("blog")) return "Blog App";
-    if (lp.includes("saas") || lp.includes("landing"))
+    }
+    if (lowerPrompt.includes("portfolio")) return "Portfolio App";
+    if (lowerPrompt.includes("blog")) return "Blog App";
+    if (lowerPrompt.includes("saas") || lowerPrompt.includes("landing")) {
       return "SaaS Landing Page";
-    if (lp.includes("fitness") || lp.includes("workout")) return "Fitness App";
-    if (lp.includes("dashboard")) return "Dashboard App";
+    }
+    if (lowerPrompt.includes("fitness") || lowerPrompt.includes("workout")) {
+      return "Fitness App";
+    }
+    if (lowerPrompt.includes("dashboard")) return "Dashboard App";
     return "your App";
   };
 
-  // Minimized floating indicator
   if (isMinimized) {
     return (
       <button
@@ -294,28 +264,23 @@ export default function GenerationProgress({
 
   return (
     <div className="w-full h-full flex flex-col">
-      {/* Ambient glow background */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-blue-500/[0.03] rounded-full blur-3xl" />
-        <div className="absolute top-1/3 left-1/3 w-[300px] h-[300px] bg-violet-500/[0.03] rounded-full blur-3xl" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] bg-blue-500/[0.05] rounded-full blur-3xl" />
+        <div className="absolute top-1/3 left-1/3 w-[280px] h-[280px] bg-violet-500/[0.05] rounded-full blur-3xl" />
       </div>
 
-      {/* Glass card */}
       <div className="relative w-full h-full flex flex-col bg-bg-secondary/70 backdrop-blur-2xl border border-border-secondary/40 shadow-2xl shadow-black/20 overflow-hidden">
-        {/* Shimmer border effect */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div
             className="absolute -top-[1px] -left-[1px] -right-[1px] h-[1px]"
             style={{
               background:
-                "linear-gradient(90deg, transparent, rgba(99,102,241,0.3), rgba(139,92,246,0.3), transparent)",
+                "linear-gradient(90deg, transparent, rgba(99,102,241,0.32), rgba(139,92,246,0.32), transparent)",
             }}
           />
         </div>
 
-        {/* Header section */}
         <div className="px-8 pt-8 pb-5 text-center">
-          {/* Logo with glow */}
           <div className="relative inline-flex mb-4">
             <div className="absolute inset-0 blur-xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-25 scale-150" />
             <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-bg-tertiary/80 to-bg-tertiary/40 ring-1 ring-white/[0.08]">
@@ -331,186 +296,73 @@ export default function GenerationProgress({
           </p>
         </div>
 
-        {/* Progress section */}
         <div className="px-8 pb-5">
           <div className="flex items-center justify-between mb-2.5">
             <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
-              Progress
+              Current Step
             </span>
-            <div className="flex items-center gap-2">
-              <span
-                className="text-xs text-text-muted max-w-[260px] truncate"
-                title={stageSummary}
-              >
-                {stageSummary}
-              </span>
-              <span className="text-sm font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
-                {Math.round(progress)}%
-              </span>
-            </div>
+            <span className="text-sm font-bold bg-gradient-to-r from-blue-400 to-violet-400 bg-clip-text text-transparent tabular-nums">
+              {Math.round(progress)}%
+            </span>
           </div>
 
-          {/* Fancy progress bar */}
           <div className="relative h-2.5 bg-bg-tertiary/80 rounded-full overflow-hidden ring-1 ring-white/[0.04]">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-500 rounded-full transition-all duration-700 ease-out"
               style={{ width: `${progress}%` }}
             >
-              {/* Animated shine */}
-              <div
-                className="absolute inset-0 opacity-30"
-                style={{
-                  background:
-                    "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%)",
-                  animation: "shimmer 2s ease-in-out infinite",
-                }}
-              />
+              <div className="absolute inset-0 progress-shimmer" />
             </div>
           </div>
-          <p
-            className="mt-2 text-xs text-text-muted truncate"
-            title={latestMessage || "Waiting for updates..."}
-          >
-            {latestMessage || "Waiting for updates..."}
-          </p>
         </div>
 
-        {/* Divider */}
         <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
 
-        {/* Steps list */}
-        <div className="flex-1 px-5 py-4 overflow-y-auto">
-          {steps.map((step, i) => {
-            const isCompleted = i < currentStep - 1;
-            const isCurrent = i === currentStep - 1;
+        <div className="flex-1 flex items-center justify-center px-6 py-6">
+          <div className="relative w-full">
+            <div className="absolute inset-0 bg-gradient-to-r from-blue-500/[0.08] via-indigo-500/[0.06] to-violet-500/[0.08] blur-2xl rounded-[2rem]" />
 
-            return (
-              <div
-                key={step.id}
-                className={`relative flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-400 ${
-                  isCurrent
-                    ? "bg-gradient-to-r from-blue-500/[0.08] to-violet-500/[0.04]"
-                    : ""
-                }`}
-              >
-                {/* Vertical line connector */}
-                {i < steps.length - 1 && (
-                  <div
-                    className={`absolute left-[27px] top-[36px] w-px h-[calc(100%-20px)] transition-colors duration-500 ${
-                      isCompleted
-                        ? "bg-emerald-500/30"
-                        : "bg-border-secondary/40"
-                    }`}
-                  />
-                )}
-
-                {/* Step indicator */}
-                <div className="relative flex-shrink-0 z-10">
-                  {isCompleted ? (
-                    <div className="w-6 h-6 rounded-full bg-emerald-500/15 flex items-center justify-center ring-1 ring-emerald-500/30">
-                      <svg
-                        className="w-3.5 h-3.5 text-emerald-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={3}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    </div>
-                  ) : isCurrent ? (
-                    <div className="w-6 h-6 rounded-full bg-blue-500/15 flex items-center justify-center ring-1 ring-blue-500/40">
-                      <div className="w-2.5 h-2.5 bg-blue-400 rounded-full animate-pulse" />
-                    </div>
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-bg-tertiary/60 flex items-center justify-center ring-1 ring-border-secondary/40">
-                      <div className="w-2 h-2 bg-text-muted rounded-full" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Icon */}
-                <div
-                  className={`flex-shrink-0 transition-colors duration-300 ${
-                    isCompleted
-                      ? "text-emerald-500/50"
-                      : isCurrent
-                        ? "text-blue-400"
-                        : "text-text-muted"
-                  }`}
-                >
+            <div className="relative rounded-[2rem] border border-border-secondary/60 bg-bg-tertiary/55 backdrop-blur-xl p-8 sm:p-10 text-center shadow-[0_20px_60px_-30px_rgba(59,130,246,0.5)]">
+              <div className="relative mx-auto w-20 h-20 mb-6 floating-icon">
+                <div className="absolute inset-0 rounded-full border border-blue-400/35 orbit-ring" />
+                <div className="absolute inset-[10px] rounded-full bg-gradient-to-br from-blue-500/15 to-violet-500/15 ring-1 ring-white/10 flex items-center justify-center">
                   <svg
-                    className="w-4.5 h-4.5"
+                    className="w-8 h-8 text-blue-300"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
-                    strokeWidth={1.5}
+                    strokeWidth={1.8}
                   >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      d={step.icon}
+                      d={currentStep.icon}
                     />
                   </svg>
                 </div>
-
-                {/* Label */}
-                <span
-                  className={`text-[15px] transition-all duration-300 ${
-                    isCompleted
-                      ? "text-text-muted"
-                      : isCurrent
-                        ? "text-text-primary font-medium"
-                        : "text-text-muted/70"
-                  }`}
-                >
-                  {step.label}
-                </span>
-
-                {/* Current step spinner */}
-                {isCurrent && (
-                  <div className="ml-auto flex items-center gap-2">
-                    <svg
-                      className="w-4 h-4 text-blue-400/70 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
-                    </svg>
-                  </div>
-                )}
-
-                {/* Completed check badge */}
-                {isCompleted && (
-                  <span className="ml-auto text-xs text-emerald-500/50 font-medium">
-                    Done
-                  </span>
-                )}
               </div>
-            );
-          })}
+
+              <p className="text-[11px] uppercase tracking-[0.2em] text-text-muted font-semibold mb-3">
+                {isEditMode ? "Editing In Progress" : "Generation In Progress"}
+              </p>
+              <h3 className="text-2xl sm:text-3xl font-semibold text-text-primary tracking-tight mb-3">
+                {currentStep.label}
+              </h3>
+              <p className="text-sm sm:text-base text-text-tertiary mx-auto">
+                {currentStep.detail}
+              </p>
+
+              <div className="mt-6 flex items-center justify-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-400/80 dot-bounce dot-delay-0" />
+                <span className="w-2 h-2 rounded-full bg-indigo-400/80 dot-bounce dot-delay-1" />
+                <span className="w-2 h-2 rounded-full bg-violet-400/80 dot-bounce dot-delay-2" />
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Divider */}
         <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
 
-        {/* Actions */}
         <div className="px-8 py-4 flex items-center justify-center gap-3">
           {onToggleMinimize && (
             <button
@@ -557,8 +409,42 @@ export default function GenerationProgress({
         </div>
       </div>
 
-      {/* Inline keyframes */}
       <style jsx>{`
+        .progress-shimmer {
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            rgba(255, 255, 255, 0.35) 50%,
+            transparent 100%
+          );
+          animation: shimmer 2s ease-in-out infinite;
+          opacity: 0.3;
+        }
+
+        .floating-icon {
+          animation: float 3.2s ease-in-out infinite;
+        }
+
+        .orbit-ring {
+          animation: orbit 4.5s linear infinite;
+        }
+
+        .dot-bounce {
+          animation: dotBounce 1.2s infinite ease-in-out;
+        }
+
+        .dot-delay-0 {
+          animation-delay: 0s;
+        }
+
+        .dot-delay-1 {
+          animation-delay: 0.2s;
+        }
+
+        .dot-delay-2 {
+          animation-delay: 0.4s;
+        }
+
         @keyframes shimmer {
           0% {
             transform: translateX(-100%);
@@ -567,9 +453,40 @@ export default function GenerationProgress({
             transform: translateX(200%);
           }
         }
+
+        @keyframes float {
+          0%,
+          100% {
+            transform: translateY(0);
+          }
+          50% {
+            transform: translateY(-6px);
+          }
+        }
+
+        @keyframes orbit {
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+
+        @keyframes dotBounce {
+          0%,
+          80%,
+          100% {
+            transform: translateY(0);
+            opacity: 0.35;
+          }
+          40% {
+            transform: translateY(-4px);
+            opacity: 1;
+          }
+        }
       `}</style>
 
-      {/* Code Editor Loading Animation */}
       {showCodeEditor && <CodeEditorLoading message={latestMessage} />}
     </div>
   );

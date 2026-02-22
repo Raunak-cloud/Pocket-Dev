@@ -1311,10 +1311,7 @@ export const generateCodeFunction = inngest.createFunction(
     }
 
     // Step 1: Build user prompt
-    await sendProgress(
-      projectId,
-      "[1/7] Analyzing requirements and planning project structure...",
-    );
+    await sendProgress(projectId, "[1/7] Understanding your request...");
     const userPrompt = await step.run("build-prompt", async () => {
       return `Build a production-ready, visually premium Next.js website for this request:
 ${prompt}
@@ -1390,10 +1387,7 @@ DESIGN DIRECTION:
     }
 
     // Step 2: Generate with Gemini
-    await sendProgress(
-      projectId,
-      "[2/7] Generating your website code with AI (usually 20-50s)...",
-    );
+    await sendProgress(projectId, "[2/7] Creating your website...");
     const generatedText = await step.run("generate-with-gemini", async () => {
       console.log("Using Gemini 3 Flash Preview...");
 
@@ -1420,10 +1414,7 @@ DESIGN DIRECTION:
     }
 
     // Step 3: Parse and prepare files
-    await sendProgress(
-      projectId,
-      "[3/7] Parsing AI output and preparing project files...",
-    );
+    await sendProgress(projectId, "[3/7] Preparing project files...");
     const parsedProject = await step.run(
       "parse-generated-code",
       async () => {
@@ -1529,10 +1520,7 @@ DESIGN DIRECTION:
           console.warn(
             `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
           );
-          await sendProgress(
-            projectId,
-            `[4/7] Resolving ${syntaxIssues.length} syntax issue(s) (pass ${attempt}/${MAX_SYNTAX_REPAIR_ATTEMPTS})...`,
-          );
+          await sendProgress(projectId, "[4/7] Improving code reliability...");
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -1563,7 +1551,7 @@ DESIGN DIRECTION:
           );
           await sendProgress(
             projectId,
-            `[4/7] Improving mobile layout and navigation (pass ${attempt}/${MAX_UX_REPAIR_ATTEMPTS})...`,
+            "[4/7] Refining layout and responsiveness...",
           );
 
           const repaired = await repairProjectFromLintFeedback({
@@ -1585,10 +1573,7 @@ DESIGN DIRECTION:
     let dependencies = parsedProject.dependencies;
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(
-      projectId,
-      "[5/7] Running lint and quality checks on all files...",
-    );
+    await sendProgress(projectId, "[5/7] Running code quality checks...");
     const { fixedFiles, lintReport } = await step.run(
       "lint-and-repair",
       async () => {
@@ -1611,10 +1596,7 @@ DESIGN DIRECTION:
           console.warn(
             `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
-          await sendProgress(
-            projectId,
-            `[5/7] Fixing ${lintResult.lintReport.errors} code issue(s) (pass ${attempt}/${MAX_LINT_REPAIR_ATTEMPTS})...`,
-          );
+          await sendProgress(projectId, "[5/7] Fixing code quality...");
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -1643,10 +1625,7 @@ DESIGN DIRECTION:
       },
     );
     // Step 5: Notify completion via API
-    await sendProgress(
-      projectId,
-      "[6/7] Finalizing generated files and saving results...",
-    );
+    await sendProgress(projectId, "[6/7] Finalizing and saving your app...");
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
@@ -1685,7 +1664,7 @@ DESIGN DIRECTION:
       return result;
     });
 
-    await sendProgress(projectId, "[7/7] Generation complete.");
+    await sendProgress(projectId, "[7/7] Ready to preview.");
 
     return {
       files: fixedFiles,
@@ -1697,4 +1676,3 @@ DESIGN DIRECTION:
     };
   },
 );
-
