@@ -29,6 +29,17 @@ export function usePublishing({
   const [showDomainModal, setShowDomainModal] = useState(false);
   const [customDomain, setCustomDomain] = useState("");
 
+  const sanitizeDomain = (input: string): string => {
+    const cleaned = input
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/\/.*$/, "")
+      .replace(/\.+$/, "");
+    return cleaned;
+  };
+
   const publishProject = useCallback(async () => {
     if (!project || !currentProjectId || !user) return;
 
@@ -93,17 +104,17 @@ export function usePublishing({
     setIsUnpublishing(true);
     setError("");
     try {
-      // Delete the Vercel deployment if we have a deployment ID
+      // Delete the Cloudflare Pages project if we have a deployment ID
       if (deploymentId) {
         try {
           await fetch("/api/publish", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ deploymentId }),
+            body: JSON.stringify({ projectName: deploymentId }),
           });
         } catch (deleteError) {
-          console.error("Error deleting Vercel deployment:", deleteError);
-          // Continue with unpublishing even if Vercel delete fails
+          console.error("Error deleting Cloudflare project:", deleteError);
+          // Continue with unpublishing even if remote delete fails
         }
       }
 
@@ -139,24 +150,56 @@ export function usePublishing({
       if (!currentProjectId || !user) return;
 
       try {
+        if (!publishedUrl) {
+          throw new Error("Publish the site first, then connect a custom domain.");
+        }
+
+        const normalized = sanitizeDomain(domain);
+        if (!normalized || !normalized.includes(".")) {
+          throw new Error("Please enter a valid domain (e.g., yourdomain.com)");
+        }
+
+        // We configure the www subdomain by default for external DNS providers.
+        const connectDomainValue = normalized.startsWith("www.")
+          ? normalized
+          : `www.${normalized}`;
+
+        const connectRes = await fetch("/api/publish/domain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: currentProjectId,
+            domain: connectDomainValue,
+          }),
+        });
+        const connectData = await connectRes.json();
+        if (!connectRes.ok || connectData?.success !== true) {
+          throw new Error(
+            connectData?.error || "Failed to connect custom domain on Cloudflare",
+          );
+        }
+
         const persistRes = await fetch("/api/projects/publish-state", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             projectId: currentProjectId,
-            customDomain: domain,
+            customDomain: normalized,
           }),
         });
         if (!persistRes.ok) throw new Error("Failed to save custom domain");
-        setCustomDomain(domain);
-        setShowDomainModal(false);
+        setCustomDomain(normalized);
         await loadSavedProjects();
       } catch (error) {
         console.error("Error connecting domain:", error);
-        setError("Failed to connect domain. Please try again.");
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Failed to connect domain. Please try again.",
+        );
       }
     },
-    [currentProjectId, user, setError, loadSavedProjects],
+    [currentProjectId, user, publishedUrl, setError, loadSavedProjects],
   );
 
   return {

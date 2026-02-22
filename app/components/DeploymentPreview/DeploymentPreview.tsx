@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { hasAuthentication } from "@/lib/project-files";
+import { useEffect, useRef, useState } from "react";
 import type { ReactProject } from "@/app/types";
 
 interface DeploymentPreviewProps {
@@ -38,10 +37,7 @@ export default function DeploymentPreview({
   const frameKey = `${previewUrl ?? "none"}:${previewKey}`;
   const [loadedFrameKey, setLoadedFrameKey] = useState("");
   const iframeLoaded = loadedFrameKey === frameKey;
-  const hasAuthPreviewHint = useMemo(
-    () => (project ? hasAuthentication(project) : false),
-    [project],
-  );
+  void project;
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -102,7 +98,7 @@ export default function DeploymentPreview({
               No Live Preview Yet
             </h3>
             <p className="text-sm text-text-tertiary mb-4">
-              Deploy this project to Vercel to render production-accurate
+              Publish this project to Cloudflare Pages to render production-accurate
               preview.
             </p>
             {onPublish && (
@@ -126,7 +122,7 @@ export default function DeploymentPreview({
           onLoad={() => setLoadedFrameKey(frameKey)}
           className="w-full h-full border-0"
           style={{ colorScheme: "normal", backgroundColor: "transparent" }}
-          title="Vercel Preview"
+          title="Published Preview"
         />
       )}
 
@@ -143,7 +139,7 @@ export default function DeploymentPreview({
           <div className="flex items-center gap-3 rounded-xl border border-border-primary bg-bg-secondary px-4 py-3 shadow-2xl">
             <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
             <span className="text-sm text-text-secondary">
-              Deploying latest preview to Vercel...
+              Publishing latest preview to Cloudflare Pages...
             </span>
           </div>
         </div>

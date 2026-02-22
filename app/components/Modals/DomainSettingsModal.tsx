@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo, useState } from "react";
+
 interface DomainSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -27,13 +29,58 @@ export function DomainSettingsModal({
   onPublish,
   onUnpublish,
 }: DomainSettingsModalProps) {
+  const [domainSearchQuery, setDomainSearchQuery] = useState("");
+  const [copiedKey, setCopiedKey] = useState<"host" | "value" | "url" | null>(
+    null,
+  );
+
+  const sanitizedDomain = useMemo(
+    () =>
+      customDomain
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .replace(/\/.*$/, "")
+        .replace(/\.+$/, ""),
+    [customDomain],
+  );
+
+  const cloudflareProjectHost = useMemo(() => {
+    if (!publishedUrl) return "";
+    try {
+      return new URL(publishedUrl).host;
+    } catch {
+      return publishedUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    }
+  }, [publishedUrl]);
+
+  const cnameHost = "www";
+  const cnameValue = cloudflareProjectHost;
+  const fqdn = sanitizedDomain ? `${cnameHost}.${sanitizedDomain}` : "";
+  const canConnectDomain = Boolean(publishedUrl && customDomain.trim());
+  const registrarQuery = (
+    domainSearchQuery || sanitizedDomain || customDomain || ""
+  ).trim();
+
+  const copyValue = async (key: "host" | "value" | "url", value: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1400);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-5">
+      <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-[min(96vw,1100px)] max-h-[92dvh] overflow-hidden flex flex-col">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border-primary flex-shrink-0">
           <h3 className="text-lg font-semibold text-text-primary">
             Domain Settings
           </h3>
@@ -58,7 +105,7 @@ export function DomainSettingsModal({
         </div>
 
         {/* Modal Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6 overflow-y-auto">
           {/* Published URL */}
           {publishedUrl && (
             <div className="space-y-2">
@@ -70,9 +117,7 @@ export function DomainSettingsModal({
                   {publishedUrl}
                 </div>
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(publishedUrl);
-                  }}
+                  onClick={() => copyValue("url", publishedUrl)}
                   className="px-3 py-2 text-text-tertiary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition"
                   title="Copy URL"
                 >
@@ -90,6 +135,9 @@ export function DomainSettingsModal({
                     />
                   </svg>
                 </button>
+                {copiedKey === "url" && (
+                  <span className="text-[11px] text-emerald-400">Copied</span>
+                )}
                 <a
                   href={publishedUrl}
                   target="_blank"
@@ -120,7 +168,7 @@ export function DomainSettingsModal({
             <label className="block text-sm font-medium text-text-secondary">
               Connect Custom Domain
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
               <input
                 type="text"
                 value={customDomain}
@@ -130,18 +178,83 @@ export function DomainSettingsModal({
               />
               <button
                 onClick={() => onConnectDomain(customDomain)}
-                disabled={!customDomain.trim()}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!canConnectDomain}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                Connect
+                Save & Verify
               </button>
             </div>
-            <p className="text-xs text-text-muted">
-              Point your domain&apos;s CNAME record to{" "}
-              <span className="font-mono text-text-tertiary">
-                cname.pocketdev.app
-              </span>
-            </p>
+            {!publishedUrl && (
+              <p className="text-xs text-amber-300">
+                Publish your site first to enable custom domain verification.
+              </p>
+            )}
+            <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3">
+              <p className="text-xs text-blue-200 font-medium">
+                Cloudflare status
+              </p>
+              <p className="text-sm text-blue-300 mt-0.5">initializing</p>
+              <p className="text-xs text-text-muted mt-2">
+                Add the DNS records below at your registrar, then wait for
+                Cloudflare verification.
+              </p>
+            </div>
+            {sanitizedDomain && cnameValue && (
+              <div className="rounded-xl border border-border-primary bg-bg-tertiary/40 overflow-hidden">
+                <div className="px-3 py-2 border-b border-border-primary text-xs text-text-tertiary font-medium">
+                  Required DNS Record
+                </div>
+                <div className="p-3 space-y-3 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-[110px_1fr_auto] gap-2 items-center">
+                    <span className="text-text-muted">Type</span>
+                    <span className="font-mono text-text-primary">CNAME</span>
+                    <span />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-[110px_1fr_auto] gap-2 items-center">
+                    <span className="text-text-muted">Host/Name</span>
+                    <div className="font-mono text-text-primary break-all">
+                      {cnameHost}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyValue("host", cnameHost)}
+                      className="px-2.5 py-1.5 rounded-md border border-border-secondary bg-bg-secondary hover:bg-bg-tertiary text-text-secondary transition"
+                    >
+                      {copiedKey === "host" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-[110px_1fr_auto] gap-2 items-center">
+                    <span className="text-text-muted">Value/Target</span>
+                    <div className="font-mono text-text-primary break-all">
+                      {cnameValue}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyValue("value", cnameValue)}
+                      className="px-2.5 py-1.5 rounded-md border border-border-secondary bg-bg-secondary hover:bg-bg-tertiary text-text-secondary transition"
+                    >
+                      {copiedKey === "value" ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="pt-1 text-[11px] text-text-muted space-y-1">
+                    <p>
+                      For most DNS providers, set{" "}
+                      <span className="font-mono text-text-secondary">
+                        Host/Name
+                      </span>{" "}
+                      to <span className="font-mono text-text-secondary">www</span>{" "}
+                      (not the full domain).
+                    </p>
+                    <p>
+                      This creates:{" "}
+                      <span className="font-mono text-text-secondary">
+                        {fqdn}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Divider */}
@@ -162,8 +275,8 @@ export function DomainSettingsModal({
               Buy a New Domain
             </label>
             <div className="p-4 bg-gradient-to-br from-violet-500/10 to-blue-500/10 border border-violet-500/20 rounded-xl">
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-violet-500/20 rounded-lg">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="p-2 bg-violet-500/20 rounded-lg shrink-0">
                   <svg
                     className="w-5 h-5 text-violet-400"
                     fill="none"
@@ -182,33 +295,55 @@ export function DomainSettingsModal({
                   <h4 className="text-sm font-medium text-text-primary mb-1">
                     Get a custom domain
                   </h4>
-                  <p className="text-xs text-text-tertiary mb-3">
-                    Search for available domains and purchase them
-                    directly. Prices start from $9.99/year.
+                  <p className="text-xs text-text-tertiary">
+                    Enter a domain idea and open any registrar below.
                   </p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={domainSearchQuery}
+                  onChange={(e) => setDomainSearchQuery(e.target.value)}
+                  placeholder="yourbrand.com"
+                  className="w-full px-3 py-2 bg-bg-tertiary border border-border-secondary rounded-lg text-text-primary placeholder-text-muted focus:outline-none focus:border-violet-500 text-sm"
+                />
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() =>
                       window.open(
-                        "https://domains.google.com/registrar/search",
+                        `https://dash.cloudflare.com/?to=/:account/domains/register/${encodeURIComponent(registrarQuery)}`,
                         "_blank",
+                        "noopener,noreferrer",
                       )
                     }
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition"
                   >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
-                    Search Domains
+                    Cloudflare Registrar
+                  </button>
+                  <button
+                    onClick={() =>
+                      window.open(
+                        `https://porkbun.com/checkout/search?q=${encodeURIComponent(registrarQuery)}`,
+                        "_blank",
+                        "noopener,noreferrer",
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-bg-tertiary hover:bg-border-secondary text-text-secondary border border-border-secondary text-xs font-medium rounded-lg transition"
+                  >
+                    Porkbun
+                  </button>
+                  <button
+                    onClick={() =>
+                      window.open(
+                        `https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(registrarQuery)}`,
+                        "_blank",
+                        "noopener,noreferrer",
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-bg-tertiary hover:bg-border-secondary text-text-secondary border border-border-secondary text-xs font-medium rounded-lg transition"
+                  >
+                    Namecheap
                   </button>
                 </div>
               </div>
@@ -217,7 +352,7 @@ export function DomainSettingsModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-4 bg-bg-tertiary/50 border-t border-border-primary flex gap-3">
+        <div className="px-4 sm:px-6 py-4 bg-bg-tertiary/50 border-t border-border-primary flex gap-3 flex-shrink-0">
           <button
             onClick={onClose}
             className="flex-1 px-4 py-2 text-text-secondary hover:text-text-primary bg-bg-tertiary hover:bg-border-secondary border border-border-secondary rounded-lg transition text-sm font-medium"

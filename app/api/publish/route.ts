@@ -328,10 +328,20 @@ function cleanComponent(code: string): string {
     // Remove all import statements
     .replace(/^import\s+.*?from\s+['"][^'"]+['"];?\s*$/gm, "")
     .replace(/^import\s+['"][^'"]+['"];?\s*$/gm, "")
-    // Remove export keywords
+    // Remove common export forms
+    .replace(/export\s+default\s+async\s+function\s+/g, "async function ")
     .replace(/export\s+default\s+function\s+/g, "function ")
+    .replace(/export\s+async\s+function\s+/g, "async function ")
     .replace(/export\s+function\s+/g, "function ")
     .replace(/export\s+const\s+/g, "const ")
+    .replace(/export\s+let\s+/g, "let ")
+    .replace(/export\s+var\s+/g, "var ")
+    .replace(/export\s+class\s+/g, "class ")
+    .replace(/^export\s+\{[\s\S]*?\}\s*;?\s*$/gm, "")
+    .replace(/^export\s+\*\s+from\s+['"][^'"]+['"]\s*;?\s*$/gm, "")
+    .replace(/^export\s+\*\s+as\s+\w+\s+from\s+['"][^'"]+['"]\s*;?\s*$/gm, "")
+    .replace(/^export\s+default\s+/gm, "")
+    .replace(/^export\s+/gm, "")
     // Remove interface definitions (single line and multi-line)
     .replace(/^interface\s+\w+\s*\{[\s\S]*?\}\s*$/gm, "")
     // Remove type definitions
@@ -1614,7 +1624,16 @@ ${lucideRuntimeAssignments
         console.log('=== ORIGINAL CODE (first 500 chars) ===');
         console.log(code.substring(0, 500));
 
-        const transformed = Babel.transform(code, {
+        const sanitizedCode = code
+          .replace(/^\\s*import\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*import\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+\\{[\\s\\S]*?\\}\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+\\*\\s+from\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+\\*\\s+as\\s+\\w+\\s+from\\s+['"][^'"]+['"]\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+default\\s+/gm, '')
+          .replace(/^\\s*export\\s+/gm, '');
+
+        const transformed = Babel.transform(sanitizedCode, {
           presets: [
             'react',
             ['typescript', { isTSX: true, allExtensions: true }],
@@ -1629,7 +1648,11 @@ ${lucideRuntimeAssignments
         const loading = document.getElementById('loading');
         if (loading) loading.style.display = 'none';
 
-        const compiledCode = transformed.code.replace(/^\\s*["']use strict["'];?\\s*/, '');
+        const compiledCode = transformed.code
+          .replace(/^\\s*["']use strict["'];?\\s*/, '')
+          .replace(/^\\s*export\\s+\\{[\\s\\S]*?\\}\\s*;?\\s*$/gm, '')
+          .replace(/^\\s*export\\s+default\\s+/gm, '')
+          .replace(/^\\s*export\\s+/gm, '');
 
         const __pocketBoundWindowFnCache = new Map();
         const __pocketWindowMethodsNeedingBind = new Set([
