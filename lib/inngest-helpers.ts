@@ -115,7 +115,7 @@ async function pollForCompletion<T>(
       } catch (err) {
         console.error('[Inngest Poll] Error:', err);
       }
-    }, 2000);
+    }, 1000);
   });
 }
 
@@ -125,9 +125,11 @@ async function pollForCompletion<T>(
 export async function generateCodeWithInngest(
   prompt: string,
   userId: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  onRunStart?: (projectId: string) => void,
 ): Promise<GenerateCodeResult> {
   const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  onRunStart?.(projectId);
 
   onProgress?.("[0/7] Queueing generation job...");
 

@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const COMPLETION_TTL_MS = 30 * 60 * 1000;
 const PROGRESS_TTL_MS = 60 * 60 * 1000;
+const CANCEL_TTL_MS = 60 * 60 * 1000;
 
 type TimedValue<T> = {
   value: T;
@@ -15,9 +16,9 @@ type TimedValue<T> = {
 };
 
 // In-memory store for completed events (in production, use Redis or database)
-const completedEvents = new Map<string, TimedValue<any>>();
+const completedEvents = new Map<string, TimedValue<unknown>>();
 const progressEvents = new Map<string, TimedValue<string[]>>();
-const cancelledJobs = new Set<string>(); // Track cancelled project IDs
+const cancelledJobs = new Map<string, TimedValue<true>>(); // Track cancelled project IDs
 
 function now() {
   return Date.now();
@@ -31,6 +32,19 @@ function cleanupExpired() {
   for (const [k, v] of progressEvents) {
     if (v.expiresAt <= t) progressEvents.delete(k);
   }
+  for (const [k, v] of cancelledJobs) {
+    if (v.expiresAt <= t) cancelledJobs.delete(k);
+  }
+}
+
+function isCancelled(projectId: string) {
+  const entry = cancelledJobs.get(projectId);
+  if (!entry) return false;
+  if (entry.expiresAt <= now()) {
+    cancelledJobs.delete(projectId);
+    return false;
+  }
+  return true;
 }
 
 export async function GET(request: NextRequest) {
@@ -48,10 +62,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Check if job was cancelled
-  if (cancelledJobs.has(projectId)) {
-    cancelledJobs.delete(projectId);
-    completedEvents.delete(`${projectId}:${event}`);
-    progressEvents.delete(`${projectId}:progress`);
+  if (isCancelled(projectId)) {
     return NextResponse.json({ cancelled: true }, { status: 200 });
   }
 
@@ -91,7 +102,12 @@ export async function POST(request: NextRequest) {
 
   // Handle cancellation
   if (cancel) {
-    cancelledJobs.add(projectId);
+    cancelledJobs.set(projectId, {
+      value: true,
+      expiresAt: now() + CANCEL_TTL_MS,
+    });
+    completedEvents.delete(`${projectId}:generate.completed`);
+    progressEvents.delete(`${projectId}:progress`);
     console.log(`[Inngest] Job cancelled: ${projectId}`);
     return NextResponse.json({ success: true, cancelled: true });
   }
@@ -132,5 +148,5 @@ export async function POST(request: NextRequest) {
 
 // Helper function to check if a job is cancelled (for use in Inngest functions)
 export function isJobCancelled(projectId: string): boolean {
-  return cancelledJobs.has(projectId);
+  return isCancelled(projectId);
 }

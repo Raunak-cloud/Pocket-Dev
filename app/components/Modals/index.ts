@@ -7,3 +7,4 @@ export { WelcomeModal } from "./WelcomeModal";
 export { DomainSettingsModal } from "./DomainSettingsModal";
 export { GitHubExportModal } from "./GitHubExportModal";
 export { TokenConfirmModal } from "./TokenConfirmModal";
+export { EditIntegrationsModal } from "./EditIntegrationsModal";

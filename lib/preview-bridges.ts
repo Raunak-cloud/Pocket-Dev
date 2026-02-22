@@ -8,12 +8,14 @@ declare global {
   interface Window {
     __pocketTextEditMode?: boolean;
     __pocketImageSelectMode?: boolean;
+    __pocketLinkSelectMode?: boolean;
   }
 }
 
 export default function PocketTextEditBridge() {
   const selectedTextRef = useRef<HTMLElement | null>(null);
   const selectedImageRef = useRef<HTMLImageElement | null>(null);
+  const selectedLinkRef = useRef<HTMLElement | null>(null);
   const originalTextRef = useRef("");
   const rawOriginalRef = useRef("");
   const selectedTextOccurrenceRef = useRef(1);
@@ -23,6 +25,7 @@ export default function PocketTextEditBridge() {
   useEffect(() => {
     const EDITABLE_SELECTOR = "h1,h2,h3,h4,h5,h6,p,span,li,a,button,label,td,th,dt,dd,figcaption,blockquote,caption,summary,legend,small,strong,em,b,i,u,sub,sup,mark,del,ins,code,pre,time,abbr,cite,q,dfn,var,samp,kbd";
     const BLOCK_SELECTOR = "h1,h2,h3,h4,h5,h6,p,li,td,th,dt,dd,figcaption,blockquote,caption,summary,legend,pre";
+    const LINKABLE_SELECTOR = "button,a,[role='button'],input[type='button'],input[type='submit']";
 
     // Inject rotating border animation styles
     const styleEl = document.createElement("style");
@@ -84,6 +87,55 @@ export default function PocketTextEditBridge() {
       if (!image) return;
       selectedImageRef.current = null;
       removeOverlay();
+    };
+
+    const clearLinkSelection = () => {
+      const selected = selectedLinkRef.current;
+      if (!selected) return;
+      selectedLinkRef.current = null;
+      selected.style.outline = "";
+      selected.style.outlineOffset = "";
+      selected.style.cursor = "";
+    };
+
+    const normalizeTextValue = (value: string): string =>
+      value.replace(/\s+/g, " ").trim();
+
+    const linkLabel = (el: HTMLElement): string => {
+      if (el instanceof HTMLInputElement) {
+        return (
+          el.value ||
+          el.getAttribute("aria-label") ||
+          el.getAttribute("title") ||
+          ""
+        );
+      }
+      return (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("title") ||
+        el.textContent ||
+        ""
+      );
+    };
+
+    const linkOccurrence = (
+      target: HTMLElement,
+      normalizedLabel: string,
+      tag: string,
+    ): number => {
+      const nodes = Array.from(
+        document.querySelectorAll(LINKABLE_SELECTOR),
+      ) as HTMLElement[];
+      let count = 1;
+      for (const node of nodes) {
+        if (node === target) break;
+        const nodeTag = node.tagName.toLowerCase();
+        if (nodeTag !== tag) continue;
+        if (normalizeTextValue(linkLabel(node)) === normalizedLabel) {
+          count += 1;
+        }
+      }
+      return count;
     };
 
     const commitTextEdit = (cancel: boolean) => {
@@ -206,6 +258,13 @@ export default function PocketTextEditBridge() {
           clearImageSelection();
         }
       }
+
+      if (data.type === "pocket:set-link-select-mode") {
+        window.__pocketLinkSelectMode = Boolean(data.enabled);
+        if (!window.__pocketLinkSelectMode) {
+          clearLinkSelection();
+        }
+      }
     };
 
     const resolveEditable = (target: HTMLElement): HTMLElement | null => {
@@ -233,6 +292,39 @@ export default function PocketTextEditBridge() {
     const onClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
+
+      if (window.__pocketLinkSelectMode) {
+        const clickable = target.closest(LINKABLE_SELECTOR) as HTMLElement | null;
+        if (!clickable) return;
+
+        const name = normalizeTextValue(linkLabel(clickable));
+        if (!name) return;
+
+        const tag = clickable.tagName.toLowerCase();
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        commitTextEdit(false);
+        clearImageSelection();
+        clearLinkSelection();
+
+        selectedLinkRef.current = clickable;
+        clickable.style.outline = "2px dashed #06b6d4";
+        clickable.style.outlineOffset = "2px";
+        clickable.style.cursor = "pointer";
+
+        window.parent.postMessage(
+          {
+            type: "pocket:button-selected",
+            name,
+            tag,
+            occurrence: linkOccurrence(clickable, name, tag),
+          },
+          "*",
+        );
+        return;
+      }
 
       if (window.__pocketImageSelectMode) {
         // Find image: try closest <img>, then check wrappers, then background images
@@ -268,6 +360,7 @@ export default function PocketTextEditBridge() {
           event.preventDefault();
           event.stopPropagation();
           commitTextEdit(false);
+          clearLinkSelection();
           clearImageSelection();
 
           selectedImageRef.current = image;
@@ -294,6 +387,7 @@ export default function PocketTextEditBridge() {
           event.preventDefault();
           event.stopPropagation();
           commitTextEdit(false);
+          clearLinkSelection();
           clearImageSelection();
 
           // Store the element in selectedImageRef (cast — overlay sync uses
@@ -339,6 +433,7 @@ export default function PocketTextEditBridge() {
       // Commit any in-progress edit before starting a new one (don't discard)
       commitTextEdit(false);
       clearImageSelection();
+      clearLinkSelection();
 
       selectedTextRef.current = editable;
       rawOriginalRef.current = editable.textContent || "";
@@ -366,6 +461,9 @@ export default function PocketTextEditBridge() {
       if (event.key === "Escape") {
         if (window.__pocketImageSelectMode) {
           clearImageSelection();
+        }
+        if (window.__pocketLinkSelectMode) {
+          clearLinkSelection();
         }
         if (window.__pocketTextEditMode) {
           commitTextEdit(true);
@@ -417,6 +515,7 @@ export default function PocketTextEditBridge() {
       document.removeEventListener("focusout", onFocusOut, true);
       commitTextEdit(false);
       clearImageSelection();
+      clearLinkSelection();
       styleEl.remove();
     };
   }, []);

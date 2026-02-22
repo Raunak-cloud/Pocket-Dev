@@ -29,6 +29,7 @@ import {
   DomainSettingsModal,
   GitHubExportModal,
   TokenConfirmModal,
+  EditIntegrationsModal,
 } from "./components/Modals";
 import CreateContentComponent from "./components/Generation/CreateContent";
 import SupportContentComponent from "./components/Support/SupportContent";
@@ -52,6 +53,12 @@ const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const MAX_EDIT_HISTORY_ENTRIES = 200;
+
+type SelectedLinkTarget = {
+  name: string;
+  occurrence: number;
+  tag: string;
+};
 
 // Helper function to format token values to 2 decimal places
 const formatTokens = (tokens: number): string => {
@@ -161,6 +168,9 @@ function ReactGeneratorContent() {
   const [showCodeViewer, setShowCodeViewer] = useState(false);
   const [textEditMode, setTextEditMode] = useState(false);
   const [imageSelectMode, setImageSelectMode] = useState(false);
+  const [linkSelectMode, setLinkSelectMode] = useState(false);
+  const [selectedButton, setSelectedButton] = useState<SelectedLinkTarget | null>(null);
+  const [buttonLinks, setButtonLinks] = useState<Record<string, string>>({});
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<{
     src: string;
     resolvedSrc?: string;
@@ -1728,12 +1738,10 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         (message) => {
           setEditProgressMessages((prev) => [...prev, message]);
         },
+        (projectId) => {
+          setCurrentGenerationProjectId(projectId);
+        },
       );
-
-      // Store projectId for cancellation tracking (if using Inngest)
-      if ("projectId" in result && result.projectId) {
-        setCurrentGenerationProjectId(result.projectId);
-      }
 
       setEditProgressMessages((prev) => [
         ...prev,
@@ -1890,12 +1898,10 @@ ${pdfUrlList}
         (message) => {
           setProgressMessages((prev) => [...prev, message]);
         },
+        (projectId) => {
+          setCurrentGenerationProjectId(projectId);
+        },
       );
-
-      // Store projectId for cancellation tracking
-      if (result.projectId) {
-        setCurrentGenerationProjectId(result.projectId);
-      }
 
       // If user cancelled while awaiting, discard the result
       if (generationCancelledRef.current) {
@@ -2299,6 +2305,200 @@ ${pdfUrlList}
     }
   };
 
+  const getSelectedButtonKey = (selection: SelectedLinkTarget): string =>
+    `${selection.tag.toLowerCase()}::${Math.max(1, selection.occurrence)}::${selection.name.trim().toLowerCase()}`;
+
+  const normalizeButtonLabel = (value: string): string =>
+    value
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+
+  const normalizeButtonLinkValue = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (/^(https?:\/\/|mailto:|tel:|#|\/|\.\.?\/)/i.test(trimmed)) {
+      return trimmed;
+    }
+    if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
+      return `https://${trimmed}`;
+    }
+    return trimmed;
+  };
+
+  const replaceNthButtonLinkInProject = (
+    sourceProject: ReactProject,
+    selection: SelectedLinkTarget,
+    href: string,
+  ): ReactProject => {
+    const normalizedTarget = normalizeButtonLabel(selection.name);
+    const targetOccurrence = Math.max(1, selection.occurrence || 1);
+    const preferredTag = (selection.tag || "").toLowerCase();
+    if (!normalizedTarget || !href.trim()) return sourceProject;
+
+    const escapeAttr = (value: string) =>
+      value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+
+    const upsertHrefAttr = (attrsRaw: string): string => {
+      const hrefPattern = /\bhref\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\})/i;
+      const next = hrefPattern.test(attrsRaw)
+        ? attrsRaw.replace(hrefPattern, `href="${escapeAttr(href)}"`)
+        : `${attrsRaw} href="${escapeAttr(href)}"`;
+      const trimmed = next.trim();
+      return trimmed ? ` ${trimmed}` : "";
+    };
+
+    const normalizeAttrs = (attrsRaw: string): string => {
+      const trimmed = attrsRaw.trim();
+      return trimmed ? ` ${trimmed}` : "";
+    };
+
+    const buildReplacement = (
+      tagRaw: string,
+      attrsRaw: string,
+      inner: string,
+    ): string => {
+      if (tagRaw === "Link") {
+        return `<Link${upsertHrefAttr(attrsRaw)}>${inner}</Link>`;
+      }
+
+      if (tagRaw.toLowerCase() === "a") {
+        return `<a${upsertHrefAttr(attrsRaw)}>${inner}</a>`;
+      }
+
+      // Convert <button> to <a> so URL navigation works in generated output.
+      let buttonAttrs = attrsRaw.replace(
+        /\s+type\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\})/gi,
+        "",
+      );
+      buttonAttrs = buttonAttrs.replace(/\s+onClick\s*=\s*\{[^}]*\}/gi, "");
+      buttonAttrs = upsertHrefAttr(buttonAttrs);
+      if (!/\brole\s*=/.test(buttonAttrs)) {
+        buttonAttrs = `${buttonAttrs} role="button"`;
+      }
+      return `<a${normalizeAttrs(buttonAttrs)}>${inner}</a>`;
+    };
+
+    const editableExt = /\.(tsx|ts|jsx|js|html)$/i;
+    const tagsPattern = /<(Link|a|button)(\s[^>]*)?>([\s\S]*?)<\/\1>/g;
+
+    const attemptReplace = (requireTagMatch: boolean): ReactProject | null => {
+      const files = sourceProject.files.map((file) => ({ ...file }));
+      let seen = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!editableExt.test(file.path)) continue;
+
+        let match: RegExpExecArray | null;
+        tagsPattern.lastIndex = 0;
+
+        while ((match = tagsPattern.exec(file.content)) !== null) {
+          const [full, tagRaw, attrsRaw = "", inner] = match;
+          const tag = tagRaw.toLowerCase();
+          const normalizedTag = tag === "link" ? "a" : tag;
+          const matchesTag = !requireTagMatch || normalizedTag === preferredTag;
+          if (!matchesTag) continue;
+
+          if (normalizeButtonLabel(inner) !== normalizedTarget) continue;
+
+          seen += 1;
+          if (seen !== targetOccurrence) continue;
+
+          const replacement = buildReplacement(tagRaw, attrsRaw, inner);
+          files[i] = {
+            ...file,
+            content:
+              file.content.slice(0, match.index) +
+              replacement +
+              file.content.slice(match.index + full.length),
+          };
+          return { ...sourceProject, files };
+        }
+      }
+
+      return null;
+    };
+
+    // Pass 1: enforce exact tag match based on clicked element.
+    if (preferredTag) {
+      const strict = attemptReplace(true);
+      if (strict) return strict;
+    }
+
+    // Pass 2: fallback to any clickable tag with matching label.
+    return attemptReplace(false) ?? sourceProject;
+  };
+
+  const handlePreviewButtonSelected = (payload: {
+    name: string;
+    occurrence: number;
+    tag: string;
+  }) => {
+    if (!linkSelectMode) return;
+    setSelectedButton({
+      name: payload.name,
+      occurrence: Math.max(1, payload.occurrence || 1),
+      tag: payload.tag || "button",
+    });
+  };
+
+  const handleSaveSelectedButtonLink = async () => {
+    if (!linkSelectMode || !project || !selectedButton) return;
+
+    const key = getSelectedButtonKey(selectedButton);
+    const inputValue = buttonLinks[key] || "";
+    const normalizedHref = normalizeButtonLinkValue(inputValue);
+
+    if (!normalizedHref) {
+      setError("Enter a URL before saving the selected button link.");
+      return;
+    }
+
+    const updatedProject = replaceNthButtonLinkInProject(
+      project,
+      selectedButton,
+      normalizedHref,
+    );
+
+    if (updatedProject === project) {
+      setError(
+        "Could not map the selected button to source code. Click the button in preview again and retry.",
+      );
+      return;
+    }
+
+    setProject(updatedProject);
+    setButtonLinks((prev) => ({
+      ...prev,
+      [key]: normalizedHref,
+    }));
+
+    if (currentProjectId) {
+      updateSavedProjectCache(currentProjectId, updatedProject);
+    }
+
+    if (currentProjectId && user) {
+      try {
+        await updateProjectInFirestore(currentProjectId, updatedProject);
+        if (publishedUrl) setHasUnpublishedChanges(true);
+      } catch (err) {
+        console.error("Failed to save button link update:", err);
+      }
+    }
+
+    setError("");
+    setTokenToast("Button link saved.");
+    setTimeout(() => setTokenToast(""), 2500);
+  };
+
   const replaceNthImageSrcInProject = (
     sourceProject: ReactProject,
     fromSrc: string,
@@ -2609,6 +2809,9 @@ ${pdfUrlList}
   const isEditSubmitDisabled =
     (!editPrompt.trim() && editAppAuth.length === 0) || isEditBusy;
   const editPromptCount = editPrompt.trim().length;
+  const selectedButtonKey = selectedButton
+    ? getSelectedButtonKey(selectedButton)
+    : null;
 
   // SUCCESS STATE
   if (status === "success" && project) {
@@ -2694,6 +2897,8 @@ ${pdfUrlList}
                       const next = !v;
                       if (next) {
                         setImageSelectMode(false);
+                        setLinkSelectMode(false);
+                        setSelectedButton(null);
                         setSelectedPreviewImage(null);
                         setImageRegenerationPrompt("");
                       }
@@ -2729,6 +2934,8 @@ ${pdfUrlList}
                       const next = !v;
                       if (next) {
                         setTextEditMode(false);
+                        setLinkSelectMode(false);
+                        setSelectedButton(null);
                       } else {
                         setSelectedPreviewImage(null);
                         setImageRegenerationPrompt("");
@@ -2757,6 +2964,45 @@ ${pdfUrlList}
                     />
                   </svg>
                   Image Replace
+                </button>
+
+                <button
+                  onClick={() =>
+                    setLinkSelectMode((v) => {
+                      const next = !v;
+                      if (next) {
+                        setTextEditMode(false);
+                        setImageSelectMode(false);
+                        setSelectedButton(null);
+                        setSelectedPreviewImage(null);
+                        setImageRegenerationPrompt("");
+                      } else {
+                        setSelectedButton(null);
+                      }
+                      return next;
+                    })
+                  }
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition ${
+                    linkSelectMode
+                      ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
+                      : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                  }`}
+                  title="Add links to buttons in preview"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+                    />
+                  </svg>
+                  Link Feature
                 </button>
               </div>
 
@@ -3367,8 +3613,10 @@ ${pdfUrlList}
                       previewKey={previewKey}
                       textEditMode={textEditMode}
                       imageSelectMode={imageSelectMode}
+                      linkSelectMode={linkSelectMode}
                       onTextEdited={handlePreviewTextEdited}
                       onImageSelected={handlePreviewImageSelected}
+                      onButtonSelected={handlePreviewButtonSelected}
                     />
                   </div>
                 </div>
@@ -3766,7 +4014,7 @@ ${pdfUrlList}
                           </span>
                         </div>
                         <span className="text-xs text-text-muted">
-                          {editPromptCount} / 100 chars
+                          {editPromptCount} / 250 chars
                         </span>
                       </div>
                       {/* Auth prefill tags */}
@@ -3887,7 +4135,7 @@ ${pdfUrlList}
                               handleEdit(e);
                           }
                         }}
-                        maxLength={100}
+                        maxLength={250}
                         placeholder={
                           editAppAuth.length > 0
                             ? "Add instructions (optional)..."
@@ -3909,132 +4157,55 @@ ${pdfUrlList}
                         </p>
                       </div>
                     </div>
-                    {/* Integrations Section */}
-                    <div className="rounded-xl border border-border-primary bg-gradient-to-br from-bg-secondary to-bg-tertiary/50 p-4 shadow-sm">
-                      <div className="flex items-center gap-2 mb-3">
+                    {/* Add Integrations Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowEditIntegrationsModal(true)}
+                      disabled={isEditing}
+                      className={`w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-medium transition-all ${
+                        (editAppAuth.length > 0 || currentAppDatabase.length > 0)
+                          ? "bg-violet-500/20 text-violet-300 border border-violet-500/40 hover:border-violet-500/60"
+                          : "bg-bg-tertiary/70 text-text-secondary border border-border-secondary hover:border-violet-500/40 hover:bg-bg-tertiary hover:text-text-primary"
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      title="Configure integrations (authentication and database)"
+                    >
+                      <svg
+                        className="w-4 h-4 flex-shrink-0"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                        />
+                      </svg>
+                      <span className="truncate">Add Integration</span>
+                      {(editAppAuth.length > 0 || currentAppDatabase.length > 0) && (
                         <svg
-                          className="w-4 h-4 text-violet-400"
+                          className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
-                          strokeWidth={2}
+                          strokeWidth={3}
                         >
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
-                            d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                            d="M5 13l4 4L19 7"
                           />
                         </svg>
-                        <h4 className="text-sm font-semibold text-text-primary">
-                          Add Integrations
-                        </h4>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEditAppAuth(
-                                editAppAuth.includes("username-password")
-                                  ? editAppAuth.filter(
-                                      (a) => a !== "username-password",
-                                    )
-                                  : [...editAppAuth, "username-password"],
-                              )
-                            }
-                            disabled={isEditing}
-                            className={`flex-1 min-w-[120px] inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                              editAppAuth.includes("username-password")
-                                ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
-                                : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
-                            } disabled:opacity-50 disabled:cursor-not-allowed`}
-                          >
-                            <svg
-                              className="w-4 h-4 flex-shrink-0"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
-                              />
-                            </svg>
-                            <span className="truncate">Password Auth</span>
-                            {editAppAuth.includes("username-password") && (
-                              <svg
-                                className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={3}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M5 13l4 4L19 7"
-                                />
-                              </svg>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEditAppAuth(
-                                editAppAuth.includes("google")
-                                  ? editAppAuth.filter((a) => a !== "google")
-                                  : [...editAppAuth, "google"],
-                              )
-                            }
-                            disabled={isEditing}
-                            className={`flex-1 min-w-[120px] inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                              editAppAuth.includes("google")
-                                ? "bg-blue-500/20 text-blue-300 border-2 border-blue-500/40 shadow-lg shadow-blue-500/10"
-                                : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary hover:text-text-primary"
-                            } disabled:opacity-50 disabled:cursor-not-allowed`}
-                          >
-                            <svg
-                              className="w-4 h-4 flex-shrink-0"
-                              viewBox="0 0 24 24"
-                              fill="currentColor"
-                            >
-                              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                            </svg>
-                            <span className="truncate">Google OAuth</span>
-                            {editAppAuth.includes("google") && (
-                              <svg
-                                className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={3}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M5 13l4 4L19 7"
-                                />
-                              </svg>
-                            )}
-                          </button>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowDbModal(true)}
-                          disabled={isEditing}
-                          className={`w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                            currentAppDatabase.length > 0
-                              ? "bg-emerald-500/20 text-emerald-300 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
-                              : "bg-bg-tertiary/70 text-text-secondary border-2 border-border-secondary hover:border-emerald-500/40 hover:bg-bg-tertiary hover:text-text-primary"
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
-                        >
+                      )}
+                    </button>
+
+                    {/* Link Selection UI */}
+                    {linkSelectMode && selectedButton && (
+                      <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/5 p-4 shadow-sm">
+                        <div className="flex items-center gap-2 mb-3">
                           <svg
-                            className="w-4 h-4"
+                            className="w-4 h-4 text-cyan-400"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -4043,28 +4214,65 @@ ${pdfUrlList}
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"
+                              d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
                             />
                           </svg>
-                          <span>Database Storage</span>
-                          {currentAppDatabase.length > 0 && (
-                            <svg
-                              className="w-3.5 h-3.5 ml-auto"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={3}
+                          <h4 className="text-sm font-semibold text-text-primary">
+                            Selected: {selectedButton.name}
+                          </h4>
+                        </div>
+                        <p className="text-[11px] text-text-muted mb-2">
+                          {selectedButton.tag.toUpperCase()} element
+                          {selectedButton.occurrence > 1
+                            ? ` (occurrence ${selectedButton.occurrence})`
+                            : ""}
+                        </p>
+                        <div className="space-y-2">
+                          <input
+                            type="url"
+                            placeholder="Enter button URL... (e.g., https://example.com)"
+                            value={
+                              selectedButtonKey
+                                ? buttonLinks[selectedButtonKey] || ""
+                                : ""
+                            }
+                            onChange={(e) =>
+                              selectedButtonKey &&
+                              setButtonLinks((prev) => ({
+                                ...prev,
+                                [selectedButtonKey]: e.target.value,
+                              }))
+                            }
+                            className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-cyan-500/40 transition"
+                            autoFocus
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={handleSaveSelectedButtonLink}
+                              className="flex-1 px-3 py-2 bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-medium hover:bg-cyan-500/30 transition"
                             >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M5 13l4 4L19 7"
-                              />
-                            </svg>
-                          )}
-                        </button>
+                              Save Link
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedButton(null);
+                                if (!selectedButtonKey) return;
+                                setButtonLinks((prev) => {
+                                  const next = { ...prev };
+                                  delete next[selectedButtonKey];
+                                  return next;
+                                });
+                              }}
+                              className="flex-1 px-3 py-2 bg-red-500/20 text-red-300 border border-red-500/40 rounded-lg text-xs font-medium hover:bg-red-500/30 transition"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* File Upload Preview */}
                     {editFiles.length > 0 && (
@@ -4670,6 +4878,23 @@ ${pdfUrlList}
           isProcessing={isProcessingTokenPurchase}
           onPurchase={purchaseTokens}
         />
+
+        {showEditIntegrationsModal && (
+          <EditIntegrationsModal
+            isOpen={showEditIntegrationsModal}
+            onClose={() => setShowEditIntegrationsModal(false)}
+            selectedAuth={editAppAuth}
+            onAuthChange={(auth) =>
+              setEditAppAuth(
+                editAppAuth.includes(auth)
+                  ? editAppAuth.filter((a) => a !== auth)
+                  : [...editAppAuth, auth],
+              )
+            }
+            selectedDatabase={currentAppDatabase}
+            onDatabaseChange={setCurrentAppDatabase}
+          />
+        )}
 
         {/* Cancel Confirmation Modal (success view) */}
         {showCancelConfirm && (
@@ -5446,6 +5671,23 @@ ${pdfUrlList}
         isProcessing={isProcessingTokenPurchase}
         onPurchase={purchaseTokens}
       />
+
+      {showEditIntegrationsModal && (
+        <EditIntegrationsModal
+          isOpen={showEditIntegrationsModal}
+          onClose={() => setShowEditIntegrationsModal(false)}
+          selectedAuth={editAppAuth}
+          onAuthChange={(auth) =>
+            setEditAppAuth(
+              editAppAuth.includes(auth)
+                ? editAppAuth.filter((a) => a !== auth)
+                : [...editAppAuth, auth],
+            )
+          }
+          selectedDatabase={currentAppDatabase}
+          onDatabaseChange={setCurrentAppDatabase}
+        />
+      )}
 
       {/* Floating generation progress indicator (when on other sections or minimized) */}
       {status === "loading" &&

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { WebContainer } from "@webcontainer/api";
 import {
   prepareSandboxFiles,
@@ -8,11 +8,17 @@ import {
 } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
+type FileTreeEntry = {
+  directory?: Record<string, FileTreeEntry>;
+  file?: { contents: string };
+};
+
 interface WebContainerPreviewProps {
   project: ReactProject | null;
   previewKey: number;
   textEditMode?: boolean;
   imageSelectMode?: boolean;
+  linkSelectMode?: boolean;
   onTextEdited?: (
     originalText: string,
     updatedText: string,
@@ -24,6 +30,11 @@ interface WebContainerPreviewProps {
     alt: string;
     occurrence: number;
   }) => void;
+  onButtonSelected?: (payload: {
+    name: string;
+    occurrence: number;
+    tag: string;
+  }) => void;
   onSyncStateChange?: (isSyncing: boolean) => void;
 }
 
@@ -33,19 +44,22 @@ interface WebContainerPreviewProps {
  */
 function toFileTree(
   flat: Record<string, string>,
-): Record<string, any> {
-  const tree: Record<string, any> = {};
+): Record<string, FileTreeEntry> {
+  const tree: Record<string, FileTreeEntry> = {};
 
   for (const [filePath, contents] of Object.entries(flat)) {
     const parts = filePath.split("/");
-    let current = tree;
+    let current: Record<string, FileTreeEntry> = tree;
 
     for (let i = 0; i < parts.length - 1; i++) {
       const dir = parts[i];
       if (!current[dir]) {
         current[dir] = { directory: {} };
       }
-      current = current[dir].directory;
+      if (!current[dir].directory) {
+        current[dir].directory = {};
+      }
+      current = current[dir].directory as Record<string, FileTreeEntry>;
     }
 
     const fileName = parts[parts.length - 1];
@@ -76,8 +90,10 @@ export default function WebContainerPreview({
   previewKey,
   textEditMode = false,
   imageSelectMode = false,
+  linkSelectMode = false,
   onTextEdited,
   onImageSelected,
+  onButtonSelected,
   onSyncStateChange,
 }: WebContainerPreviewProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -91,7 +107,7 @@ export default function WebContainerPreview({
   const latestProjectRef = useRef<ReactProject | null>(project);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const containerRef = useRef<WebContainer | null>(null);
-  const serverProcessRef = useRef<any>(null);
+  const serverProcessRef = useRef<{ kill: () => void } | null>(null);
 
   useEffect(() => {
     latestProjectRef.current = project;
@@ -233,6 +249,16 @@ export default function WebContainerPreview({
     );
   }, [imageSelectMode, previewUrl]);
 
+  // Effect: Forward link select mode to iframe
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { type: "pocket:set-link-select-mode", enabled: linkSelectMode },
+      "*",
+    );
+  }, [linkSelectMode, previewUrl]);
+
   // Effect: Listen for postMessage from iframe
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -250,6 +276,10 @@ export default function WebContainerPreview({
         );
         iframe.contentWindow.postMessage(
           { type: "pocket:set-image-select-mode", enabled: imageSelectMode },
+          "*",
+        );
+        iframe.contentWindow.postMessage(
+          { type: "pocket:set-link-select-mode", enabled: linkSelectMode },
           "*",
         );
         return;
@@ -283,11 +313,34 @@ export default function WebContainerPreview({
               : 1,
         });
       }
+      if (
+        data.type === "pocket:button-selected" &&
+        typeof data.name === "string"
+      ) {
+        onButtonSelected?.({
+          name: data.name,
+          occurrence:
+            typeof data.occurrence === "number" && data.occurrence > 0
+              ? data.occurrence
+              : 1,
+          tag:
+            typeof data.tag === "string" && data.tag.trim()
+              ? data.tag
+              : "button",
+        });
+      }
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [onTextEdited, onImageSelected, textEditMode, imageSelectMode]);
+  }, [
+    onTextEdited,
+    onImageSelected,
+    onButtonSelected,
+    textEditMode,
+    imageSelectMode,
+    linkSelectMode,
+  ]);
 
   // Effect: Update files when project changes (HMR-style sync)
   useEffect(() => {
@@ -413,6 +466,47 @@ export default function WebContainerPreview({
           </div>
         </div>
       )}
+
+      {/* Link Selection Mode Indicator */}
+      {linkSelectMode &&
+        !textEditMode &&
+        !imageSelectMode &&
+        loadingState === "ready" && (
+          <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="mx-auto max-w-md mt-4">
+              <div className="pointer-events-auto bg-gradient-to-r from-cyan-500 to-cyan-600 text-white rounded-lg shadow-2xl border border-cyan-400/50 backdrop-blur-sm">
+                <div className="px-4 py-3 flex items-center gap-3">
+                  <div className="flex-shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center animate-pulse">
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">Link Selection Mode</p>
+                    <p className="text-xs text-white/90 mt-0.5">
+                      Click a button or link in preview to assign a URL
+                    </p>
+                  </div>
+                  <div className="flex-shrink-0">
+                    <div className="h-2 w-2 rounded-full bg-white animate-ping" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Loading overlay */}
       {loadingState !== "ready" && loadingState !== "error" && (
