@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS "supabase_project_pool" (
   "serviceRoleKeyEncrypted" TEXT,
   "dbPasswordEncrypted" TEXT,
   "databaseUrlEncrypted" TEXT,
+  "schemaBootstrapped" BOOLEAN NOT NULL DEFAULT false,
+  "schemaBootstrappedAt" TIMESTAMP(3),
+  "schemaBootstrapError" TEXT,
   "lastError" TEXT,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -31,3 +34,12 @@ CREATE INDEX IF NOT EXISTS "supabase_project_pool_bindingKey_idx"
 
 ALTER TABLE "supabase_project_pool"
   ADD COLUMN IF NOT EXISTS "databaseUrlEncrypted" TEXT;
+
+ALTER TABLE "supabase_project_pool"
+  ADD COLUMN IF NOT EXISTS "schemaBootstrapped" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "supabase_project_pool"
+  ADD COLUMN IF NOT EXISTS "schemaBootstrappedAt" TIMESTAMP(3);
+
+ALTER TABLE "supabase_project_pool"
+  ADD COLUMN IF NOT EXISTS "schemaBootstrapError" TEXT;

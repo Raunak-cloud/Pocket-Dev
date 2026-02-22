@@ -9,7 +9,6 @@ import { inngest } from "@/lib/inngest-client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
-import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
 import {
   acquireAuthConfigForBindingKey,
   type ManagedSupabaseAuthConfig,
@@ -714,7 +713,6 @@ async function repairProjectFromLintFeedback(args: {
   dependencies: Record<string, string>;
   lintIssues: LintIssue[];
   requirements?: IntegrationRequirements;
-  projectId?: string;
   managedAuthConfig?: ManagedSupabaseAuthConfig | null;
 }) {
   const {
@@ -723,7 +721,6 @@ async function repairProjectFromLintFeedback(args: {
     dependencies,
     lintIssues,
     requirements,
-    projectId,
     managedAuthConfig,
   } = args;
   const hasNavigationUxIssue = lintIssues.some((issue) =>
@@ -781,7 +778,6 @@ ${
     repairedFiles,
     repairedDependencies,
     requirements,
-    projectId,
     managedAuthConfig,
   );
   validateProjectStructureOrThrow(repairedFiles);
@@ -794,7 +790,6 @@ function ensureRequiredFiles(
   files: GeneratedFile[],
   dependencies: Record<string, string>,
   requirements?: IntegrationRequirements,
-  projectId?: string,
   managedAuthConfig?: ManagedSupabaseAuthConfig | null,
 ): GeneratedFile[] {
   const requested: IntegrationRequirements = requirements || {
@@ -803,10 +798,6 @@ function ensureRequiredFiles(
     requiresGoogleOAuth: false,
     requiresPasswordAuth: false,
   };
-  const derivedTenantSlug = projectId
-    ? getProjectAuthTenantSlug(projectId)
-    : "";
-
   function parseEnvContent(content: string): Map<string, string> {
     const vars = new Map<string, string>();
     const lines = content.split(/\r?\n/);
@@ -1207,58 +1198,11 @@ html, body {
     });
   }
 
-  // Ensure tenant helper exists for multi-tenant apps with auth
-  if (hasAuthIntegration) {
-    upsertFile(
-      "lib/supabase/tenant.ts",
-      `import { createClient } from "./server";
-
-/**
- * Get the current tenant slug from environment
- * Each generated app has a unique tenant slug for data isolation
- */
-export function getTenantSlug(): string {
-  const tenant = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
-  if (!tenant) {
-    throw new Error("NEXT_PUBLIC_POCKET_APP_SLUG is not set");
-  }
-  return tenant;
-}
-
-/**
- * Get the current authenticated user and verify tenant membership
- * Returns null if user is not authenticated or not a member of this tenant
- */
-export async function getCurrentUser() {
-  const supabase = await createClient();
-  const tenant = getTenantSlug();
-
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) return null;
-
-  // Verify tenant membership
-  const { data: membership } = await supabase
-    .from("user_tenants")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("tenant_slug", tenant)
-    .single();
-
-  if (!membership) return null;
-
-  return user;
-}
-
-/**
- * Check if current user is a member of this tenant
- */
-export async function isUserTenantMember(): Promise<boolean> {
-  const user = await getCurrentUser();
-  return user !== null;
-}
-`,
-    );
-  }
+  // Remove deprecated tenant-specific scaffolding.
+  files = files.filter((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
+    return normalizedPath !== "lib/supabase/tenant.ts" && normalizedPath !== "app/unauthorized/page.tsx";
+  });
 
   if (hasAuthIntegration) {
     upsertFile("lib/supabase/client.ts", buildBrowserSupabaseClientContent(true));
@@ -1279,19 +1223,24 @@ const supabaseUrl =
 const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
 
 export async function middleware(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey || !tenantSlug) {
+  if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.next();
   }
 
   const pathname = request.nextUrl.pathname;
+  const isAuthPage =
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/signup") ||
+    pathname.startsWith("/auth");
+  const protectedPrefixes = ["/dashboard", "/account", "/settings", "/app", "/protected"];
+  const requiresAuth = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
   const isPublicAsset =
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api") ||
     pathname.includes(".");
-  if (isPublicAsset) {
+  if (isPublicAsset || !requiresAuth || isAuthPage) {
     return NextResponse.next();
   }
 
@@ -1313,34 +1262,10 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isAuthPage =
-    pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/signup") ||
-    pathname.startsWith("/auth");
-  const protectedPrefixes = ["/dashboard", "/account", "/settings", "/app", "/protected"];
-  const requiresAuth = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
-
-  if (!user && requiresAuth) {
+  if (!user) {
     const signInUrl = new URL("/sign-in", request.url);
     signInUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(signInUrl);
-  }
-
-  if (user && requiresAuth && !isAuthPage) {
-    try {
-      const { data: membership } = await supabase
-        .from("user_tenants")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("tenant_slug", tenantSlug)
-        .maybeSingle();
-
-      if (!membership && !isAuthPage && !pathname.startsWith("/unauthorized")) {
-        return NextResponse.redirect(new URL("/unauthorized", request.url));
-      }
-    } catch {
-      // If table is not created yet, do not hard fail middleware.
-    }
   }
 
   return response;
@@ -1363,25 +1288,10 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/";
-  const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
 
   if (code) {
     const supabase = await createClient();
     await supabase.auth.exchangeCodeForSession(code);
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (user && tenantSlug) {
-      await supabase.from("user_tenants").upsert(
-        {
-          user_id: user.id,
-          tenant_slug: tenantSlug,
-        },
-        { onConflict: "user_id,tenant_slug" },
-      );
-    }
   }
 
   return NextResponse.redirect(\`\${origin}\${next}\`);
@@ -1398,40 +1308,14 @@ export async function POST(request: Request) {
   try {
     const { email, password, next } = await request.json();
     const supabase = await createClient();
-    const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
 
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signInWithPassword({
       email: String(email || ""),
       password: String(password || ""),
     });
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
-    }
-
-    if (user?.id && tenantSlug) {
-      const { error: membershipError } = await supabase.from("user_tenants").upsert(
-        {
-          user_id: user.id,
-          tenant_slug: tenantSlug,
-        },
-        { onConflict: "user_id,tenant_slug" },
-      );
-
-      if (membershipError) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Signed in, but tenant setup failed. Run supabase/schema.sql and ensure RLS policies are applied.",
-            details: membershipError.message,
-          },
-          { status: 500 },
-        );
-      }
     }
 
     return NextResponse.json({ success: true, next: typeof next === "string" ? next : "/" });
@@ -1452,35 +1336,14 @@ export async function POST(request: Request) {
   try {
     const { email, password, next } = await request.json();
     const supabase = await createClient();
-    const tenantSlug = process.env.NEXT_PUBLIC_POCKET_APP_SLUG;
 
-    const {
-      data: { user, session },
-      error,
-    } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email: String(email || ""),
       password: String(password || ""),
     });
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
-    }
-
-    // Membership insert can fail immediately after sign-up when email confirmation is enabled
-    // because no authenticated session is established yet. In that case, we defer membership
-    // creation to sign-in/callback and do not fail signup.
-    if (user?.id && tenantSlug && session) {
-      const { error: membershipError } = await supabase.from("user_tenants").upsert(
-        {
-          user_id: user.id,
-          tenant_slug: tenantSlug,
-        },
-        { onConflict: "user_id,tenant_slug" },
-      );
-
-      if (membershipError) {
-        console.warn("[auth/signup] tenant membership upsert failed:", membershipError.message);
-      }
     }
 
     return NextResponse.json({
@@ -1727,58 +1590,11 @@ export default function SignupPage() {
     );
   }
 
-  if (hasAuthIntegration) {
-    upsertFile(
-      "app/unauthorized/page.tsx",
-      `export default function UnauthorizedPage() {
-  return (
-    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="max-w-lg text-center">
-        <h1 className="text-2xl font-semibold mb-2">Access denied</h1>
-        <p className="text-slate-300">
-          Your account is authenticated but not a member of this app tenant.
-        </p>
-      </div>
-    </main>
-  );
-}
-`,
-    );
-  }
-
   if ((hasAuthIntegration || hasDatabaseIntegration) && !fileMap.has("supabase/schema.sql")) {
     files.push({
       path: "supabase/schema.sql",
-      content: `-- Generated multi-tenant schema bootstrap
--- Run this SQL in Supabase SQL editor for the generated app.
-
-create table if not exists public.user_tenants (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  tenant_slug text not null,
-  created_at timestamptz not null default now(),
-  unique(user_id, tenant_slug)
-);
-
-alter table public.user_tenants enable row level security;
-
-do $$ begin
-  if not exists (
-    select 1 from pg_policies where schemaname = 'public' and tablename = 'user_tenants' and policyname = 'Users can view own tenant memberships'
-  ) then
-    create policy "Users can view own tenant memberships"
-      on public.user_tenants for select using (auth.uid() = user_id);
-  end if;
-end $$;
-
-do $$ begin
-  if not exists (
-    select 1 from pg_policies where schemaname = 'public' and tablename = 'user_tenants' and policyname = 'Allow authenticated users to join tenants'
-  ) then
-    create policy "Allow authenticated users to join tenants"
-      on public.user_tenants for insert with check (auth.uid() = user_id);
-  end if;
-end $$;
+      content: `-- No default SQL bootstrap is required for app-scoped auth.
+-- Add your own schema here only when your app needs custom tables.
 `,
     });
   }
@@ -1811,6 +1627,14 @@ end $$;
     ) {
       return { ...file, content: normalizeMiddlewareSupabaseEnv(file.content) };
     }
+    if (normalizedPath === "supabase/schema.sql" && /user_tenants/i.test(file.content)) {
+      return {
+        ...file,
+        content: `-- No default SQL bootstrap is required for app-scoped auth.
+-- This file intentionally omits tenant membership tables.
+`,
+      };
+    }
     return file;
   });
 
@@ -1830,11 +1654,6 @@ end $$;
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
         process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
         "";
-      const appSlug =
-        existingEnv.get("NEXT_PUBLIC_POCKET_APP_SLUG") ||
-        derivedTenantSlug ||
-        process.env.NEXT_PUBLIC_POCKET_APP_SLUG ||
-        "";
 
       if (supabaseUrl) {
         envValues.NEXT_PUBLIC_SUPABASE_URL = supabaseUrl;
@@ -1843,9 +1662,6 @@ end $$;
       if (supabasePublishable) {
         envValues.NEXT_PUBLIC_SUPABASE_ANON_KEY = supabasePublishable;
         envValues.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = supabasePublishable;
-      }
-      if (appSlug) {
-        envValues.NEXT_PUBLIC_POCKET_APP_SLUG = appSlug;
       }
     }
 
@@ -2415,7 +2231,6 @@ DESIGN DIRECTION:
           normalizedProject.files,
           normalizedProject.dependencies,
           integrationRequirements,
-          projectId,
           managedAuthConfig,
         );
         let dependencies = normalizedProject.dependencies;
@@ -2451,7 +2266,6 @@ DESIGN DIRECTION:
               repairedProject.files,
               repairedProject.dependencies,
               integrationRequirements,
-              projectId,
               managedAuthConfig,
             );
             dependencies = repairedProject.dependencies;
@@ -2482,7 +2296,6 @@ DESIGN DIRECTION:
             dependencies,
             lintIssues: syntaxIssues,
             requirements: integrationRequirements,
-            projectId,
             managedAuthConfig,
           });
           files = repaired.files;
@@ -2517,7 +2330,6 @@ DESIGN DIRECTION:
             dependencies,
             lintIssues: uxIssues,
             requirements: integrationRequirements,
-            projectId,
             managedAuthConfig,
           });
           files = repaired.files;
@@ -2547,7 +2359,6 @@ DESIGN DIRECTION:
         files,
         dependencies,
         integrationRequirements,
-        projectId,
         managedAuthConfig,
       );
     }
@@ -2584,7 +2395,6 @@ DESIGN DIRECTION:
             dependencies: workingDependencies,
             lintIssues: lintResult.lintIssues,
             requirements: integrationRequirements,
-            projectId,
             managedAuthConfig,
           });
 
@@ -2612,7 +2422,6 @@ DESIGN DIRECTION:
       fixedFiles,
       dependencies,
       integrationRequirements,
-      projectId,
       managedAuthConfig,
     );
     validateSyntaxOrThrow(finalFiles);

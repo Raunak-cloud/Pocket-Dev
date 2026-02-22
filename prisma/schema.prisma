@@ -75,6 +75,9 @@ model SupabaseProjectPool {
   serviceRoleKeyEncrypted  String?
   dbPasswordEncrypted      String?
   databaseUrlEncrypted     String?
+  schemaBootstrapped       Boolean  @default(false)
+  schemaBootstrappedAt     DateTime?
+  schemaBootstrapError     String?
   lastError                String?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt

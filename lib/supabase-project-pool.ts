@@ -15,6 +15,7 @@ type PreprovisionedEntry = {
   serviceRoleKey?: string;
   dbPassword?: string;
   databaseUrl?: string;
+  schemaBootstrapped?: boolean;
   organizationId?: string;
   region?: string;
 };
@@ -33,6 +34,9 @@ type CreatedProject = {
 const DEFAULT_POOL_MIN_READY = 3;
 const DEFAULT_REGION = process.env.SUPABASE_DEFAULT_REGION || "us-east-1";
 const MGMT_API_BASE = "https://api.supabase.com/v1";
+const PROJECT_BOOTSTRAP_SQL = `
+create extension if not exists "pgcrypto";
+`;
 type JsonRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -137,6 +141,118 @@ async function mgmtRequest(path: string, init?: RequestInit): Promise<unknown> {
   }
 
   return data;
+}
+
+async function runProjectSql(projectRef: string, query: string): Promise<void> {
+  const token = process.env.SUPABASE_MANAGEMENT_TOKEN;
+  if (!token) {
+    throw new Error(
+      "SUPABASE_MANAGEMENT_TOKEN is required for automatic schema bootstrap.",
+    );
+  }
+
+  await mgmtRequest(`/projects/${projectRef}/database/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      read_only: false,
+    }),
+  });
+}
+
+async function bootstrapProjectSchemaForProject(projectRef: string): Promise<void> {
+  await runProjectSql(projectRef, PROJECT_BOOTSTRAP_SQL);
+}
+
+async function markSchemaBootstrapSuccess(projectRef: string): Promise<void> {
+  await prisma.supabaseProjectPool.updateMany({
+    where: { projectRef },
+    data: {
+      schemaBootstrapped: true,
+      schemaBootstrappedAt: new Date(),
+      schemaBootstrapError: null,
+      status: "ready",
+      lastError: null,
+    },
+  });
+}
+
+async function markSchemaBootstrapFailure(
+  projectRef: string,
+  message: string,
+): Promise<void> {
+  await prisma.supabaseProjectPool.updateMany({
+    where: { projectRef },
+    data: {
+      schemaBootstrapped: false,
+      schemaBootstrapError: message,
+      status: "failed",
+      lastError: message,
+    },
+  });
+}
+
+async function ensureProjectSchemaBootstrapped(projectRef: string): Promise<void> {
+  const row = await prisma.supabaseProjectPool.findUnique({
+    where: { projectRef },
+    select: {
+      projectRef: true,
+      schemaBootstrapped: true,
+      bindingKey: true,
+      status: true,
+      schemaBootstrapError: true,
+    },
+  });
+
+  if (!row) return;
+  if (row.schemaBootstrapped) {
+    if (!row.bindingKey && row.status !== "ready") {
+      await prisma.supabaseProjectPool.updateMany({
+        where: { projectRef, bindingKey: null },
+        data: {
+          status: "ready",
+          lastError: null,
+        },
+      });
+    }
+    return;
+  }
+
+  try {
+    await bootstrapProjectSchemaForProject(projectRef);
+    await markSchemaBootstrapSuccess(projectRef);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await markSchemaBootstrapFailure(projectRef, message);
+    throw new Error(`Schema bootstrap failed for ${projectRef}: ${message}`);
+  }
+}
+
+async function bootstrapPendingPoolProjects(): Promise<void> {
+  const pending = await prisma.supabaseProjectPool.findMany({
+    where: {
+      bindingKey: null,
+      OR: [
+        { schemaBootstrapped: false },
+        { status: "provisioning" },
+        { status: "failed" },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+    take: 20,
+    select: { projectRef: true },
+  });
+
+  for (const entry of pending) {
+    try {
+      await ensureProjectSchemaBootstrapped(entry.projectRef);
+    } catch (error) {
+      console.error(
+        "[supabase-pool] Schema bootstrap failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
 }
 
 function extractProjectRef(payload: unknown): string {
@@ -313,7 +429,7 @@ export async function upsertPreprovisionedPoolEntries(): Promise<void> {
         projectRef: item.projectRef,
         organizationId: item.organizationId,
         region: item.region,
-        status: "ready",
+        status: item.schemaBootstrapped ? "ready" : "provisioning",
         bindingKey: null,
         supabaseUrl: item.supabaseUrl,
         anonKey: item.anonKey,
@@ -322,6 +438,9 @@ export async function upsertPreprovisionedPoolEntries(): Promise<void> {
           : null,
         dbPasswordEncrypted: item.dbPassword ? encryptSecret(item.dbPassword) : null,
         databaseUrlEncrypted: item.databaseUrl ? encryptSecret(item.databaseUrl) : null,
+        schemaBootstrapped: item.schemaBootstrapped === true,
+        schemaBootstrappedAt: item.schemaBootstrapped ? new Date() : null,
+        schemaBootstrapError: null,
       },
       update: {
         organizationId: item.organizationId,
@@ -335,8 +454,11 @@ export async function upsertPreprovisionedPoolEntries(): Promise<void> {
         databaseUrlEncrypted: item.databaseUrl
           ? encryptSecret(item.databaseUrl)
           : undefined,
-        lastError: null,
-        status: "ready",
+        schemaBootstrapped:
+          item.schemaBootstrapped === true ? true : undefined,
+        schemaBootstrappedAt: item.schemaBootstrapped ? new Date() : undefined,
+        schemaBootstrapError: item.schemaBootstrapped ? null : undefined,
+        lastError: item.schemaBootstrapped ? null : undefined,
       },
     });
   }
@@ -344,17 +466,30 @@ export async function upsertPreprovisionedPoolEntries(): Promise<void> {
 
 export async function ensureSupabasePoolCapacity(minReady = parsePoolMinReady()): Promise<void> {
   await upsertPreprovisionedPoolEntries();
+  await bootstrapPendingPoolProjects();
 
   const readyCount = await prisma.supabaseProjectPool.count({
     where: {
       status: "ready",
       bindingKey: null,
+      schemaBootstrapped: true,
+    },
+  });
+  const pendingBootstrapCount = await prisma.supabaseProjectPool.count({
+    where: {
+      bindingKey: null,
+      schemaBootstrapped: false,
     },
   });
 
   if (readyCount >= minReady) return;
   if (!hasProvisioningCredentials()) {
     if (readyCount === 0) {
+      if (pendingBootstrapCount > 0) {
+        throw new Error(
+          "Supabase pool has projects pending schema bootstrap. Configure SUPABASE_MANAGEMENT_TOKEN for automatic bootstrap, or pre-bootstrap those projects and set schemaBootstrapped=true in SUPABASE_PREPROVISIONED_POOL.",
+        );
+      }
       throw new Error(
         "No pre-provisioned Supabase projects are available. Configure SUPABASE_PREPROVISIONED_POOL or management API credentials.",
       );
@@ -373,7 +508,7 @@ export async function ensureSupabasePoolCapacity(minReady = parsePoolMinReady())
           projectRef: created.projectRef,
           organizationId: created.organizationId,
           region: created.region,
-          status: "ready",
+          status: "provisioning",
           bindingKey: null,
           supabaseUrl: created.supabaseUrl,
           anonKey: created.anonKey,
@@ -384,11 +519,14 @@ export async function ensureSupabasePoolCapacity(minReady = parsePoolMinReady())
           databaseUrlEncrypted: created.databaseUrl
             ? encryptSecret(created.databaseUrl)
             : null,
+          schemaBootstrapped: false,
+          schemaBootstrappedAt: null,
+          schemaBootstrapError: null,
         },
         update: {
           organizationId: created.organizationId,
           region: created.region,
-          status: "ready",
+          status: "provisioning",
           supabaseUrl: created.supabaseUrl,
           anonKey: created.anonKey,
           serviceRoleKeyEncrypted: created.serviceRoleKey
@@ -398,25 +536,43 @@ export async function ensureSupabasePoolCapacity(minReady = parsePoolMinReady())
           databaseUrlEncrypted: created.databaseUrl
             ? encryptSecret(created.databaseUrl)
             : undefined,
+          schemaBootstrapped: false,
+          schemaBootstrappedAt: null,
+          schemaBootstrapError: null,
           lastError: null,
         },
       });
+      await ensureProjectSchemaBootstrapped(created.projectRef);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[supabase-pool] Failed to create managed project:", message);
     }
   }
+
+  await bootstrapPendingPoolProjects();
 }
 
 export async function getAuthConfigForBindingKey(
   bindingKey: string,
 ): Promise<ManagedSupabaseAuthConfig | null> {
-  const row = await prisma.supabaseProjectPool.findFirst({
+  let row = await prisma.supabaseProjectPool.findFirst({
     where: { bindingKey },
     orderBy: { createdAt: "asc" },
   });
 
   if (!row) return null;
+  if (!row.schemaBootstrapped) {
+    await ensureProjectSchemaBootstrapped(row.projectRef);
+    row = await prisma.supabaseProjectPool.findFirst({
+      where: { bindingKey },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!row || !row.schemaBootstrapped) {
+      throw new Error(
+        `Managed Supabase project ${row?.projectRef || "unknown"} is not schema-bootstrapped.`,
+      );
+    }
+  }
 
   return {
     projectRef: row.projectRef,
@@ -432,6 +588,7 @@ async function tryAcquireReadyProject(bindingKey: string): Promise<ManagedSupaba
       where: {
         status: "ready",
         bindingKey: null,
+        schemaBootstrapped: true,
       },
       orderBy: { createdAt: "asc" },
     });
@@ -443,6 +600,7 @@ async function tryAcquireReadyProject(bindingKey: string): Promise<ManagedSupaba
         id: candidate.id,
         status: "ready",
         bindingKey: null,
+        schemaBootstrapped: true,
       },
       data: {
         status: "assigned",
@@ -504,22 +662,33 @@ export async function rebindAuthConfigBindingKey(
 
 export async function releaseBindingKey(bindingKey: string): Promise<void> {
   await prisma.supabaseProjectPool.updateMany({
-    where: { bindingKey },
+    where: { bindingKey, schemaBootstrapped: true },
     data: {
       bindingKey: null,
       status: "ready",
       lastError: null,
     },
   });
+
+  await prisma.supabaseProjectPool.updateMany({
+    where: { bindingKey, schemaBootstrapped: false },
+    data: {
+      bindingKey: null,
+      status: "provisioning",
+    },
+  });
 }
 
 export async function getSupabasePoolStats() {
-  const [ready, assigned, provisioning, failed] = await Promise.all([
-    prisma.supabaseProjectPool.count({ where: { status: "ready", bindingKey: null } }),
+  const [ready, assigned, provisioning, failed, unbootstrapped] = await Promise.all([
+    prisma.supabaseProjectPool.count({
+      where: { status: "ready", bindingKey: null, schemaBootstrapped: true },
+    }),
     prisma.supabaseProjectPool.count({ where: { status: "assigned" } }),
     prisma.supabaseProjectPool.count({ where: { status: "provisioning" } }),
     prisma.supabaseProjectPool.count({ where: { status: "failed" } }),
+    prisma.supabaseProjectPool.count({ where: { schemaBootstrapped: false } }),
   ]);
 
-  return { ready, assigned, provisioning, failed };
+  return { ready, assigned, provisioning, failed, unbootstrapped };
 }

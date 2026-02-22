@@ -3,7 +3,6 @@ import { execFileSync } from "child_process";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { getProjectAuthTenantSlug } from "@/lib/auth-tenant";
 import {
   acquireAuthConfigForBindingKey,
   getAuthConfigForBindingKey,
@@ -816,7 +815,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     NEXT_PUBLIC_SUPABASE_URL: "",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
-    NEXT_PUBLIC_POCKET_APP_SLUG: "",
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
     ...(runtimePublicEnvInput || {}),
   };
@@ -2130,9 +2128,6 @@ export async function POST(request: NextRequest) {
       "src/.env.local",
     ]);
     const parsedFileEnv = envFile ? parseDotEnvContent(envFile.content) : {};
-    const tenantSlug =
-      parsedFileEnv.NEXT_PUBLIC_POCKET_APP_SLUG ||
-      getProjectAuthTenantSlug(projectId);
     const needsManagedAuth = projectLikelyNeedsManagedAuth(
       normalizedFiles,
       parsedFileEnv,
@@ -2168,7 +2163,6 @@ export async function POST(request: NextRequest) {
         process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
         "",
-      NEXT_PUBLIC_POCKET_APP_SLUG: tenantSlug,
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
     };
     const globalsCss =

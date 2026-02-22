@@ -20,7 +20,8 @@ This project now supports strict per-app Supabase isolation for generated apps.
         "anonKey": "sb_publishable_...",
         "serviceRoleKey": "sb_secret_...",
         "dbPassword": "your-db-password",
-        "databaseUrl": "postgresql://postgres:...@db.abcd1234.supabase.co:5432/postgres"
+        "databaseUrl": "postgresql://postgres:...@db.abcd1234.supabase.co:5432/postgres",
+        "schemaBootstrapped": true
       }
     ]
     ```
@@ -50,11 +51,14 @@ This project now supports strict per-app Supabase isolation for generated apps.
 - New saved project rebinds allocation from generation run ID to persistent `project.id`.
 - Edits reuse the same `project.id` binding.
 - Publish resolves binding by `project.id` and auto-allocates for older projects if auth/db signals are detected.
+- Project bootstrap SQL runs automatically before a pool project is marked ready (currently `create extension if not exists "pgcrypto";`).
+- Automatic bootstrap requires `SUPABASE_MANAGEMENT_TOKEN` because it uses the Supabase management query API.
+- If you do not provide management token, pre-bootstrap your projects manually and set `"schemaBootstrapped": true` in `SUPABASE_PREPROVISIONED_POOL`.
 
 ## Optional admin endpoint
 
 - `GET /api/admin/supabase-pool`
-  - Returns pool counts (`ready`, `assigned`, `provisioning`, `failed`).
+  - Returns pool counts (`ready`, `assigned`, `provisioning`, `failed`, `unbootstrapped`).
 - `POST /api/admin/supabase-pool`
   - Refill/sync pool.
   - Body:

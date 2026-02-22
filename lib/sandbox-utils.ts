@@ -345,16 +345,11 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
       "placeholder-anon-key";
-    const tenantSlug =
-      sourceEnv.get("NEXT_PUBLIC_POCKET_APP_SLUG") ||
-      process.env.NEXT_PUBLIC_POCKET_APP_SLUG ||
-      "demo-tenant";
 
     files[".env.local"] = `NEXT_PUBLIC_SUPABASE_URL=${supabaseUrl}
 SUPABASE_URL=${supabaseUrl}
 NEXT_PUBLIC_SUPABASE_ANON_KEY=${supabasePublishableKey}
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${supabasePublishableKey}
-NEXT_PUBLIC_POCKET_APP_SLUG=${tenantSlug}
 `;
 
     files["README.md"] = `# Your Generated Next.js App
