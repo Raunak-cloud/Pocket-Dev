@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
   cleanupExpired();
 
   const body = await request.json();
-  const { projectId, event, data, progress, cancel } = body;
+  const { projectId, event, data, progress, cancel, reset } = body;
 
   if (!projectId) {
     return NextResponse.json(
@@ -110,6 +110,15 @@ export async function POST(request: NextRequest) {
     progressEvents.delete(`${projectId}:progress`);
     console.log(`[Inngest] Job cancelled: ${projectId}`);
     return NextResponse.json({ success: true, cancelled: true });
+  }
+
+  // Handle explicit status reset before starting a new run for same projectId
+  if (reset) {
+    completedEvents.delete(`${projectId}:generate.completed`);
+    completedEvents.delete(`${projectId}:images.processed`);
+    progressEvents.delete(`${projectId}:progress`);
+    cancelledJobs.delete(projectId);
+    return NextResponse.json({ success: true, reset: true });
   }
 
   if (!event) {

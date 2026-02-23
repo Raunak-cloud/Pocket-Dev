@@ -11,6 +11,7 @@ interface GeneratedFile {
 interface CodeViewerProps {
   files: GeneratedFile[];
   onClose: () => void;
+  onSaveFiles?: (files: GeneratedFile[]) => Promise<void> | void;
 }
 
 type TreeNode =
@@ -121,12 +122,20 @@ function buildTree(files: GeneratedFile[]): TreeNode[] {
   return toNodes(root, 0);
 }
 
-export default function CodeViewer({ files, onClose }: CodeViewerProps) {
+export default function CodeViewer({
+  files,
+  onClose,
+  onSaveFiles,
+}: CodeViewerProps) {
+  const [draftFiles, setDraftFiles] = useState<GeneratedFile[]>(files);
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
     files[0]?.path || "",
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [copied, setCopied] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => {
     const topLevel = new Set<string>();
     for (const file of files) {
@@ -137,6 +146,11 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
     }
     return topLevel;
   });
+
+  useEffect(() => {
+    setDraftFiles(files);
+    setSelectedFilePath((prev) => prev || files[0]?.path || "");
+  }, [files]);
 
   const handleClose = useCallback(() => onClose(), [onClose]);
 
@@ -156,34 +170,27 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Get color class for different token types (basic syntax highlighting)
-  const highlightLine = (line: string) => {
-    // Simple keyword-based highlighting for readability
-    return line
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      // Strings
-      .replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, '<span style="color:#a5d6ff">$&</span>')
-      // Comments
-      .replace(/(\/\/.*$)/gm, '<span style="color:#8b949e">$&</span>')
-      // Keywords
-      .replace(
-        /\b(import|export|from|const|let|var|function|return|if|else|for|while|class|extends|interface|type|async|await|default|new|this|true|false|null|undefined|typeof|instanceof)\b/g,
-        '<span style="color:#ff7b72">$&</span>'
-      )
-      // Numbers
-      .replace(/\b(\d+\.?\d*)\b/g, '<span style="color:#79c0ff">$&</span>');
-  };
-
   // Filter files
-  const filteredFiles = files.filter((file) =>
+  const filteredFiles = draftFiles.filter((file) =>
     file.path.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const fileTree = useMemo(() => buildTree(filteredFiles), [filteredFiles]);
   const selectedFile =
-    files.find((f) => f.path === selectedFilePath) || files[0];
+    draftFiles.find((f) => f.path === selectedFilePath) || draftFiles[0];
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (files.length !== draftFiles.length) return true;
+    for (let i = 0; i < files.length; i++) {
+      if (
+        files[i]?.path !== draftFiles[i]?.path ||
+        files[i]?.content !== draftFiles[i]?.content
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [files, draftFiles]);
 
   const autoExpandedFromSearch = useMemo(() => {
     if (!searchQuery) return new Set<string>();
@@ -275,6 +282,33 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
 
   const lines = selectedFile?.content.split("\n") || [];
 
+  const updateSelectedFileContent = (nextContent: string) => {
+    if (!selectedFile) return;
+    setDraftFiles((prev) =>
+      prev.map((file) =>
+        file.path === selectedFile.path ? { ...file, content: nextContent } : file,
+      ),
+    );
+    if (saveError) setSaveError("");
+    if (saveMessage) setSaveMessage("");
+  };
+
+  const saveChanges = async () => {
+    if (!onSaveFiles || !hasUnsavedChanges || isSaving) return;
+    setIsSaving(true);
+    setSaveError("");
+    setSaveMessage("");
+    try {
+      await onSaveFiles(draftFiles);
+      setSaveMessage("Saved");
+      setTimeout(() => setSaveMessage(""), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Failed to save changes");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // Code viewer is always dark-themed (industry standard for code editors)
   const modal = (
     <div
@@ -295,10 +329,17 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
             </div>
             <h2 className="text-lg font-semibold text-white">Project Code</h2>
             <span className="text-sm text-slate-400">
-              {files.length} files
+              {draftFiles.length} files
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={saveChanges}
+              disabled={!onSaveFiles || !hasUnsavedChanges || isSaving}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition"
+            >
+              {isSaving ? "Saving..." : saveMessage || "Save"}
+            </button>
             {/* Copy button */}
             <button
               onClick={copyToClipboard}
@@ -346,38 +387,48 @@ export default function CodeViewer({ files, onClose }: CodeViewerProps) {
             {/* File Tab */}
             {selectedFile && (
               <div className="px-4 py-3 border-b border-slate-700 bg-[#0f172a]/50 flex-shrink-0">
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <div className="flex items-center gap-2 min-w-0">
                   <svg className="w-4 h-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  <span className="text-white font-medium">{selectedFile.path}</span>
+                  <span className="text-white font-medium truncate">{selectedFile.path}</span>
                   <span className="text-slate-500 text-xs">{lines.length} lines</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400">
+                    Editable
+                  </span>
                 </div>
+                {saveError && (
+                  <div className="mt-2 text-xs text-red-400">{saveError}</div>
+                )}
               </div>
             )}
 
             {/* Code Display */}
             <div className="flex-1 overflow-auto bg-[#0d1117]">
               {selectedFile ? (
-                <table className="w-full border-collapse" style={{ fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace", fontSize: 13, lineHeight: "20px" }}>
-                  <tbody>
-                    {lines.map((line, i) => (
-                      <tr key={i} className="hover:bg-slate-800/50">
-                        <td
-                          className="select-none text-right pr-4 pl-4 text-slate-600 align-top"
-                          style={{ width: 1, whiteSpace: "nowrap", userSelect: "none" }}
-                        >
-                          {i + 1}
-                        </td>
-                        <td className="pr-4">
-                          <pre className="m-0 text-slate-300 whitespace-pre" style={{ tabSize: 2 }}>
-                            <code dangerouslySetInnerHTML={{ __html: highlightLine(line) || " " }} />
-                          </pre>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="h-full w-full p-4">
+                  <textarea
+                    value={selectedFile.content}
+                    onChange={(e) => updateSelectedFileContent(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+                        e.preventDefault();
+                        void saveChanges();
+                      }
+                    }}
+                    spellCheck={false}
+                    className="h-full w-full resize-none rounded-lg border border-slate-700 bg-[#0d1117] p-4 text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    style={{
+                      fontFamily:
+                        "'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace",
+                      fontSize: 13,
+                      lineHeight: "20px",
+                      tabSize: 2,
+                    }}
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-full text-slate-500">
                   Select a file to view

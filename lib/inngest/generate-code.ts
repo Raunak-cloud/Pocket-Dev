@@ -177,20 +177,15 @@ function projectNeedsManagedSupabase(
   dependencies: Record<string, string>,
   requirements: IntegrationRequirements,
 ): boolean {
-  if (requirements.requiresAuth) {
+  // Managed Supabase should only be allocated when backend integration is
+  // explicitly requested. Do not infer it from accidental model output.
+  if (requirements.requiresAuth || requirements.requiresDatabase) {
     return true;
   }
 
-  const joined = files.map((file) => `${file.path}\n${file.content}`).join("\n");
-  const hasSupabaseSignals =
-    /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|lib\/supabase\/client|lib\/supabase\/server|app\/api\/auth\//i.test(
-      joined,
-    ) ||
-    Object.keys(dependencies).some((pkg) =>
-      ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
-    );
-
-  return hasSupabaseSignals;
+  void files;
+  void dependencies;
+  return false;
 }
 
 async function detectThemeWithGemini(userPrompt: string): Promise<SiteTheme> {
@@ -844,6 +839,72 @@ function ensureRequiredFiles(
     return "";
   }
 
+  function stripBackendScaffoldForPublicApps(
+    sourceFiles: GeneratedFile[],
+  ): GeneratedFile[] {
+    const removablePathPatterns: RegExp[] = [
+      /^middleware\.(ts|js)$/i,
+      /^lib\/supabase\/.+/i,
+      /^app\/auth\/callback\/route\.(ts|js)$/i,
+      /^app\/api\/auth\/.+/i,
+      /^src\/lib\/supabase\/.+/i,
+      /^src\/app\/auth\/callback\/route\.(ts|js)$/i,
+      /^src\/app\/api\/auth\/.+/i,
+      /^supabase\/schema\.sql$/i,
+    ];
+
+    return sourceFiles.filter((file) => {
+      const normalized = file.path.replace(/\\/g, "/");
+      if (removablePathPatterns.some((re) => re.test(normalized))) {
+        return false;
+      }
+
+      // Remove middleware only when it is Supabase-auth specific.
+      if (
+        /(?:^|\/)middleware\.(ts|js)$/i.test(normalized) &&
+        /@supabase\/ssr|createServerClient|NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY/i.test(
+          file.content,
+        )
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  function stripSupabaseDepsForPublicApps(
+    deps: Record<string, string>,
+  ): Record<string, string> {
+    delete deps["@supabase/supabase-js"];
+    delete deps["@supabase/ssr"];
+    return deps;
+  }
+
+  function stripSupabaseEnvForPublicApps(sourceFiles: GeneratedFile[]): GeneratedFile[] {
+    return sourceFiles.map((file) => {
+      if (file.path !== ".env.local") return file;
+      const filtered = file.content
+        .split(/\r?\n/)
+        .filter((line) => {
+          const key = line.split("=")[0]?.trim() || "";
+          if (!key) return true;
+          return ![
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          ].includes(key);
+        })
+        .join("\n")
+        .trim();
+      return {
+        ...file,
+        content: filtered ? `${filtered}\n` : "",
+      };
+    });
+  }
+
   function buildBrowserSupabaseClientContent(useSsr: boolean): string {
     if (useSsr) {
       return `import { createBrowserClient } from "@supabase/ssr";
@@ -1047,31 +1108,16 @@ ${canonicalSupabaseAnonDecl}
     }
     files.push({ path, content });
   };
-  const allText = files.map((f) => f.content).join("\n");
-  const hasAuthIntegration =
-    requested.requiresAuth ||
-    /@supabase\/supabase-js|@supabase\/ssr|supabase\.auth|lib\/supabase\/client|lib\/supabase\/server/i.test(
-      allText,
-    ) ||
-    Object.keys(dependencies).some((pkg) =>
-      ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
-    );
-  const hasDatabaseIntegration =
-    requested.requiresDatabase ||
-    /@prisma\/client|prisma|drizzle|postgres|mysql|mongodb|DATABASE_URL|from\(["']\w+["']\)/i.test(
-      allText,
-    ) ||
-    Object.keys(dependencies).some((pkg) =>
-      [
-        "@prisma/client",
-        "prisma",
-        "pg",
-        "postgres",
-        "mysql2",
-        "mongodb",
-        "drizzle-orm",
-      ].includes(pkg),
-    );
+  const backendExplicitlyRequested =
+    requested.requiresAuth || requested.requiresDatabase;
+  const hasAuthIntegration = backendExplicitlyRequested;
+  const hasDatabaseIntegration = requested.requiresDatabase;
+
+  if (!backendExplicitlyRequested) {
+    files = stripBackendScaffoldForPublicApps(files);
+    dependencies = stripSupabaseDepsForPublicApps(dependencies);
+    files = stripSupabaseEnvForPublicApps(files);
+  }
 
   if (!fileMap.has("package.json")) {
     if (hasAuthIntegration) {
@@ -2348,7 +2394,42 @@ function buildSchemaBootstrapSql(schemaSql: string): string {
   const trimmed = schemaSql.trim();
   const prelude = `create extension if not exists "pgcrypto";`;
   if (!trimmed) return prelude;
-  return `${prelude}\n\n${trimmed}`;
+
+  const normalized = trimmed.replace(/\r\n/g, "\n");
+
+  // Make common DDL idempotent across repeated edit runs.
+  const withIdempotentCreates = normalized
+    .replace(
+      /\bcreate\s+table\s+(?!if\s+not\s+exists\b)/gi,
+      "create table if not exists ",
+    )
+    .replace(
+      /\bcreate\s+index\s+(?!if\s+not\s+exists\b)/gi,
+      "create index if not exists ",
+    )
+    .replace(
+      /\bcreate\s+unique\s+index\s+(?!if\s+not\s+exists\b)/gi,
+      "create unique index if not exists ",
+    );
+
+  // CREATE POLICY can fail with 42710 if rerun. Pre-drop matching policies.
+  const policyDrops: string[] = [];
+  const policyRe =
+    /\bcreate\s+policy\s+("[^"]+"|[A-Za-z_][\w$]*)\s+on\s+((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)[\s\S]*?;/gi;
+  let match: RegExpExecArray | null;
+  while ((match = policyRe.exec(withIdempotentCreates)) !== null) {
+    const policyName = match[1];
+    const tableName = match[2];
+    policyDrops.push(`drop policy if exists ${policyName} on ${tableName};`);
+  }
+
+  const dedupedDrops = Array.from(new Set(policyDrops));
+  const policyPrelude =
+    dedupedDrops.length > 0
+      ? `-- idempotent policy reset for repeat runs\n${dedupedDrops.join("\n")}\n`
+      : "";
+
+  return `${prelude}\n\n${policyPrelude}${withIdempotentCreates}`;
 }
 
 async function lintAllFiles(files: GeneratedFile[]): Promise<{

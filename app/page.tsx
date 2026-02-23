@@ -56,12 +56,18 @@ const DEFAULT_BACKEND_DATABASE = [
   "row-level-security",
 ];
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
-const MAX_EDIT_HISTORY_ENTRIES = 200;
+const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
+const MAX_EDIT_HISTORY_ENTRIES = 3;
 
 type SelectedLinkTarget = {
   name: string;
   occurrence: number;
   tag: string;
+};
+
+type StoredIntegrations = {
+  backendEnabled?: boolean;
+  paymentsEnabled?: boolean;
 };
 
 // Helper function to format token values to 2 decimal places
@@ -128,6 +134,38 @@ const applyEditHistoryToProject = (
   };
 };
 
+const readStoredIntegrations = (
+  projectData: ReactProject | null,
+): StoredIntegrations => {
+  if (!projectData?.config || typeof projectData.config !== "object") {
+    return {};
+  }
+
+  const configRecord = projectData.config as Record<string, unknown>;
+  const raw = configRecord[INTEGRATIONS_CONFIG_KEY];
+  if (!raw || typeof raw !== "object") return {};
+  return raw as StoredIntegrations;
+};
+
+const withStoredIntegrations = (
+  projectData: ReactProject,
+  integrations: StoredIntegrations,
+): ReactProject => {
+  const existingConfig = (projectData.config ?? {}) as Record<string, unknown>;
+  const existing = readStoredIntegrations(projectData);
+
+  return {
+    ...projectData,
+    config: {
+      ...existingConfig,
+      [INTEGRATIONS_CONFIG_KEY]: {
+        ...existing,
+        ...integrations,
+      },
+    } as unknown as ReactProject["config"],
+  };
+};
+
 const inferProjectIntegrations = (
   projectData: ReactProject | null,
 ): { auth: string[]; hasDatabase: boolean; hasBackend: boolean } => {
@@ -137,6 +175,9 @@ const inferProjectIntegrations = (
 
   const allCode = projectData.files.map((f) => f.content).join("\n").toLowerCase();
   const deps = Object.keys(projectData.dependencies || {}).map((d) => d.toLowerCase());
+
+  const storedIntegrations = readStoredIntegrations(projectData);
+  const storedBackendEnabled = storedIntegrations.backendEnabled === true;
 
   const hasGoogleOAuth =
     /\bsigninwithoauth\b/.test(allCode) ||
@@ -154,6 +195,9 @@ const inferProjectIntegrations = (
   const auth: string[] = [];
   if (hasPasswordAuth) auth.push("username-password");
   if (hasGoogleOAuth) auth.push("google");
+  if (storedBackendEnabled && auth.length === 0) {
+    auth.push(...DEFAULT_BACKEND_AUTH);
+  }
 
   const hasDatabaseDep = deps.some((dep) =>
     [
@@ -180,8 +224,9 @@ const inferProjectIntegrations = (
 
   return {
     auth,
-    hasDatabase: hasDatabaseDep || hasDatabaseCode,
-    hasBackend: auth.length > 0 && (hasDatabaseDep || hasDatabaseCode),
+    hasDatabase: storedBackendEnabled || hasDatabaseDep || hasDatabaseCode,
+    hasBackend:
+      storedBackendEnabled || (auth.length > 0 && (hasDatabaseDep || hasDatabaseCode)),
   };
 };
 
@@ -389,28 +434,31 @@ function ReactGeneratorContent() {
     exportToCursor,
   } = editorExportHook;
 
+  const syncIntegrationSelectionFromProject = useCallback(
+    (projectData: ReactProject | null) => {
+      const inferred = inferProjectIntegrations(projectData);
+      if (!inferred.hasBackend) {
+        setCurrentAppAuth([]);
+        setEditAppAuth([]);
+        setCurrentAppDatabase([]);
+        return;
+      }
+
+      const nextAuth =
+        inferred.auth.length > 0
+          ? Array.from(new Set(inferred.auth)).sort()
+          : [...DEFAULT_BACKEND_AUTH];
+
+      setCurrentAppAuth(nextAuth);
+      setEditAppAuth(nextAuth);
+      setCurrentAppDatabase([...DEFAULT_BACKEND_DATABASE]);
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!project) return;
-    const inferred = inferProjectIntegrations(project);
-
-    if (inferred.auth.length > 0) {
-      setEditAppAuth((prev) => {
-        const merged = Array.from(new Set([...prev, ...inferred.auth]));
-        return merged.sort();
-      });
-      setCurrentAppAuth((prev) => {
-        const merged = Array.from(new Set([...prev, ...inferred.auth]));
-        return merged.sort();
-      });
-    }
-
-    if (inferred.hasDatabase) {
-      setCurrentAppDatabase((prev) => {
-        if (prev.length > 0) return prev;
-        return ["supabase-postgres"];
-      });
-    }
-  }, [project]);
+    syncIntegrationSelectionFromProject(project);
+  }, [project, syncIntegrationSelectionFromProject]);
 
   const isGenerationBackendSelected =
     currentAppAuth.length > 0 && currentAppDatabase.length > 0;
@@ -433,6 +481,18 @@ function ReactGeneratorContent() {
   const toggleGenerationBackendSelection = useCallback(() => {
     setBackendSelection(!isGenerationBackendSelected);
   }, [isGenerationBackendSelected, setBackendSelection]);
+
+  const showPaymentsComingSoon = useCallback(() => {
+    setBlockedPromptWords([]);
+    setAuthPromptWarning(
+      "Payment system will be available soon. We’re finalizing checkout and billing integration.",
+    );
+    setTokenToast(
+      "Payment system integration is coming soon. You will be able to accept payments from users soon.",
+    );
+    setTimeout(() => setAuthPromptWarning(null), 3500);
+    setTimeout(() => setTokenToast(""), 3500);
+  }, [setAuthPromptWarning, setBlockedPromptWords]);
 
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
@@ -535,7 +595,7 @@ function ReactGeneratorContent() {
     const message =
       source === "generation"
         ? `This request is paused.\n${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using the backend button below the prompt.`
-        : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using Add Backend in the edit panel.`;
+        : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using Add Integrations in the edit panel.`;
 
     setBlockedPromptWords(blockedKeywords.slice(0, 8));
     setAuthPromptWarning(message);
@@ -1780,18 +1840,22 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         originalPrompt: project.originalPrompt || result.originalPrompt,
         detectedTheme: project.detectedTheme || result.detectedTheme,
       });
-      const mergedProject = applyEditHistoryToProject(
+      const mergedProjectBase = applyEditHistoryToProject(
         { ...result, files: persistedFiles },
         currentEditHistory,
       );
+      const mergedProject = withStoredIntegrations(mergedProjectBase, {
+        backendEnabled:
+          backendSelectedForEdit || inferProjectIntegrations(project).hasBackend,
+      });
 
       setProject(mergedProject);
+      syncIntegrationSelectionFromProject(mergedProject);
       // Force preview re-init after AI edit to avoid stale iframe/HMR state.
       setPreviewKey((prev) => prev + 1);
       setEditPrompt("");
       clearEditClarificationState();
       setEditFiles([]); // Clear edit files after successful edit
-      setEditAppAuth(inferProjectIntegrations(mergedProject).auth);
 
       // Preview updates via file diff
 
@@ -1921,14 +1985,18 @@ ${pdfUrlList}
         detectedTheme: result.detectedTheme,
       });
       result = { ...result, files: persistedFiles };
-      setProject(result);
+      const projectWithIntegrations = withStoredIntegrations(result, {
+        backendEnabled: isGenerationBackendSelected,
+      });
+      setProject(projectWithIntegrations);
+      syncIntegrationSelectionFromProject(projectWithIntegrations);
 
       // Save project to Firestore
       if (user) {
         try {
           const authCost = getAuthAppCost(currentAppAuth);
           const projectId = await saveProjectToFirestore(
-            result,
+            projectWithIntegrations,
             generationPrompt,
             authCost,
           );
@@ -1942,8 +2010,6 @@ ${pdfUrlList}
       }
 
       setStatus("success");
-      setCurrentAppAuth([]); // Reset backend selection for next app
-      setCurrentAppDatabase([]);
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
     } catch (err) {
       if (progressIntervalRef.current) {
@@ -2289,6 +2355,40 @@ ${pdfUrlList}
       }
     }
   };
+
+  const handleCodeViewerSave = useCallback(
+    async (updatedFiles: Array<{ path: string; content: string }>) => {
+      if (!project) return;
+
+      const updatedProject: ReactProject = {
+        ...project,
+        files: updatedFiles,
+      };
+
+      setProject(updatedProject);
+
+      if (currentProjectId && user) {
+        updateSavedProjectCache(currentProjectId, updatedProject);
+        try {
+          await updateProjectInFirestore(currentProjectId, updatedProject);
+          if (publishedUrl) setHasUnpublishedChanges(true);
+        } catch (err) {
+          console.error("Failed to save code edits:", err);
+          throw err instanceof Error
+            ? err
+            : new Error("Failed to save code edits");
+        }
+      }
+    },
+    [
+      currentProjectId,
+      project,
+      publishedUrl,
+      setHasUnpublishedChanges,
+      updateProjectInFirestore,
+      user,
+    ],
+  );
 
   const getSelectedButtonKey = (selection: SelectedLinkTarget): string =>
     `${selection.tag.toLowerCase()}::${Math.max(1, selection.occurrence)}::${selection.name.trim().toLowerCase()}`;
@@ -3664,11 +3764,11 @@ ${pdfUrlList}
                   <div className="border-b border-border-primary">
                     <button
                       onClick={() => setShowEditHistory(!showEditHistory)}
-                      className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-bg-tertiary/50 transition"
+                      className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-200/60 dark:hover:bg-bg-tertiary/50 transition"
                     >
                       <div className="flex items-center gap-2">
                         <svg
-                          className="w-3.5 h-3.5 text-text-tertiary"
+                          className="w-3.5 h-3.5 text-slate-700 dark:text-text-tertiary"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -3680,12 +3780,12 @@ ${pdfUrlList}
                             d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
                           />
                         </svg>
-                        <span className="text-xs font-medium text-text-secondary">
+                        <span className="text-xs font-semibold text-slate-800 dark:text-text-secondary">
                           Edit History ({editHistory.length})
                         </span>
                       </div>
                       <svg
-                        className={`w-3.5 h-3.5 text-text-muted transition-transform ${showEditHistory ? "rotate-180" : ""}`}
+                        className={`w-3.5 h-3.5 text-slate-700 dark:text-text-muted transition-transform ${showEditHistory ? "rotate-180" : ""}`}
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -3708,12 +3808,12 @@ ${pdfUrlList}
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex-1 min-w-0">
                                 <p
-                                  className="text-xs text-text-secondary truncate"
+                                  className="text-xs text-slate-800 dark:text-text-secondary truncate"
                                   title={entry.prompt}
                                 >
                                   {entry.prompt}
                                 </p>
-                                <p className="text-[10px] text-text-muted mt-0.5">
+                                <p className="text-[10px] text-slate-600 dark:text-text-muted mt-0.5">
                                   {entry.timestamp.toLocaleString(undefined, {
                                     month: "short",
                                     day: "numeric",
@@ -3730,7 +3830,7 @@ ${pdfUrlList}
                               <button
                                 onClick={() => rollbackToVersion(entry)}
                                 disabled={isRollingBack || isEditing}
-                                className="flex-shrink-0 opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-md transition disabled:opacity-50"
+                                className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/10 hover:bg-amber-200 dark:hover:bg-amber-500/20 border border-amber-300 dark:border-amber-500/20 rounded-md transition disabled:opacity-50"
                                 title="Rollback to this version"
                               >
                                 <svg
@@ -4013,7 +4113,7 @@ ${pdfUrlList}
                       </div>
                       {isEditBackendSelected && (
                         <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2 bg-violet-500/5 border-b border-violet-500/10">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-500/20 text-violet-200 border border-violet-500/30 rounded-md text-xs font-medium">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-100 text-violet-900 border border-violet-300 rounded-md text-xs font-medium dark:bg-violet-500/20 dark:text-violet-200 dark:border-violet-500/30">
                             <svg
                               className="w-3.5 h-3.5"
                               fill="none"
@@ -4074,10 +4174,10 @@ ${pdfUrlList}
                       disabled={isEditing}
                       className={`w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-medium transition-all ${
                         isEditBackendSelected
-                          ? "bg-violet-500/20 text-violet-300 border border-violet-500/40 hover:border-violet-500/60"
-                          : "bg-bg-tertiary/70 text-text-secondary border border-border-secondary hover:border-violet-500/40 hover:bg-bg-tertiary hover:text-text-primary"
+                          ? "bg-violet-100 text-violet-900 border border-violet-300 hover:bg-violet-200 hover:border-violet-400 dark:bg-violet-500/20 dark:text-violet-300 dark:border-violet-500/40 dark:hover:border-violet-500/60"
+                          : "bg-white text-slate-900 border border-slate-400 hover:border-violet-400 hover:bg-slate-50 dark:bg-bg-tertiary/70 dark:text-text-secondary dark:border-border-secondary dark:hover:bg-bg-tertiary dark:hover:text-text-primary"
                       } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      title="Configure backend integration"
+                      title="Configure integrations"
                     >
                       <svg
                         className="w-4 h-4 flex-shrink-0"
@@ -4092,7 +4192,7 @@ ${pdfUrlList}
                           d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
                         />
                       </svg>
-                      <span className="truncate">Add Backend</span>
+                      <span className="truncate">Add Integrations</span>
                       {isEditBackendSelected && (
                         <svg
                           className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
@@ -4344,8 +4444,8 @@ ${pdfUrlList}
                     {/* Backend selector for mobile edit */}
                     <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs font-medium text-text-muted">
-                          Backend:
+                        <span className="text-xs font-semibold text-slate-700 dark:text-text-muted">
+                          Integrations:
                         </span>
                         <button
                           type="button"
@@ -4353,8 +4453,8 @@ ${pdfUrlList}
                           disabled={isEditing}
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
                             isEditBackendSelected
-                              ? "bg-violet-600/20 text-violet-300 border border-violet-500/30"
-                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
+                              ? "bg-violet-100 text-violet-900 border border-violet-300 dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30"
+                              : "bg-slate-100 text-slate-800 border border-slate-300 hover:border-slate-400 dark:bg-bg-tertiary/50 dark:text-text-tertiary dark:border-border-secondary dark:hover:border-text-faint"
                           } disabled:opacity-50`}
                         >
                           <svg
@@ -4376,7 +4476,7 @@ ${pdfUrlList}
                     </div>
                     {isEditBackendSelected && (
                       <div className="flex flex-wrap gap-1.5 px-1">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-600/20 text-violet-300 border border-violet-500/30 rounded-md text-xs">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-900 border border-violet-300 rounded-md text-xs dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30">
                           Backend enabled (Auth + Database)
                         </span>
                       </div>
@@ -4575,7 +4675,7 @@ ${pdfUrlList}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-text-primary mb-0.5">
-                  Tokens Added
+                  Notification
                 </p>
                 <p className="text-xs text-text-secondary leading-relaxed">
                   {tokenToast}
@@ -4678,6 +4778,7 @@ ${pdfUrlList}
             onClose={() => setShowEditIntegrationsModal(false)}
             backendEnabled={isEditBackendSelected}
             onBackendChange={setBackendSelection}
+            onPaymentClick={showPaymentsComingSoon}
           />
         )}
 
@@ -4791,6 +4892,7 @@ ${pdfUrlList}
           <CodeViewer
             files={project.files}
             onClose={() => setShowCodeViewer(false)}
+            onSaveFiles={handleCodeViewerSave}
           />
         )}
       </div>
@@ -4826,6 +4928,7 @@ ${pdfUrlList}
         stopRecording={stopRecording}
         setVoiceError={setVoiceError}
         onToggleBackend={toggleGenerationBackendSelection}
+        onPaymentClick={showPaymentsComingSoon}
         handleGenerate={handleGenerate}
         setAuthPromptWarning={setAuthPromptWarning}
         setBlockedPromptWords={setBlockedPromptWords}
@@ -5434,6 +5537,7 @@ ${pdfUrlList}
           onClose={() => setShowEditIntegrationsModal(false)}
           backendEnabled={isEditBackendSelected}
           onBackendChange={setBackendSelection}
+          onPaymentClick={showPaymentsComingSoon}
         />
       )}
 
@@ -5475,6 +5579,7 @@ ${pdfUrlList}
         <CodeViewer
           files={project.files}
           onClose={() => setShowCodeViewer(false)}
+          onSaveFiles={handleCodeViewerSave}
         />
       )}
     </div>

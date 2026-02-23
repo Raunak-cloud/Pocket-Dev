@@ -137,6 +137,18 @@ export async function generateCodeWithInngest(
 
   onProgress?.("[0/7] Queueing generation job...");
 
+  // Clear any stale completion/progress state for this project before triggering a new run.
+  await fetch("/api/inngest/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId,
+      reset: true,
+    }),
+  }).catch(() => {
+    // Best-effort cleanup; polling will still run even if reset request fails.
+  });
+
   // Trigger workflow
   await triggerCodeGenerationAction(prompt, userId, projectId);
 

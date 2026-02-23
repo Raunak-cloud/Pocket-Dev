@@ -73,6 +73,7 @@ interface CreateContentProps {
   stopRecording: () => void;
   setVoiceError: (val: string | null) => void;
   onToggleBackend: () => void;
+  onPaymentClick: () => void;
   handleGenerate: (e: React.FormEvent) => void;
   setAuthPromptWarning: (val: string | null) => void;
   setBlockedPromptWords: (val: string[]) => void;
@@ -105,6 +106,7 @@ export default function CreateContent({
   stopRecording,
   setVoiceError,
   onToggleBackend,
+  onPaymentClick,
   handleGenerate,
   setAuthPromptWarning,
   setBlockedPromptWords,
@@ -473,7 +475,7 @@ export default function CreateContent({
               <button
                 type="button"
                 onClick={onToggleBackend}
-                className={`p-2 rounded-lg transition ${backendEnabled ? "text-violet-300 bg-violet-500/10 hover:bg-violet-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${backendEnabled ? "text-violet-300 bg-violet-500/10 hover:bg-violet-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
                 title={
                   backendEnabled
                     ? "Backend enabled (authentication + database)"
@@ -493,6 +495,28 @@ export default function CreateContent({
                     d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
                   />
                 </svg>
+                <span className="mt-0.5 text-[10px] font-medium">Backend</span>
+              </button>
+              <button
+                type="button"
+                onClick={onPaymentClick}
+                className="px-2 py-1 rounded-lg transition text-text-muted hover:text-text-secondary hover:bg-bg-tertiary flex flex-col items-center leading-none"
+                title="Enable payments (coming soon)"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M3.75 7.5h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v10.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V6.75a1.5 1.5 0 011.5-1.5zm10.5 8.25h1.5"
+                  />
+                </svg>
+                <span className="mt-0.5 text-[10px] font-medium">Payment</span>
               </button>
             </div>
             <button

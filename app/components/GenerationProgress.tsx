@@ -280,7 +280,54 @@ export default function GenerationProgress({
           />
         </div>
 
-        <div className="px-8 pt-8 pb-5 text-center">
+        <div className="relative px-8 pt-8 pb-5 text-center">
+          {(onToggleMinimize || onCancel) && (
+            <div className="absolute top-5 right-5 flex items-center gap-2">
+              {onToggleMinimize && (
+                <button
+                  onClick={onToggleMinimize}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary bg-bg-tertiary/40 hover:bg-border-secondary/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                  Minimize
+                </button>
+              )}
+              {onCancel && (
+                <button
+                  onClick={onCancel}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
+                >
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                  Cancel
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="relative inline-flex mb-4">
             <div className="absolute inset-0 blur-xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-25 scale-150" />
             <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-bg-tertiary/80 to-bg-tertiary/40 ring-1 ring-white/[0.08]">
@@ -361,52 +408,6 @@ export default function GenerationProgress({
           </div>
         </div>
 
-        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
-
-        <div className="px-8 py-4 flex items-center justify-center gap-3">
-          {onToggleMinimize && (
-            <button
-              onClick={onToggleMinimize}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-text-tertiary hover:text-text-primary bg-bg-tertiary/40 hover:bg-border-secondary/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
-            >
-              <svg
-                className="w-3.5 h-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
-              Minimize
-            </button>
-          )}
-          {onCancel && (
-            <button
-              onClick={onCancel}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
-            >
-              <svg
-                className="w-3.5 h-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-              Cancel
-            </button>
-          )}
-        </div>
       </div>
 
       <style jsx>{`
