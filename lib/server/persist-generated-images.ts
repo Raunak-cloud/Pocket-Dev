@@ -129,6 +129,59 @@ function promptFromUrl(source: string): string {
   return DEFAULT_PROMPT;
 }
 
+/**
+ * Enrich short/vague subject labels with concrete visual descriptions.
+ * A context hint like "Dogs" or "For Cats" is too vague for an image model —
+ * it needs specific visual details like breed, setting, lighting to produce
+ * a relevant photograph instead of a random stock image.
+ */
+function enrichShortSubjectPrompt(subject: string): string {
+  const text = subject.toLowerCase().trim();
+  const wordCount = text.split(/\s+/).length;
+
+  // If already detailed enough (4+ words), don't enrich
+  if (wordCount >= 4) return subject;
+
+  // Animal categories → describe a real photograph of that animal
+  if (/\bdog|dogs|puppy|puppies\b/.test(text)) {
+    return `a happy golden retriever dog sitting on a clean white background, professional pet photography, studio lighting, looking at camera`;
+  }
+  if (/\bcat|cats|kitten|kittens\b/.test(text)) {
+    return `a beautiful tabby cat with green eyes sitting elegantly, professional pet photography, soft studio lighting, clean white background`;
+  }
+  if (/\bbird|birds|parrot|parakeet\b/.test(text)) {
+    return `a colorful parrot perched on a natural branch, professional animal photography, bright studio lighting, clean background`;
+  }
+  if (/\bhamster|rabbit|bunny|guinea pig\b/.test(text)) {
+    return `an adorable fluffy rabbit on a soft white surface, professional pet photography, gentle studio lighting`;
+  }
+  if (/\bpet|pets\b/.test(text)) {
+    return `a cute golden retriever puppy and a tabby kitten together, professional pet photography, warm studio lighting, clean white background`;
+  }
+
+  // Food categories
+  if (/\bpizza\b/.test(text)) {
+    return `a freshly baked margherita pizza with melted mozzarella and fresh basil on a wooden board, warm restaurant lighting, overhead view`;
+  }
+  if (/\bburger|hamburger\b/.test(text)) {
+    return `a gourmet beef burger with melted cheese, lettuce, and tomato on a brioche bun, dramatic side lighting, dark background`;
+  }
+  if (/\bsushi\b/.test(text)) {
+    return `an elegant sushi platter with nigiri and maki rolls on a black slate plate, soft natural lighting, top-down view`;
+  }
+  if (/\bcoffee\b/.test(text)) {
+    return `a latte art coffee in a ceramic cup on a wooden table with coffee beans scattered around, warm morning light, cafe setting`;
+  }
+
+  // If the subject is very short (1-2 words) and doesn't match known categories,
+  // add basic photography qualifiers to help the model
+  if (wordCount <= 2) {
+    return `${subject}, professional photograph, studio lighting, clean background, high quality`;
+  }
+
+  return subject;
+}
+
 function resolvePrompt(
   source: string,
   altText?: string,
@@ -141,12 +194,6 @@ function resolvePrompt(
   const trimmedContext = trimPrompt(contextHint || "");
   const trimmedGlobalContext = trimPrompt(globalContextHint || "");
   const themeDefault = getThemeDefaultPrompt(siteTheme);
-  const withGlobalContext = (value: string): string => {
-    if (!trimmedGlobalContext) return value;
-    const lowered = value.toLowerCase();
-    if (lowered.includes(trimmedGlobalContext.toLowerCase())) return value;
-    return `${value}, ${trimmedGlobalContext}`;
-  };
 
   // If this is a user-provided prompt, use it directly without length requirements
   if (isUserProvided && trimmedAlt) {
@@ -154,59 +201,74 @@ function resolvePrompt(
     return trimmedAlt;
   }
 
-  // PRIORITY 1: Use alt text if it's specific (minimum 10 words for quality)
-  // Even if it contains some generic words, if it's detailed enough, use it
+  // PRIORITY 1: Detailed alt text (10+ words) — best case, AI wrote a good description
   if (trimmedAlt && trimmedAlt.split(/\s+/).length >= 10) {
-    console.log(`[resolvePrompt] Using detailed alt text (${trimmedAlt.split(/\s+/).length} words): "${trimmedAlt}"`);
-    return withGlobalContext(trimmedAlt);
+    console.log(`[resolvePrompt] P1 - detailed alt text (${trimmedAlt.split(/\s+/).length} words): "${trimmedAlt}"`);
+    return trimmedAlt;
   }
 
-  // PRIORITY 2: If alt text is specific but shorter, still use it if not generic
-  if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt) && trimmedAlt.length >= 15) {
-    console.log(`[resolvePrompt] Using specific alt text: "${trimmedAlt}"`);
-    return withGlobalContext(trimmedAlt);
+  // PRIORITY 2: Shorter but specific alt text (not generic filler words)
+  if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt) && trimmedAlt.length >= 10) {
+    console.log(`[resolvePrompt] P2 - specific alt text: "${trimmedAlt}"`);
+    // Combine alt text with context hint to make it more specific
+    // e.g., alt="orthopedic bed" + context="Cloud-9 Orthopedic Bed" → richer prompt
+    if (trimmedContext && !trimmedContext.toLowerCase().includes(trimmedAlt.toLowerCase())) {
+      const combined = `${trimmedAlt}, ${trimmedContext}`;
+      console.log(`[resolvePrompt]   → enriched with context: "${combined}"`);
+      return combined;
+    }
+    return trimmedAlt;
   }
 
-  // PRIORITY 3: Use contextual information from headings
-  if (trimmedContext && trimmedContext.length >= 10) {
-    console.log(`[resolvePrompt] Using context hint: "${trimmedContext}"`);
+  // PRIORITY 3: Context from nearby headings/labels (e.g., product name, section title)
+  // This is crucial for product cards where alt text may be generic but the card title is specific
+  if (trimmedContext && trimmedContext.length >= 4) {
+    console.log(`[resolvePrompt] P3 - context hint: "${trimmedContext}"`);
 
-    // For food-related context, add photography style
-    if (/\b(food|dish|meal|cook|chef|restaurant|kitchen|recipe)\b/i.test(trimmedContext)) {
-      return withGlobalContext(`${trimmedContext}, food photography, appetizing presentation`);
+    // Enrich short category labels with visual descriptions so the image model
+    // knows what to actually photograph. "Dogs" alone → the model might generate anything.
+    // "Dogs" + enrichment → "a happy golden retriever dog, professional pet photography"
+    const enriched = enrichShortSubjectPrompt(trimmedContext);
+
+    // If we also have some alt text (even generic), combine them
+    if (trimmedAlt && trimmedAlt.length >= 5) {
+      const combined = `${enriched}, ${trimmedAlt}`;
+      console.log(`[resolvePrompt]   → combined with alt: "${combined}"`);
+      return combined;
     }
 
-    // For learning/education context, add relevant photography style
-    if (/\b(course|learning|student|teacher|education|study|lesson|mentor)\b/i.test(trimmedContext)) {
-      return withGlobalContext(`${trimmedContext}, educational setting, students engaged in learning, modern classroom or study environment`);
-    }
-
-    return withGlobalContext(trimmedContext);
+    return enriched;
   }
 
-  // PRIORITY 4: Fallback to alt text even if generic, better than nothing
+  // PRIORITY 4: Any alt text at all (even generic ones get enhanced below)
   if (trimmedAlt && trimmedAlt.length >= 5) {
-    console.log(`[resolvePrompt] Using fallback alt text: "${trimmedAlt}"`);
-    return withGlobalContext(trimmedAlt);
+    console.log(`[resolvePrompt] P4 - fallback alt text: "${trimmedAlt}"`);
+    return trimmedAlt;
   }
 
-  // PRIORITY 5: Use theme defaults only for actual placeholders
+  // PRIORITY 5: Theme defaults for placeholders
   if (PLACEHOLDER_RE.test(source)) {
-    console.log(`[resolvePrompt] Using theme default for placeholder: "${themeDefault}"`);
-    return withGlobalContext(themeDefault);
+    console.log(`[resolvePrompt] P5 - theme default for placeholder: "${themeDefault}"`);
+    return themeDefault;
   }
 
-  // LAST RESORT: prefer domain/theme context over URL-derived noise
-  // (URL path tokens can inject unrelated concepts like names/headshots).
-  return withGlobalContext(trimmedGlobalContext || themeDefault || DEFAULT_PROMPT);
+  // LAST RESORT
+  console.log(`[resolvePrompt] LAST RESORT - using theme default: "${themeDefault}"`);
+  return themeDefault;
 }
 
 function extractContextHint(content: string, startIndex: number): string {
-  const from = Math.max(0, startIndex - 1500);
-  const to = Math.min(content.length, startIndex + 1500);
+  // Search a tighter window — closer text is more likely to be the actual item name
+  const from = Math.max(0, startIndex - 800);
+  const to = Math.min(content.length, startIndex + 800);
   const snippet = content.slice(from, to);
+
+  // Generic section labels that should be heavily penalized — these are NOT specific product names
   const genericSectionLabelRe =
-    /\b(best sellers?|featured|trending|shop all|view all|new arrivals?|our products?|collections?|products?)\b/i;
+    /\b(best sellers?|featured|trending|shop all|view all|new arrivals?|our products?|collections?|products?|services?|about us|learn more|read more|view details?|see all|explore)\b/i;
+
+  // Price-like patterns indicate we're near a product card — boost nearby text
+  const priceRe = /\$\d+|\d+\.\d{2}/;
 
   type Candidate = { text: string; absIndex: number; kind: "heading" | "attr" | "text" };
   const candidates: Candidate[] = [];
@@ -218,18 +280,22 @@ function extractContextHint(content: string, startIndex: number): string {
   ) => {
     if (!rawText || typeof localIndex !== "number") return;
     const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(rawText));
-    if (!cleaned || cleaned.length < 6) return;
+    if (!cleaned || cleaned.length < 4) return;
     if (/^[\d\W_]+$/.test(cleaned)) return;
+    // Skip prices, buttons, and very short generic text
+    if (/^\$?\d+(\.\d+)?$/.test(cleaned)) return;
     candidates.push({ text: cleaned, absIndex: from + localIndex, kind });
   };
 
-  const headingRe = /<h([1-6])[^>]*>([^<]{4,160})<\/h\1>/gi;
+  // Extract headings — product names are often in <h3>, <h4> near product cards
+  const headingRe = /<h([1-6])[^>]*>([^<]{3,160})<\/h\1>/gi;
   let headingMatch: RegExpExecArray | null = headingRe.exec(snippet);
   while (headingMatch) {
     pushCandidate(headingMatch[2], headingMatch.index, "heading");
     headingMatch = headingRe.exec(snippet);
   }
 
+  // Extract label attributes
   const labelAttrRe =
     /\b(?:title|name|aria-label|product|service|category|collection|theme)\s*[:=]\s*["'`]([^"'`]{4,140})["'`]/gi;
   let labelMatch: RegExpExecArray | null = labelAttrRe.exec(snippet);
@@ -238,7 +304,8 @@ function extractContextHint(content: string, startIndex: number): string {
     labelMatch = labelAttrRe.exec(snippet);
   }
 
-  const textNodeRe = />([^<]{4,140})</g;
+  // Extract text nodes (but only reasonably sized ones — skip single words and long paragraphs)
+  const textNodeRe = />([^<]{4,80})</g;
   let textMatch: RegExpExecArray | null = textNodeRe.exec(snippet);
   while (textMatch) {
     pushCandidate(textMatch[1], textMatch.index, "text");
@@ -249,13 +316,25 @@ function extractContextHint(content: string, startIndex: number): string {
 
   const scoreCandidate = (c: Candidate): number => {
     const distance = Math.abs(c.absIndex - startIndex);
-    const distanceScore = Math.max(0, 5000 - distance);
+    // PROXIMITY IS KING: Closest text to the image is most likely its label/title.
+    // Use a steep decay so nearby text dominates over distant headings.
+    const distanceScore = Math.max(0, 3000 - distance * 3);
     const wordCount = c.text.split(/\s+/).length;
-    const specificityScore = Math.min(wordCount * 25, 250);
-    const kindBonus = c.kind === "attr" ? 80 : c.kind === "heading" ? 50 : 20;
-    const genericPenalty = genericSectionLabelRe.test(c.text) ? 220 : 0;
-    const longPenalty = c.text.length > 100 ? 60 : 0;
-    return distanceScore + specificityScore + kindBonus - genericPenalty - longPenalty;
+    // Sweet spot: 2-6 words (typical product name like "Cloud-9 Orthopedic Bed")
+    const specificityScore = wordCount >= 2 && wordCount <= 8 ? 200 : Math.min(wordCount * 15, 100);
+    // Attributes (title=, name=) are most specific, then headings, then text nodes
+    const kindBonus = c.kind === "attr" ? 150 : c.kind === "heading" ? 100 : 30;
+    // Heavily penalize generic section labels
+    const genericPenalty = genericSectionLabelRe.test(c.text) ? 500 : 0;
+    const longPenalty = c.text.length > 80 ? 100 : 0;
+    // Bonus if nearby text contains a price (signals a product card context)
+    const nearbySnippet = snippet.slice(
+      Math.max(0, c.absIndex - from - 200),
+      Math.min(snippet.length, c.absIndex - from + 200),
+    );
+    const productCardBonus = priceRe.test(nearbySnippet) ? 150 : 0;
+
+    return distanceScore + specificityScore + kindBonus + productCardBonus - genericPenalty - longPenalty;
   };
 
   const best = candidates
@@ -263,7 +342,7 @@ function extractContextHint(content: string, startIndex: number): string {
     .sort((a, b) => b.score - a.score)[0]?.candidate;
 
   if (!best) return "";
-  console.log(`[extractContextHint] Using nearest context (${best.kind}): "${best.text}"`);
+  console.log(`[extractContextHint] Best context (${best.kind}): "${best.text}"`);
   return best.text;
 }
 
@@ -272,95 +351,6 @@ function extractPlaceholderNumber(source: string): number | null {
   if (!match) return null;
   const value = Number.parseInt(match[1], 10);
   return Number.isFinite(value) ? value : null;
-}
-
-function getStyleDirection(base: string, siteTheme: SiteTheme): string {
-  const text = base.toLowerCase();
-
-  // Check for tech/blog/abstract concepts first
-  if (/\b(AI|artificial intelligence|machine learning|algorithm|data|code|programming|software|technology|digital|cyber|network)\b/i.test(text)) {
-    return "modern tech visualization, abstract digital concept, clean minimalist design, contemporary aesthetic";
-  }
-
-  if (/\b(design|UI|UX|interface|workspace|productivity|creativity|minimal)\b/i.test(text)) {
-    return "clean modern aesthetic, minimalist workspace photography, professional environment, natural lighting";
-  }
-
-  if (/\b(CSS|HTML|JavaScript|web|framework|development|coding)\b/i.test(text)) {
-    return "modern development environment, clean code editor setup, professional workspace, ambient lighting";
-  }
-
-  // Check for specific product categories that override theme
-  if (/\b(shoe|sneaker|watch|bag|handbag|purse|bottle|perfume|cosmetic|jewelry|ring|necklace)\b/.test(text)) {
-    return "commercial product photography, clean white background, professional studio lighting, centered composition, catalog quality";
-  }
-
-  if (/\b(food|dish|meal|cuisine|dessert|plate|bowl)\b/.test(text)) {
-    return "editorial food photography, overhead angle, natural daylight, rustic wooden surface, garnished beautifully, appetizing presentation";
-  }
-
-  if (/\b(person|people|man|woman|model|portrait)\b/.test(text)) {
-    return "professional portrait photography, natural skin tones, catchlight in eyes, soft diffused lighting, authentic expression";
-  }
-
-  // Check if the prompt actually matches the theme before applying theme styles
-  // This prevents forcing food photography on tech blog articles
-  if (siteTheme === "food" && /\b(food|dish|meal|cook|chef|restaurant|cuisine)\b/i.test(text)) {
-    return "gourmet food photography, magazine editorial style, natural window light, warm tones";
-  }
-  if (siteTheme === "fashion" && /\b(fashion|clothing|apparel|style|outfit)\b/i.test(text)) {
-    return "high fashion editorial, Vogue magazine style, dramatic lighting, professional model";
-  }
-  if (siteTheme === "interior" && /\b(interior|room|space|furniture|home)\b/i.test(text)) {
-    return "architectural photography, wide angle lens, natural light, professionally staged";
-  }
-  if (siteTheme === "automotive" && /\b(car|vehicle|automotive|motorcycle)\b/i.test(text)) {
-    return "luxury automotive photography, dramatic reflections, showroom environment, cinematic lighting";
-  }
-  if (siteTheme === "people" && /\b(person|people|portrait|team|staff)\b/i.test(text)) {
-    return "lifestyle portrait photography, environmental portrait, natural candid moment";
-  }
-
-  // Default to clean, professional photography that matches the content
-  return "professional editorial photography, clean composition, modern aesthetic";
-}
-
-function getPhotographyTechnique(siteTheme: SiteTheme): string {
-  if (siteTheme === "food") {
-    return "shot with macro lens, f/2.8 aperture, shallow depth of field, natural food styling";
-  }
-  if (siteTheme === "fashion") {
-    return "shot with 85mm lens, f/1.8 aperture, professional makeup and styling, high-end retouching";
-  }
-  if (siteTheme === "interior") {
-    return "shot with 16-35mm wide angle lens, f/8 aperture for deep focus, HDR technique, tilt-shift correction";
-  }
-  if (siteTheme === "automotive") {
-    return "shot with 24-70mm lens, f/4 aperture, circular polarizer filter, multi-light setup";
-  }
-  if (siteTheme === "people") {
-    return "shot with 85mm prime lens, f/2 aperture, natural light with reflector, authentic moment";
-  }
-  return "shot with professional camera, optimal aperture, proper exposure, sharp focus throughout";
-}
-
-function getCompositionGuidance(siteTheme: SiteTheme): string {
-  if (siteTheme === "food") {
-    return "rule of thirds composition, negative space around subject, hero ingredient highlighted, complementary props minimal";
-  }
-  if (siteTheme === "fashion") {
-    return "centered subject, full body or three-quarter length, clean background separation, elegant pose";
-  }
-  if (siteTheme === "interior") {
-    return "symmetrical composition, leading lines to focal point, balanced lighting across room, no clutter";
-  }
-  if (siteTheme === "automotive") {
-    return "three-quarter front angle, dynamic perspective, reflective surface highlighted, minimal background distraction";
-  }
-  if (siteTheme === "people") {
-    return "subject slightly off-center, environmental context visible, eye contact with camera, natural relaxed posture";
-  }
-  return "balanced composition, subject prominence, professional framing, clear focal point";
 }
 
 function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
@@ -420,81 +410,37 @@ function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
   return "clean, modern, natural lighting, subject-focused";
 }
 
-function deriveSectionImageRules(
+function deriveNegativePrompt(
   basePrompt: string,
   globalContextHint: string,
   siteTheme: SiteTheme,
-): { subject: string; disallow: string } {
+): string {
+  // These are things the image model must NEVER generate.
+  // The collage/grid/text problem is the #1 issue, so always include these.
+  const alwaysExclude = [
+    "collage", "grid layout", "multiple images", "image grid", "mood board",
+    "text", "labels", "captions", "watermarks", "logos", "words", "letters", "typography",
+    "website screenshot", "app interface", "UI mockup", "wireframe",
+    "clipart", "cartoon", "illustration", "drawing", "sketch", "icon set",
+    "split screen", "side by side", "before and after", "comparison",
+  ];
+
   const text = `${basePrompt} ${globalContextHint}`.toLowerCase();
 
-  const defaultDisallow =
-    "humans, office workers, business portraits, laptops, phones, app UI screenshots, website screenshots, collages, product grids, card layouts, watermarks, logos, text overlays";
-
-  if (
-    /\b(shop|store|e-?commerce|product|products|price|buy|cart|wishlist|collection|featured|trending|items?|catalog)\b/.test(
-      text,
-    )
-  ) {
-    return {
-      subject:
-        "a single physical product photo relevant to the section (studio packshot or lifestyle product photo)",
-      disallow:
-        "website screenshots, app interfaces, UI cards, product grids, collages, mockups, watermarks, logos, text overlays, people unless explicitly required by product context",
-    };
+  // Add domain-specific exclusions
+  if (/\b(pet|dog|cat|bird|hamster|rabbit|leash|harness)\b/.test(text)) {
+    alwaysExclude.push("humans", "office workers", "business portraits", "laptops", "phones");
   }
 
-  if (/\bdog|dogs|puppy|puppies\b/.test(text)) {
-    return {
-      subject: "dogs and dog products (leash, harness, toys, dog beds, dog food)",
-      disallow: defaultDisallow,
-    };
-  }
-  if (/\bcat|cats|kitten|kittens\b/.test(text)) {
-    return {
-      subject: "cats and cat products (cat tree, litter accessories, cat toys, cat beds)",
-      disallow: defaultDisallow,
-    };
-  }
-  if (/\bbird|birds|parrot|canary|finch\b/.test(text)) {
-    return {
-      subject: "birds and bird products (perches, cages, feeders, bird toys)",
-      disallow: defaultDisallow,
-    };
-  }
-  if (/\bhamster|rabbit|guinea pig|small pet|small pets\b/.test(text)) {
-    return {
-      subject: "small pets (hamsters, rabbits, guinea pigs) and related products",
-      disallow: defaultDisallow,
-    };
-  }
-  if (/\bpet|pets|leash|harness|pet care|pet food|pet toy\b/.test(text)) {
-    return {
-      subject: "pets and pet products only",
-      disallow: defaultDisallow,
-    };
+  if (/\b(food|dish|meal|restaurant|cuisine|chef)\b/.test(text)) {
+    alwaysExclude.push("office workers", "business portraits", "laptops", "phones");
   }
 
-  if (/\bfood|dish|meal|restaurant|cuisine|chef|kitchen\b/.test(text)) {
-    return {
-      subject: "food dishes and dining visuals aligned with the section",
-      disallow:
-        "office workers, business portraits, laptops, phones, app UI screenshots, watermarks, logos, text overlays",
-    };
+  if (/\b(shop|store|e-?commerce|product|price|buy|cart)\b/.test(text)) {
+    alwaysExclude.push("website screenshots", "app interfaces", "product grids");
   }
 
-  if (siteTheme === "food") {
-    return {
-      subject: "food and dining visuals relevant to the section",
-      disallow:
-        "office workers, business portraits, laptops, phones, app UI screenshots, watermarks, logos, text overlays",
-    };
-  }
-
-  return {
-    subject: trimPrompt(globalContextHint) || trimPrompt(basePrompt) || "section-relevant visual subject",
-    disallow:
-      "off-topic people portraits, random office scenes, unrelated electronics, watermarks, logos, text overlays",
-  };
+  return alwaysExclude.join(", ");
 }
 
 function buildGenerationPrompt(
@@ -510,48 +456,58 @@ function buildGenerationPrompt(
   if (isUserProvided) {
     const userPrompt = trimPrompt(prompt);
     if (!userPrompt) {
-      // Fallback if somehow empty
       return `${getThemeDefaultPrompt(siteTheme)}, high quality, photorealistic`;
     }
-    // Keep user control, but still prevent accidental UI/screenshot generations.
-    const minimalPrompt = `${userPrompt}, real-world photograph, no website/app UI, no screenshots, no collage, no text overlay, high quality, photorealistic`;
-    console.log(`[buildGenerationPrompt] User-provided prompt: "${userPrompt}" -> "${minimalPrompt}"`);
-    return minimalPrompt.slice(0, 400);
+    const minimalPrompt = `${userPrompt}. Single subject, photorealistic photograph. NEVER generate collage, grid, multiple images, text, labels, or clipart.`;
+    const truncatedUserPrompt = minimalPrompt.slice(0, 500);
+    console.log(`\n========== IMAGE PROMPT (User-Provided) [${source}] ==========`);
+    console.log(`  Original input: "${userPrompt}"`);
+    console.log(`  FINAL PROMPT → "${truncatedUserPrompt}"`);
+    console.log(`=============================================================\n`);
+    return truncatedUserPrompt;
   }
 
-  // For auto-generated placeholders, sanitize to remove UI/web terms
+  // --- AUTO-GENERATED PROMPT CONSTRUCTION ---
+  // The #1 principle: the prompt must describe a SPECIFIC, CONCRETE visual subject.
+  // Never use abstract instructions like "matches the nearby context" — the image
+  // model cannot read HTML. It needs a direct description of what to photograph.
+
   const base = sanitizeVisualSubjectPrompt(
     trimPrompt(prompt) || getThemeDefaultPrompt(siteTheme),
   );
 
-  // SIMPLIFIED: Just use the base prompt with minimal style guidance
-  // No camera jargon that confuses the AI
-  const placeholderNumber = extractPlaceholderNumber(source);
-  const variationSeed = placeholderNumber ?? index;
-
-  // Get simple style hints without photography jargon
-  const simpleStyle = getSimpleStyleHint(base, siteTheme);
   const contextGuard = trimPrompt(globalContextHint || "");
   const exclusionGuard = trimPrompt(exclusionHint || "");
-  const rules = deriveSectionImageRules(base, contextGuard, siteTheme);
+  const negativePrompt = deriveNegativePrompt(base, contextGuard, siteTheme);
+  const allExclusions = [negativePrompt, exclusionGuard].filter(Boolean).join(", ");
 
-  // Build a strict, unambiguous prompt structure.
-  const disallow = [rules.disallow, exclusionGuard].filter(Boolean).join(", ");
-  const promptParts = [
-    `Create a real-world photograph of: ${rules.subject}.`,
-    `Primary context: ${contextGuard || base}.`,
-    `Style: ${simpleStyle}.`,
-    "Focus on one clear subject with a clean background and natural proportions.",
-    `Important: Do NOT include ${disallow}.`,
-    "No website/app UI, no screenshots, no collage, no text in image.",
-    "High quality, photorealistic.",
-    `Variation ${variationSeed}.`,
-  ];
+  // Determine the style based on content
+  const simpleStyle = getSimpleStyleHint(base, siteTheme);
 
-  const finalPrompt = promptParts.filter(Boolean).join(", ");
+  // Build the prompt with the SUBJECT first, style second, negatives last.
+  // This structure ensures the image model focuses on the actual subject.
+  const finalPrompt = [
+    // SUBJECT: The most important part — what to actually photograph
+    base,
+    // STYLE: How it should look
+    simpleStyle,
+    // QUALITY: Always enforce single-subject photorealism
+    "single object in frame, photorealistic, professional photograph, studio quality",
+    // HARD NEGATIVES: Prevent collage/grid/text — the most common failure mode
+    `NEVER generate: ${allExclusions}`,
+  ].join(". ");
 
-  // Keep it under 400 chars for optimal results
-  return finalPrompt.slice(0, 400);
+  // Allow up to 500 chars for better prompt quality
+  const truncatedPrompt = finalPrompt.slice(0, 500);
+
+  console.log(`\n========== IMAGE PROMPT [${source}] ==========`);
+  console.log(`  Base (subject):  "${base}"`);
+  console.log(`  Style hint:      "${simpleStyle}"`);
+  console.log(`  Negative prompt: "${allExclusions}"`);
+  console.log(`  FINAL PROMPT →   "${truncatedPrompt}"`);
+  console.log(`================================================\n`);
+
+  return truncatedPrompt;
 }
 
 function deriveImageDomainHints(
@@ -633,29 +589,6 @@ function deriveImageDomainHints(
   };
 }
 
-function inferStyleHint(base: string, siteTheme: SiteTheme = "generic"): string {
-  const text = base.toLowerCase();
-  if (siteTheme === "food") {
-    return "Editorial food photography, appetizing details, realistic plating, warm natural lighting.";
-  }
-  if (/\b(shoe|sneaker|watch|bag|bottle|chair|sofa|lamp|furniture|device|headphone|jewelry)\b/.test(text)) {
-    return "Studio product photography, premium lighting, clean backdrop, e-commerce quality.";
-  }
-  if (/\b(food|dish|meal|coffee|drink|restaurant|dessert|pizza|burger|salad)\b/.test(text)) {
-    return "Editorial food photography, appetizing details, realistic plating, soft natural lighting.";
-  }
-  if (/\b(person|man|woman|model|portrait|face|team|staff|doctor|lawyer|chef)\b/.test(text)) {
-    return "Editorial portrait photography, realistic skin tone, natural lighting, clean depth of field.";
-  }
-  if (/\b(car|bike|motorcycle|vehicle|truck)\b/.test(text)) {
-    return "Automotive photo style, realistic reflections, cinematic but natural lighting.";
-  }
-  if (/\b(home|interior|room|kitchen|bedroom|living room|office space|architecture)\b/.test(text)) {
-    return "Interior/architectural photography with realistic perspective, balanced exposure, premium composition.";
-  }
-  return "Commercial editorial photography with realistic detail and clean composition.";
-}
-
 function sanitizeVisualSubjectPrompt(input: string): string {
   let text = input;
 
@@ -691,8 +624,26 @@ function sanitizeVisualSubjectPrompt(input: string): string {
     return DEFAULT_PROMPT;
   }
 
-  // Remove leading articles and prepositions if they don't make sense
-  text = text.replace(/^(?:a|an|the|of|for|with|in|on|at)\s+/i, "");
+  // Only strip leading prepositions if they DON'T form a meaningful phrase.
+  // "For Dogs" → keep as-is (meaningful category label)
+  // "for the website" → strip "for the"
+  // Check: if after stripping "for", the rest is a concrete noun/subject, keep the whole thing.
+  const leadingPrepMatch = text.match(/^(?:a|an|the|of|with|in|on|at)\s+/i);
+  if (leadingPrepMatch) {
+    text = text.slice(leadingPrepMatch[0].length);
+  }
+  // Special handling for "for" — only strip if followed by generic words
+  const forMatch = text.match(/^for\s+/i);
+  if (forMatch) {
+    const rest = text.slice(forMatch[0].length);
+    // If what follows "for" is a concrete subject (animals, products, people), keep it
+    if (/\b(dog|cat|bird|pet|kid|baby|men|women|home|kitchen|garden|car|sport)/i.test(rest)) {
+      // Keep "For Dogs" as "Dogs", which is the actual subject
+      text = rest;
+    } else {
+      text = rest;
+    }
+  }
 
   return text.trim();
 }
@@ -1082,19 +1033,26 @@ async function generateReplicateImage(
   replicate: Replicate,
   prompt: string,
 ): Promise<string> {
-  // Parse negative prompt if present
-  const [positivePrompt, ...negativeParts] = prompt.split("Negative prompt:");
-  const negativePrompt = negativeParts.join("Negative prompt:").trim();
+  // Split on "NEVER generate:" to extract negative constraints
+  const neverSplit = prompt.split("NEVER generate:");
+  const positivePrompt = neverSplit[0].trim();
+  const negativeContent = neverSplit.length > 1 ? neverSplit[1].trim() : "";
 
   const input: Record<string, unknown> = {
     width: DEFAULT_IMAGE_WIDTH,
     height: DEFAULT_IMAGE_HEIGHT,
-    prompt: positivePrompt.trim(),
+    prompt: positivePrompt,
   };
 
-  // Add negative prompt if provided and model supports it
-  if (negativePrompt && REPLICATE_MODEL.includes("flux")) {
-    input.prompt = `${positivePrompt.trim()} --negative ${negativePrompt}`;
+  // Some models support negative_prompt as a separate field
+  if (negativeContent) {
+    input.negative_prompt = negativeContent;
+  }
+
+  console.log(`[Replicate API] Model: "${REPLICATE_MODEL}"`);
+  console.log(`[Replicate API] Positive prompt: "${positivePrompt}"`);
+  if (negativeContent) {
+    console.log(`[Replicate API] Negative prompt: "${negativeContent}"`);
   }
 
   const output = await replicate.run(REPLICATE_MODEL, { input });
