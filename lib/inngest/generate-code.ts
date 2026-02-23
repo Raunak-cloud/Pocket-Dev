@@ -110,6 +110,8 @@ PLATFORM CONTRACT (strict):
   * Never mount a global auth modal in app/layout or all pages; auth UI should appear only on sign-in/sign-up pages or user-triggered actions
   * Auth page UX quality bar:
     - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
+    - Drive auth page styling/copy from a shared config file (for example: lib/auth-form-theme.ts) so both pages stay consistent
+    - Update the config values to match the website purpose (brand name, tone, accent colors, helper copy)
     - Include password visibility toggle(s)
     - Include password confirmation on /signup
     - Include inline validation and clear error messaging
@@ -1668,11 +1670,11 @@ export async function GET(request: Request) {
       "lib/auth-form-theme.ts",
       `export const AUTH_FORM_THEME = {
   pageShell:
-    "min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white flex items-center justify-center p-6",
+    "min-h-screen bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_40%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.16),_transparent_45%)] bg-slate-950 text-white flex items-center justify-center p-6",
   card:
-    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/70 backdrop-blur-xl p-7 space-y-6 shadow-2xl",
+    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/80 backdrop-blur-xl p-7 space-y-6 shadow-[0_25px_80px_rgba(2,6,23,0.65)]",
   sessionCheckCard:
-    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/70 backdrop-blur-xl p-7 shadow-2xl",
+    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/80 backdrop-blur-xl p-7 shadow-[0_25px_80px_rgba(2,6,23,0.65)]",
   heading: "text-3xl font-semibold tracking-tight",
   subtitle: "text-sm text-slate-300",
   label: "text-xs font-medium text-slate-300",
@@ -1687,6 +1689,15 @@ export async function GET(request: Request) {
     "block w-full rounded-xl border border-slate-600 bg-slate-800/50 px-3 py-2.5 text-center text-sm font-medium text-slate-100 hover:bg-slate-800",
   checkbox:
     "h-4 w-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500/50",
+  brand: {
+    name: "Pocket App",
+    tagline: "Secure, fast, and professional access for your customers.",
+    signInTitle: "Welcome back",
+    signInSubtitle: "Sign in to continue to your dashboard.",
+    signUpTitle: "Create account",
+    signUpSubtitle: "Create your account and start in under a minute.",
+    passwordHint: "Use at least 8 characters with a mix of letters, numbers, and symbols.",
+  },
   variants: {
     signIn: {
       badgeClass:
@@ -1807,9 +1818,12 @@ export default function SignInPage() {
     <main className={AUTH_FORM_THEME.pageShell}>
       <div className={AUTH_FORM_THEME.card}>
         <div className="space-y-2">
+          <p className="text-[11px] font-semibold tracking-[0.16em] text-slate-400 uppercase">
+            {AUTH_FORM_THEME.brand.name}
+          </p>
           <p className={variant.badgeClass}>{variant.badgeText}</p>
-          <h1 className={AUTH_FORM_THEME.heading}>Welcome back</h1>
-          <p className={AUTH_FORM_THEME.subtitle}>Sign in to continue to your dashboard.</p>
+          <h1 className={AUTH_FORM_THEME.heading}>{AUTH_FORM_THEME.brand.signInTitle}</h1>
+          <p className={AUTH_FORM_THEME.subtitle}>{AUTH_FORM_THEME.brand.signInSubtitle}</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4">
@@ -1993,9 +2007,12 @@ export default function SignupPage() {
     <main className={AUTH_FORM_THEME.pageShell}>
       <div className={AUTH_FORM_THEME.card}>
         <div className="space-y-2">
+          <p className="text-[11px] font-semibold tracking-[0.16em] text-slate-400 uppercase">
+            {AUTH_FORM_THEME.brand.name}
+          </p>
           <p className={variant.badgeClass}>{variant.badgeText}</p>
-          <h1 className={AUTH_FORM_THEME.heading}>Create account</h1>
-          <p className={AUTH_FORM_THEME.subtitle}>Start using your app in under a minute.</p>
+          <h1 className={AUTH_FORM_THEME.heading}>{AUTH_FORM_THEME.brand.signUpTitle}</h1>
+          <p className={AUTH_FORM_THEME.subtitle}>{AUTH_FORM_THEME.brand.signUpSubtitle}</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4">
@@ -2055,9 +2072,7 @@ export default function SignupPage() {
               </button>
             </div>
           </div>
-          <p className={AUTH_FORM_THEME.helperText}>
-            Use at least 8 characters with a mix of letters, numbers, and symbols.
-          </p>
+          <p className={AUTH_FORM_THEME.helperText}>{AUTH_FORM_THEME.brand.passwordHint}</p>
 
           {error ? <p className={AUTH_FORM_THEME.errorText}>{error}</p> : null}
 
@@ -2796,6 +2811,8 @@ STRICT IMPLEMENTATION RULES:
   * Do not place always-visible auth modals globally; auth surfaces only during sign-in/sign-up operations
   * Auth page UX quality bar:
     - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
+    - Drive auth page styling/copy from a shared config file (for example: lib/auth-form-theme.ts) so both pages stay consistent
+    - Update the config values to match the website purpose (brand name, tone, accent colors, helper copy)
     - Include password visibility toggle(s)
     - Include password confirmation on /signup
     - Include inline validation and clear error messaging

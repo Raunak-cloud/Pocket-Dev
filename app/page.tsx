@@ -1513,6 +1513,33 @@ function ReactGeneratorContent() {
   const getDatabaseAppCost = (db: string[]) =>
     db.length > 0 ? DATABASE_APP_FLAT_COST : 0;
   const roundToken = (value: number) => Math.round(value * 100) / 100;
+  const getEditBackendAddOnCosts = () => {
+    if (!project) {
+      return { authCost: 0, databaseCost: 0, total: 0 };
+    }
+
+    const hadBackend = inferProjectIntegrations(project).hasBackend;
+    const wantsBackend = isEditBackendSelected;
+
+    if (hadBackend || !wantsBackend) {
+      return { authCost: 0, databaseCost: 0, total: 0 };
+    }
+
+    const authSelection =
+      editAppAuth.length > 0 ? editAppAuth : DEFAULT_BACKEND_AUTH;
+    const databaseSelection =
+      currentAppDatabase.length > 0
+        ? currentAppDatabase
+        : DEFAULT_BACKEND_DATABASE;
+
+    const authCost = getAuthAppCost(authSelection);
+    const databaseCost = getDatabaseAppCost(databaseSelection);
+    return {
+      authCost,
+      databaseCost,
+      total: roundToken(authCost + databaseCost),
+    };
+  };
   const getGenerationAppCost = () =>
     roundToken(
       BASE_GENERATION_APP_COST +
@@ -1520,11 +1547,7 @@ function ReactGeneratorContent() {
         getDatabaseAppCost(currentAppDatabase),
     );
   const getEditAppCost = () =>
-    roundToken(
-      BASE_EDIT_APP_COST +
-        getAuthAppCost(editAppAuth) +
-        getDatabaseAppCost(currentAppDatabase),
-    );
+    roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total);
 
   const buildBackendRequirementPrompt = (mode: "new" | "existing") => {
     const integrationScope =
@@ -4815,10 +4838,15 @@ ${pdfUrlList}
         {showTokenConfirmModal &&
           (() => {
             const isGeneration = showTokenConfirmModal === "generation";
+            const editAddOnCosts = isGeneration
+              ? { authCost: 0, databaseCost: 0 }
+              : getEditBackendAddOnCosts();
             const authCost = isGeneration
               ? getAuthAppCost(currentAppAuth)
-              : getAuthAppCost(editAppAuth);
-            const databaseCost = getDatabaseAppCost(currentAppDatabase);
+              : editAddOnCosts.authCost;
+            const databaseCost = isGeneration
+              ? getDatabaseAppCost(currentAppDatabase)
+              : editAddOnCosts.databaseCost;
             const baseCost = isGeneration
               ? BASE_GENERATION_APP_COST
               : BASE_EDIT_APP_COST;
@@ -5556,10 +5584,15 @@ ${pdfUrlList}
       {showTokenConfirmModal &&
         (() => {
           const isGeneration = showTokenConfirmModal === "generation";
+          const editAddOnCosts = isGeneration
+            ? { authCost: 0, databaseCost: 0 }
+            : getEditBackendAddOnCosts();
           const authCost = isGeneration
             ? getAuthAppCost(currentAppAuth)
-            : getAuthAppCost(editAppAuth);
-          const databaseCost = getDatabaseAppCost(currentAppDatabase);
+            : editAddOnCosts.authCost;
+          const databaseCost = isGeneration
+            ? getDatabaseAppCost(currentAppDatabase)
+            : editAddOnCosts.databaseCost;
           const baseCost = isGeneration
             ? BASE_GENERATION_APP_COST
             : BASE_EDIT_APP_COST;

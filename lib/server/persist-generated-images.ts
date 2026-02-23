@@ -135,10 +135,18 @@ function resolvePrompt(
   contextHint?: string,
   siteTheme: SiteTheme = "generic",
   isUserProvided: boolean = false,
+  globalContextHint?: string,
 ): string {
   const trimmedAlt = trimPrompt(altText || "");
   const trimmedContext = trimPrompt(contextHint || "");
+  const trimmedGlobalContext = trimPrompt(globalContextHint || "");
   const themeDefault = getThemeDefaultPrompt(siteTheme);
+  const withGlobalContext = (value: string): string => {
+    if (!trimmedGlobalContext) return value;
+    const lowered = value.toLowerCase();
+    if (lowered.includes(trimmedGlobalContext.toLowerCase())) return value;
+    return `${value}, ${trimmedGlobalContext}`;
+  };
 
   // If this is a user-provided prompt, use it directly without length requirements
   if (isUserProvided && trimmedAlt) {
@@ -150,13 +158,13 @@ function resolvePrompt(
   // Even if it contains some generic words, if it's detailed enough, use it
   if (trimmedAlt && trimmedAlt.split(/\s+/).length >= 10) {
     console.log(`[resolvePrompt] Using detailed alt text (${trimmedAlt.split(/\s+/).length} words): "${trimmedAlt}"`);
-    return trimmedAlt;
+    return withGlobalContext(trimmedAlt);
   }
 
   // PRIORITY 2: If alt text is specific but shorter, still use it if not generic
   if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt) && trimmedAlt.length >= 15) {
     console.log(`[resolvePrompt] Using specific alt text: "${trimmedAlt}"`);
-    return trimmedAlt;
+    return withGlobalContext(trimmedAlt);
   }
 
   // PRIORITY 3: Use contextual information from headings
@@ -165,31 +173,31 @@ function resolvePrompt(
 
     // For food-related context, add photography style
     if (/\b(food|dish|meal|cook|chef|restaurant|kitchen|recipe)\b/i.test(trimmedContext)) {
-      return `${trimmedContext}, food photography, appetizing presentation`;
+      return withGlobalContext(`${trimmedContext}, food photography, appetizing presentation`);
     }
 
     // For learning/education context, add relevant photography style
     if (/\b(course|learning|student|teacher|education|study|lesson|mentor)\b/i.test(trimmedContext)) {
-      return `${trimmedContext}, educational setting, students engaged in learning, modern classroom or study environment`;
+      return withGlobalContext(`${trimmedContext}, educational setting, students engaged in learning, modern classroom or study environment`);
     }
 
-    return trimmedContext;
+    return withGlobalContext(trimmedContext);
   }
 
   // PRIORITY 4: Fallback to alt text even if generic, better than nothing
   if (trimmedAlt && trimmedAlt.length >= 5) {
     console.log(`[resolvePrompt] Using fallback alt text: "${trimmedAlt}"`);
-    return trimmedAlt;
+    return withGlobalContext(trimmedAlt);
   }
 
   // PRIORITY 5: Use theme defaults only for actual placeholders
   if (PLACEHOLDER_RE.test(source)) {
     console.log(`[resolvePrompt] Using theme default for placeholder: "${themeDefault}"`);
-    return themeDefault;
+    return withGlobalContext(themeDefault);
   }
 
   // LAST RESORT: Try to extract from URL
-  return promptFromUrl(source);
+  return withGlobalContext(promptFromUrl(source));
 }
 
 function extractContextHint(content: string, startIndex: number): string {
@@ -386,6 +394,8 @@ function buildGenerationPrompt(
   index: number,
   siteTheme: SiteTheme = "generic",
   isUserProvided: boolean = false,
+  globalContextHint?: string,
+  exclusionHint?: string,
 ): string {
   // If this is a user-provided prompt (from image regeneration), use it with minimal additions
   if (isUserProvided) {
@@ -412,12 +422,16 @@ function buildGenerationPrompt(
 
   // Get simple style hints without photography jargon
   const simpleStyle = getSimpleStyleHint(base, siteTheme);
+  const contextGuard = trimPrompt(globalContextHint || "");
+  const exclusionGuard = trimPrompt(exclusionHint || "");
 
   // Build a clean, simple prompt structure
   const promptParts = [
     base,
+    contextGuard ? `subject focus: ${contextGuard}` : "",
     simpleStyle,
     `high quality, photorealistic`,
+    exclusionGuard ? `avoid: ${exclusionGuard}` : "",
     `variation ${variationSeed}`,
   ];
 
@@ -425,6 +439,85 @@ function buildGenerationPrompt(
 
   // Keep it under 400 chars for optimal results
   return finalPrompt.slice(0, 400);
+}
+
+function deriveImageDomainHints(
+  originalPrompt: string,
+  files: GeneratedFile[],
+  siteTheme: SiteTheme,
+): { context: string; avoid: string } {
+  const corpus = `${originalPrompt} ${files
+    .slice(0, 25)
+    .map((f) => f.content.slice(0, 1500))
+    .join(" ")}`
+    .toLowerCase();
+
+  const has = (re: RegExp) => re.test(corpus);
+
+  if (has(/\b(pet|pets|dog|dogs|cat|cats|puppy|kitten|leash|harness|vet|pet care)\b/)) {
+    return {
+      context:
+        "pet e-commerce visuals featuring dogs, cats, pet accessories, pet lifestyle, and pet products only",
+      avoid:
+        "corporate headshots, office workers, business portraits, laptops, unrelated electronics",
+    };
+  }
+
+  if (has(/\b(food|restaurant|meal|dish|menu|chef|kitchen|recipe|cuisine)\b/)) {
+    return {
+      context:
+        "food and dining visuals with dishes, ingredients, chefs, kitchens, and restaurant environments",
+      avoid:
+        "corporate portraits, office scenes, unrelated consumer electronics",
+    };
+  }
+
+  if (has(/\b(fashion|clothing|apparel|outfit|style|boutique)\b/)) {
+    return {
+      context:
+        "fashion visuals with clothing, accessories, runway/editorial styling, and retail product photography",
+      avoid:
+        "food scenes, unrelated office setups, random electronics unless fashion-tech is explicit",
+    };
+  }
+
+  if (has(/\b(education|course|learning|student|teacher|academy|tutorial)\b/)) {
+    return {
+      context:
+        "education visuals with learning environments, students, teachers, course materials, and study spaces",
+      avoid:
+        "unrelated product catalog shots, generic corporate portraits, random luxury objects",
+    };
+  }
+
+  if (has(/\b(saas|software|startup|platform|dashboard|analytics|api|developer|code)\b/)) {
+    return {
+      context:
+        "modern software and product visuals aligned with technology platforms and digital products",
+      avoid:
+        "food plating, fashion runways, unrelated pet imagery, random office portraits",
+    };
+  }
+
+  if (siteTheme === "food") {
+    return {
+      context: "food-centric visuals aligned with culinary products and dining experiences",
+      avoid: "generic office portraits and unrelated electronics",
+    };
+  }
+
+  if (siteTheme === "fashion") {
+    return {
+      context: "fashion-centric visuals aligned with apparel and style products",
+      avoid: "food scenes and unrelated office portraiture",
+    };
+  }
+
+  return {
+    context:
+      "visuals strictly aligned with the website's stated business domain and section purpose",
+    avoid: "unrelated people portraits, unrelated electronics, and off-topic stock imagery",
+  };
 }
 
 function inferStyleHint(base: string, siteTheme: SiteTheme = "generic"): string {
@@ -622,6 +715,7 @@ function collectImageSources(
   files: GeneratedFile[],
   siteTheme: SiteTheme,
   isUserProvided: boolean = false,
+  globalContextHint?: string,
 ): Map<string, string> {
   const refs = new Map<string, string>();
   const supabaseHost = getSupabaseHost();
@@ -641,7 +735,14 @@ function collectImageSources(
           const contextHint = extractContextHint(content, tagMatch.index);
           refs.set(
             source,
-            resolvePrompt(source, altMatch?.[1], contextHint, siteTheme, isUserProvided),
+            resolvePrompt(
+              source,
+              altMatch?.[1],
+              contextHint,
+              siteTheme,
+              isUserProvided,
+              globalContextHint,
+            ),
           );
         }
       }
@@ -654,15 +755,16 @@ function collectImageSources(
       const source = cssMatch[1];
       if (shouldReplaceSource(source, supabaseHost) && !refs.has(source)) {
         refs.set(
-          source,
-          resolvePrompt(
             source,
-            undefined,
-            extractContextHint(content, cssMatch.index),
-            siteTheme,
-            isUserProvided,
-          ),
-        );
+            resolvePrompt(
+              source,
+              undefined,
+              extractContextHint(content, cssMatch.index),
+              siteTheme,
+              isUserProvided,
+              globalContextHint,
+            ),
+          );
       }
       cssMatch = cssUrlRe.exec(content);
     }
@@ -673,15 +775,16 @@ function collectImageSources(
       const source = placeholderMatch[0];
       if (!refs.has(source)) {
         refs.set(
-          source,
-          resolvePrompt(
             source,
-            undefined,
-            extractContextHint(content, placeholderMatch.index),
-            siteTheme,
-            isUserProvided,
-          ),
-        );
+            resolvePrompt(
+              source,
+              undefined,
+              extractContextHint(content, placeholderMatch.index),
+              siteTheme,
+              isUserProvided,
+              globalContextHint,
+            ),
+          );
       }
       placeholderMatch = placeholderRe.exec(content);
     }
@@ -692,15 +795,16 @@ function collectImageSources(
       const source = urlMatch[0].replace(/[),.;]+$/, "");
       if (shouldReplaceSource(source, supabaseHost) && !refs.has(source)) {
         refs.set(
-          source,
-          resolvePrompt(
             source,
-            undefined,
-            extractContextHint(content, urlMatch.index),
-            siteTheme,
-            isUserProvided,
-          ),
-        );
+            resolvePrompt(
+              source,
+              undefined,
+              extractContextHint(content, urlMatch.index),
+              siteTheme,
+              isUserProvided,
+              globalContextHint,
+            ),
+          );
       }
       urlMatch = remoteUrlRe.exec(content);
     }
@@ -997,9 +1101,18 @@ export async function persistGeneratedImagesToStorage(
   const siteTheme = (options?.detectedTheme as SiteTheme) || detectSiteTheme(nextFiles);
   const isUserProvided = options?.isUserProvidedPrompt ?? false;
   const promptContext = options?.originalPrompt || "";
+  const domainHints = deriveImageDomainHints(promptContext, nextFiles, siteTheme);
 
   console.log(`[Image Generation] Theme: "${siteTheme}" (${options?.detectedTheme ? 'from prompt' : 'from code'}), isUserProvided: ${isUserProvided}`);
-  const refs = collectImageSources(nextFiles, siteTheme, isUserProvided);
+  console.log(
+    `[Image Generation] Domain context: "${domainHints.context}" | Avoid: "${domainHints.avoid}"`,
+  );
+  const refs = collectImageSources(
+    nextFiles,
+    siteTheme,
+    isUserProvided,
+    domainHints.context,
+  );
   if (refs.size === 0) return nextFiles;
   console.log(`[persistGeneratedImagesToStorage] Found ${refs.size} images to generate`);
 
@@ -1042,6 +1155,8 @@ export async function persistGeneratedImagesToStorage(
         index,
         siteTheme,
         isUserProvided,
+        domainHints.context,
+        domainHints.avoid,
       );
 
       console.log(`[persistGeneratedImagesToStorage] Generating image ${index}/${refs.size}: ${source}`);
@@ -1104,6 +1219,8 @@ export async function persistGeneratedImagesToStorage(
             imgIndex,
             siteTheme,
             isUserProvided,
+            domainHints.context,
+            domainHints.avoid,
           );
 
           const replicateUrl = await generateReplicateImageWithRetry({
