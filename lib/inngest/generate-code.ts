@@ -24,6 +24,7 @@ const MAX_JSON_REPAIR_ATTEMPTS = 2;
 const MAX_STRUCTURE_REPAIR_ATTEMPTS = 2;
 const MAX_UX_REPAIR_ATTEMPTS = 3;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 2;
+const MAX_NEXTJS_REPAIR_ATTEMPTS = 2;
 const MAX_FILE_COUNT = 300;
 const MAX_FILE_CONTENT_LENGTH = 300_000;
 
@@ -2250,6 +2251,162 @@ function collectSyntaxIssues(files: GeneratedFile[]): LintIssue[] {
   return syntaxIssues;
 }
 
+function hasUseClientDirective(content: string): boolean {
+  const withoutBom = content.replace(/^\uFEFF/, "");
+  const useClientRe =
+    /^\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)\s*)*["']use client["']\s*;/;
+  return useClientRe.test(withoutBom);
+}
+
+function lineColumnAt(content: string, index: number): { line: number; column: number } {
+  const before = content.slice(0, Math.max(0, index));
+  const lines = before.split("\n");
+  return {
+    line: lines.length,
+    column: (lines[lines.length - 1]?.length ?? 0) + 1,
+  };
+}
+
+function collectServerClientBoundaryIssues(files: GeneratedFile[]): LintIssue[] {
+  const appSourceFiles = files.filter((f) => {
+    const normalizedPath = f.path.replace(/\\/g, "/");
+    return (
+      normalizedPath.startsWith("app/") &&
+      (normalizedPath.endsWith(".tsx") || normalizedPath.endsWith(".jsx"))
+    );
+  });
+
+  const issues: LintIssue[] = [];
+  const eventHandlerRe = /\bon[A-Z][A-Za-z0-9_]*\s*=\s*\{/g;
+
+  for (const file of appSourceFiles) {
+    if (hasUseClientDirective(file.content)) continue;
+
+    const match = eventHandlerRe.exec(file.content);
+    if (!match) continue;
+
+    const position = match.index;
+    const before = file.content.slice(0, position);
+    const lines = before.split("\n");
+    const line = lines.length;
+    const column = (lines[lines.length - 1]?.length ?? 0) + 1;
+    const handlerName = match[0].split("=")[0]?.trim() || "event handler";
+
+    issues.push({
+      path: file.path,
+      line,
+      column,
+      rule: "next/rsc-event-handler-in-server-component",
+      message: `Server Component includes JSX ${handlerName}. Add "use client" at the top of this file or move interactive JSX into a dedicated Client Component.`,
+    });
+  }
+
+  return issues;
+}
+
+function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
+  const appAndComponentSourceFiles = files.filter((f) => {
+    const normalizedPath = f.path.replace(/\\/g, "/");
+    return (
+      (normalizedPath.startsWith("app/") ||
+        normalizedPath.startsWith("components/") ||
+        normalizedPath.startsWith("app/components/")) &&
+      (normalizedPath.endsWith(".tsx") || normalizedPath.endsWith(".jsx"))
+    );
+  });
+
+  const issues: LintIssue[] = [...collectServerClientBoundaryIssues(files)];
+
+  const nextClientHooks = [
+    "useRouter",
+    "useSearchParams",
+    "usePathname",
+    "useParams",
+    "useSelectedLayoutSegment",
+    "useSelectedLayoutSegments",
+  ];
+  const hookCallRe = new RegExp(`\\b(${nextClientHooks.join("|")})\\s*\\(`);
+  const navigationImportRe = /from\s+["']next\/navigation["']/;
+
+  for (const file of appAndComponentSourceFiles) {
+    const content = file.content;
+    const isClient = hasUseClientDirective(content);
+
+    // next/navigation client hooks used in server components
+    if (!isClient && navigationImportRe.test(content) && hookCallRe.test(content)) {
+      const match = content.match(hookCallRe);
+      const idx = match?.index ?? 0;
+      const pos = lineColumnAt(content, idx);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "next/rsc-client-hook-in-server-component",
+        message:
+          'Detected next/navigation client hook usage in a Server Component. Add "use client" or move this logic into a Client Component.',
+      });
+    }
+
+    // Server-only modules imported in client components
+    if (isClient) {
+      const serverImportRe =
+        /from\s+["'](?:next\/headers|next\/server|server-only)["']/;
+      const serverImportMatch = content.match(serverImportRe);
+      if (serverImportMatch) {
+        const idx = serverImportMatch.index ?? 0;
+        const pos = lineColumnAt(content, idx);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/client-imports-server-only-module",
+          message:
+            'Client Component imports a server-only module (next/headers, next/server, or server-only). Move that code to server files.',
+        });
+      }
+    }
+
+    // metadata/generateMetadata are server-only and invalid in "use client" files
+    if (isClient) {
+      const metadataRe =
+        /\bexport\s+(?:const\s+metadata|async\s+function\s+generateMetadata|function\s+generateMetadata)\b/;
+      const metadataMatch = content.match(metadataRe);
+      if (metadataMatch) {
+        const idx = metadataMatch.index ?? 0;
+        const pos = lineColumnAt(content, idx);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/client-metadata-export",
+          message:
+            'Client Component cannot export metadata/generateMetadata. Keep metadata exports in Server Components.',
+        });
+      }
+    }
+
+    // async default client components are invalid
+    if (isClient) {
+      const asyncClientDefaultRe = /\bexport\s+default\s+async\s+function\b/;
+      const asyncMatch = content.match(asyncClientDefaultRe);
+      if (asyncMatch) {
+        const idx = asyncMatch.index ?? 0;
+        const pos = lineColumnAt(content, idx);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/async-client-component",
+          message:
+            "Client Component default export is async. Move async work to server/actions or use effects/hooks on client.",
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
 function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
   const sourceFiles = files.filter((f) =>
     /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
@@ -2785,7 +2942,7 @@ export const generateCodeFunction = inngest.createFunction(
     }
 
     // Step 1: Build user prompt
-    await sendProgress(projectId, "[1/7] Understanding your request...");
+    await sendProgress(projectId, "[1/8] Understanding your request...");
     const userPrompt = await step.run("build-prompt", async () => {
       return `Build a production-ready, visually premium Next.js website for this request:
 ${prompt}
@@ -2873,7 +3030,7 @@ DESIGN DIRECTION:
     }
 
     // Step 2: Generate with Gemini
-    await sendProgress(projectId, "[2/7] Creating your website...");
+    await sendProgress(projectId, "[2/8] Creating your website...");
     const generatedText = await step.run("generate-with-gemini", async () => {
       console.log("Using Gemini 3 Flash Preview...");
 
@@ -2900,7 +3057,7 @@ DESIGN DIRECTION:
     }
 
     // Step 3: Parse and prepare files
-    await sendProgress(projectId, "[3/7] Preparing project files...");
+    await sendProgress(projectId, "[3/8] Preparing project files...");
     const parsedProject = await step.run(
       "parse-generated-code",
       async () => {
@@ -3010,7 +3167,7 @@ DESIGN DIRECTION:
           console.warn(
             `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
           );
-          await sendProgress(projectId, "[4/7] Improving code reliability...");
+          await sendProgress(projectId, "[4/8] Improving code reliability...");
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -3043,7 +3200,7 @@ DESIGN DIRECTION:
           );
           await sendProgress(
             projectId,
-            "[4/7] Refining layout and responsiveness...",
+            "[4/8] Refining layout and responsiveness...",
           );
 
           const repaired = await repairProjectFromLintFeedback({
@@ -3081,7 +3238,7 @@ DESIGN DIRECTION:
           console.warn(
             `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
           );
-          await sendProgress(projectId, "[4/7] Strengthening backend setup...");
+          await sendProgress(projectId, "[4/8] Strengthening backend setup...");
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -3123,7 +3280,7 @@ DESIGN DIRECTION:
     }
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(projectId, "[5/7] Running code quality checks...");
+    await sendProgress(projectId, "[5/8] Running code quality checks...");
     const { fixedFiles } = await step.run(
       "lint-and-repair",
       async () => {
@@ -3135,10 +3292,13 @@ DESIGN DIRECTION:
           workingFiles,
           integrationRequirements,
         );
+        let boundaryIssues = collectServerClientBoundaryIssues(workingFiles);
 
         for (
           let attempt = 1;
-          (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
+          (lintResult.lintReport.errors > 0 ||
+            schemaIssues.length > 0 ||
+            boundaryIssues.length > 0) &&
           attempt <= MAX_LINT_REPAIR_ATTEMPTS;
           attempt++
         ) {
@@ -3148,13 +3308,13 @@ DESIGN DIRECTION:
 
           const issuesToFix =
             lintResult.lintIssues.length > 0
-              ? [...lintResult.lintIssues, ...schemaIssues]
-              : schemaIssues;
+              ? [...lintResult.lintIssues, ...schemaIssues, ...boundaryIssues]
+              : [...schemaIssues, ...boundaryIssues];
           const firstIssue = issuesToFix[0];
           console.warn(
-            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s), ${boundaryIssues.length} boundary issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
-          await sendProgress(projectId, "[5/7] Fixing code quality...");
+          await sendProgress(projectId, "[5/8] Fixing code quality...");
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -3172,13 +3332,19 @@ DESIGN DIRECTION:
             workingFiles,
             integrationRequirements,
           );
+          boundaryIssues = collectServerClientBoundaryIssues(workingFiles);
         }
 
-        if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
-          const firstIssue =
-            lintResult.lintIssues.length > 0
-              ? lintResult.lintIssues[0]
-              : schemaIssues[0];
+        if (
+          lintResult.lintReport.errors > 0 ||
+          schemaIssues.length > 0 ||
+          boundaryIssues.length > 0
+        ) {
+          const firstIssue = [
+            ...(lintResult.lintIssues || []),
+            ...schemaIssues,
+            ...boundaryIssues,
+          ][0];
           throw new Error(
             `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
@@ -3192,8 +3358,53 @@ DESIGN DIRECTION:
       },
     );
 
+    await sendProgress(projectId, "[6/8] Validating Next.js runtime constraints...");
+    const { validatedFiles } = await step.run(
+      "nextjs-validate-and-repair",
+      async () => {
+        let workingFiles = fixedFiles;
+        let workingDependencies = dependencies;
+        let issues = collectNextJsValidationIssues(workingFiles);
+
+        for (
+          let attempt = 1;
+          issues.length > 0 && attempt <= MAX_NEXTJS_REPAIR_ATTEMPTS;
+          attempt++
+        ) {
+          const firstIssue = issues[0];
+          console.warn(
+            `[NextValidation] Attempt ${attempt} - ${issues.length} issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+          );
+          await sendProgress(projectId, "[6/8] Fixing Next.js compatibility...");
+
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files: workingFiles,
+            dependencies: workingDependencies,
+            lintIssues: issues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+          });
+
+          workingFiles = repaired.files;
+          workingDependencies = repaired.dependencies;
+          issues = collectNextJsValidationIssues(workingFiles);
+        }
+
+        if (issues.length > 0) {
+          const firstIssue = issues[0];
+          throw new Error(
+            `Next.js validation failed after repair attempts. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
+          );
+        }
+
+        dependencies = workingDependencies;
+        return { validatedFiles: workingFiles };
+      },
+    );
+
     const finalFiles = ensureRequiredFiles(
-      fixedFiles,
+      validatedFiles,
       dependencies,
       integrationRequirements,
       managedAuthConfig,
@@ -3219,6 +3430,14 @@ DESIGN DIRECTION:
       );
     }
 
+    const finalBoundaryIssues = collectServerClientBoundaryIssues(finalFiles);
+    if (finalBoundaryIssues.length > 0) {
+      const firstIssue = finalBoundaryIssues[0];
+      throw new Error(
+        `Server/client boundary validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
+      );
+    }
+
     if (integrationRequirements.requiresDatabase) {
       if (!managedAuthConfig?.projectRef) {
         throw new Error(
@@ -3235,7 +3454,7 @@ DESIGN DIRECTION:
         );
       }
 
-      await sendProgress(projectId, "[6/7] Setting up backend data...");
+      await sendProgress(projectId, "[7/8] Setting up backend data...");
       await step.run("bootstrap-managed-supabase-schema", async () => {
         const tablePhaseSql = buildTableCreationPhaseSql(schemaFile.content);
         await applySqlToManagedProject(managedAuthConfig.projectRef, tablePhaseSql);
@@ -3247,7 +3466,7 @@ DESIGN DIRECTION:
     }
 
     // Step 6: Notify completion via API
-    await sendProgress(projectId, "[6/7] Finalizing and saving your app...");
+    await sendProgress(projectId, "[7/8] Finalizing and saving your app...");
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
@@ -3286,7 +3505,7 @@ DESIGN DIRECTION:
       return result;
     });
 
-    await sendProgress(projectId, "[7/7] Ready to preview.");
+    await sendProgress(projectId, "[8/8] Ready to preview.");
 
     return {
       files: finalFiles,

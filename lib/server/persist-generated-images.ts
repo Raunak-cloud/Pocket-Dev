@@ -196,8 +196,9 @@ function resolvePrompt(
     return withGlobalContext(themeDefault);
   }
 
-  // LAST RESORT: Try to extract from URL
-  return withGlobalContext(promptFromUrl(source));
+  // LAST RESORT: prefer domain/theme context over URL-derived noise
+  // (URL path tokens can inject unrelated concepts like names/headshots).
+  return withGlobalContext(trimmedGlobalContext || themeDefault || DEFAULT_PROMPT);
 }
 
 function extractContextHint(content: string, startIndex: number): string {
@@ -352,6 +353,15 @@ function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
     return "clean, modern, minimalist, professional environment";
   }
 
+  // Pets/ecommerce product cards
+  if (
+    /\b(pet|pets|dog|dogs|cat|cats|bird|birds|hamster|rabbit|guinea pig|leash|harness|pet bed|cat tree|pet toy|pet food)\b/.test(
+      text,
+    )
+  ) {
+    return "clean e-commerce product photography, bright neutral background, sharp details, no people";
+  }
+
   // Product photography - focus on the product
   if (/\b(shoe|sneaker|watch|bag|handbag|purse|bottle|perfume|cosmetic|jewelry|ring|necklace)\b/.test(text)) {
     return "clean background, well-lit, centered, catalog style";
@@ -384,8 +394,85 @@ function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
     return "natural, candid moment, authentic";
   }
 
-  // Default - keep it simple
-  return "clean, modern, professional";
+  // Default - keep it simple and object-focused
+  return "clean, modern, natural lighting, subject-focused";
+}
+
+function deriveSectionImageRules(
+  basePrompt: string,
+  globalContextHint: string,
+  siteTheme: SiteTheme,
+): { subject: string; disallow: string } {
+  const text = `${basePrompt} ${globalContextHint}`.toLowerCase();
+
+  const defaultDisallow =
+    "humans, office workers, business portraits, laptops, phones, app UI screenshots, website screenshots, collages, product grids, card layouts, watermarks, logos, text overlays";
+
+  if (
+    /\b(shop|store|e-?commerce|product|products|price|buy|cart|wishlist|collection|featured|trending|items?|catalog)\b/.test(
+      text,
+    )
+  ) {
+    return {
+      subject:
+        "a single physical product photo relevant to the section (studio packshot or lifestyle product photo)",
+      disallow:
+        "website screenshots, app interfaces, UI cards, product grids, collages, mockups, watermarks, logos, text overlays, people unless explicitly required by product context",
+    };
+  }
+
+  if (/\bdog|dogs|puppy|puppies\b/.test(text)) {
+    return {
+      subject: "dogs and dog products (leash, harness, toys, dog beds, dog food)",
+      disallow: defaultDisallow,
+    };
+  }
+  if (/\bcat|cats|kitten|kittens\b/.test(text)) {
+    return {
+      subject: "cats and cat products (cat tree, litter accessories, cat toys, cat beds)",
+      disallow: defaultDisallow,
+    };
+  }
+  if (/\bbird|birds|parrot|canary|finch\b/.test(text)) {
+    return {
+      subject: "birds and bird products (perches, cages, feeders, bird toys)",
+      disallow: defaultDisallow,
+    };
+  }
+  if (/\bhamster|rabbit|guinea pig|small pet|small pets\b/.test(text)) {
+    return {
+      subject: "small pets (hamsters, rabbits, guinea pigs) and related products",
+      disallow: defaultDisallow,
+    };
+  }
+  if (/\bpet|pets|leash|harness|pet care|pet food|pet toy\b/.test(text)) {
+    return {
+      subject: "pets and pet products only",
+      disallow: defaultDisallow,
+    };
+  }
+
+  if (/\bfood|dish|meal|restaurant|cuisine|chef|kitchen\b/.test(text)) {
+    return {
+      subject: "food dishes and dining visuals aligned with the section",
+      disallow:
+        "office workers, business portraits, laptops, phones, app UI screenshots, watermarks, logos, text overlays",
+    };
+  }
+
+  if (siteTheme === "food") {
+    return {
+      subject: "food and dining visuals relevant to the section",
+      disallow:
+        "office workers, business portraits, laptops, phones, app UI screenshots, watermarks, logos, text overlays",
+    };
+  }
+
+  return {
+    subject: trimPrompt(globalContextHint) || trimPrompt(basePrompt) || "section-relevant visual subject",
+    disallow:
+      "off-topic people portraits, random office scenes, unrelated electronics, watermarks, logos, text overlays",
+  };
 }
 
 function buildGenerationPrompt(
@@ -404,8 +491,8 @@ function buildGenerationPrompt(
       // Fallback if somehow empty
       return `${getThemeDefaultPrompt(siteTheme)}, high quality, photorealistic`;
     }
-    // Only add minimal quality terms
-    const minimalPrompt = `${userPrompt}, high quality, photorealistic`;
+    // Keep user control, but still prevent accidental UI/screenshot generations.
+    const minimalPrompt = `${userPrompt}, real-world photograph, no website/app UI, no screenshots, no collage, no text overlay, high quality, photorealistic`;
     console.log(`[buildGenerationPrompt] User-provided prompt: "${userPrompt}" -> "${minimalPrompt}"`);
     return minimalPrompt.slice(0, 400);
   }
@@ -424,15 +511,19 @@ function buildGenerationPrompt(
   const simpleStyle = getSimpleStyleHint(base, siteTheme);
   const contextGuard = trimPrompt(globalContextHint || "");
   const exclusionGuard = trimPrompt(exclusionHint || "");
+  const rules = deriveSectionImageRules(base, contextGuard, siteTheme);
 
-  // Build a clean, simple prompt structure
+  // Build a strict, unambiguous prompt structure.
+  const disallow = [rules.disallow, exclusionGuard].filter(Boolean).join(", ");
   const promptParts = [
-    base,
-    contextGuard ? `subject focus: ${contextGuard}` : "",
-    simpleStyle,
-    `high quality, photorealistic`,
-    exclusionGuard ? `avoid: ${exclusionGuard}` : "",
-    `variation ${variationSeed}`,
+    `Create a real-world photograph of: ${rules.subject}.`,
+    `Primary context: ${contextGuard || base}.`,
+    `Style: ${simpleStyle}.`,
+    "Focus on one clear subject with a clean background and natural proportions.",
+    `Important: Do NOT include ${disallow}.`,
+    "No website/app UI, no screenshots, no collage, no text in image.",
+    "High quality, photorealistic.",
+    `Variation ${variationSeed}.`,
   ];
 
   const finalPrompt = promptParts.filter(Boolean).join(", ");
@@ -457,9 +548,9 @@ function deriveImageDomainHints(
   if (has(/\b(pet|pets|dog|dogs|cat|cats|puppy|kitten|leash|harness|vet|pet care)\b/)) {
     return {
       context:
-        "pet e-commerce visuals featuring dogs, cats, pet accessories, pet lifestyle, and pet products only",
+        "pet e-commerce visuals only: animals and pet products aligned to each section (dogs/cats/birds/small pets), no humans",
       avoid:
-        "corporate headshots, office workers, business portraits, laptops, unrelated electronics",
+        "corporate headshots, office workers, business portraits, laptops, phones, app UI mockups, unrelated electronics",
     };
   }
 
@@ -565,6 +656,10 @@ function sanitizeVisualSubjectPrompt(input: string): string {
   text = text.replace(/\b(?:UI|UX|interface|user interface)\b/gi, "");
   text = text.replace(/\b(?:app screen)\b/gi, "");
   text = text.replace(/\b(?:landing page|homepage)\b/gi, "");
+  text = text.replace(
+    /\b(?:navbar|nav bar|footer|header|hero section|cta|button|menu|shop all|view all|add to cart|wishlist|checkout|card grid|product grid)\b/gi,
+    "",
+  );
 
   // Clean up extra whitespace
   text = text.replace(/\s+/g, " ").trim();
