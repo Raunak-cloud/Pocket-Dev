@@ -10,7 +10,6 @@ import LoadingScreen from "./components/LoadingScreen";
 import BackgroundEffects from "./components/BackgroundEffects";
 import SettingsContent from "./components/Settings";
 import ProjectsContent from "./components/Projects";
-import { cancelGenerationJob } from "./inngest-actions";
 import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
@@ -354,6 +353,9 @@ function ReactGeneratorContent() {
   const generationCancelledRef = useRef(false);
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const currentGenerationProjectIdRef = useRef<string | null>(null);
+  const runActiveRef = useRef(false);
+  const unloadCancelSentRef = useRef(false);
   const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(
     null,
   );
@@ -1397,6 +1399,89 @@ function ReactGeneratorContent() {
     setEditFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const cancelInngestRun = useCallback(
+    async (projectId: string, reason: "manual" | "unload" = "manual") => {
+      const payload = JSON.stringify({ projectId, reason });
+      try {
+        const response = await fetch("/api/inngest/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: reason === "unload",
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          console.error("[App] Failed to cancel Inngest run:", text);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        console.error("[App] Failed to cancel Inngest run:", error);
+        return false;
+      }
+    },
+    [],
+  );
+
+  const cancelInngestRunOnUnload = useCallback((projectId: string) => {
+    const payload = JSON.stringify({
+      projectId,
+      reason: "page-unload",
+    });
+
+    try {
+      if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
+        const blob = new Blob([payload], { type: "application/json" });
+        const sent = navigator.sendBeacon("/api/inngest/cancel", blob);
+        if (sent) return;
+      }
+    } catch (error) {
+      console.error("[App] Failed to enqueue unload cancellation:", error);
+    }
+
+    void fetch("/api/inngest/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true,
+    }).catch((error) => {
+      console.error("[App] Fallback unload cancellation failed:", error);
+    });
+  }, []);
+
+  useEffect(() => {
+    currentGenerationProjectIdRef.current = currentGenerationProjectId;
+    if (!currentGenerationProjectId) {
+      unloadCancelSentRef.current = false;
+    }
+  }, [currentGenerationProjectId]);
+
+  useEffect(() => {
+    const active = status === "loading" || isEditing;
+    runActiveRef.current = active;
+    if (!active) {
+      unloadCancelSentRef.current = false;
+    }
+  }, [status, isEditing]);
+
+  useEffect(() => {
+    const handlePageExit = () => {
+      if (unloadCancelSentRef.current) return;
+      if (!runActiveRef.current) return;
+      const projectId = currentGenerationProjectIdRef.current;
+      if (!projectId) return;
+      unloadCancelSentRef.current = true;
+      cancelInngestRunOnUnload(projectId);
+    };
+
+    window.addEventListener("beforeunload", handlePageExit);
+    window.addEventListener("pagehide", handlePageExit);
+    return () => {
+      window.removeEventListener("beforeunload", handlePageExit);
+      window.removeEventListener("pagehide", handlePageExit);
+    };
+  }, [cancelInngestRunOnUnload]);
+
   const cancelGeneration = () => {
     setShowCancelConfirm("generation");
   };
@@ -1413,7 +1498,7 @@ function ReactGeneratorContent() {
       console.log(
         `[App] Cancelling generation job: ${currentGenerationProjectId}`,
       );
-      await cancelGenerationJob(currentGenerationProjectId);
+      await cancelInngestRun(currentGenerationProjectId, "manual");
       setCurrentGenerationProjectId(null);
     }
 
@@ -1815,6 +1900,9 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
     }
 
     try {
+      if (currentProjectId) {
+        setCurrentGenerationProjectId(currentProjectId);
+      }
       const hasUploadedEditImages = editFiles.some((f) =>
         f.type.startsWith("image/"),
       );
@@ -1955,6 +2043,8 @@ ${pdfUrlList}
     }
 
     try {
+      const runProjectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      setCurrentGenerationProjectId(runProjectId);
       // Real-time progress from Inngest
       let result = await generateCodeWithInngest(
         fullPrompt,
@@ -1965,6 +2055,7 @@ ${pdfUrlList}
         (projectId) => {
           setCurrentGenerationProjectId(projectId);
         },
+        runProjectId,
       );
 
       // If user cancelled while awaiting, discard the result
@@ -4865,6 +4956,13 @@ ${pdfUrlList}
                     if (showCancelConfirm === "generation") {
                       confirmCancelGeneration();
                     } else {
+                      if (currentGenerationProjectId) {
+                        await cancelInngestRun(
+                          currentGenerationProjectId,
+                          "manual",
+                        );
+                        setCurrentGenerationProjectId(null);
+                      }
                       const withinRefundWindow =
                         Date.now() - editStartTimeRef.current < 10000;
                       setIsEditing(false);
@@ -5506,6 +5604,10 @@ ${pdfUrlList}
           if (showCancelConfirm === "generation") {
             confirmCancelGeneration();
           } else {
+            if (currentGenerationProjectId) {
+              await cancelInngestRun(currentGenerationProjectId, "manual");
+              setCurrentGenerationProjectId(null);
+            }
             const withinRefundWindow =
               Date.now() - editStartTimeRef.current < 10000;
             setIsEditing(false);
@@ -5567,9 +5669,7 @@ ${pdfUrlList}
           prompt={`Editing: ${editPrompt}`}
           progressMessages={editProgressMessages}
           onCancel={() => {
-            setIsEditing(false);
-            setEditProgressMessages([]);
-            setError("Edit cancelled");
+            setShowCancelConfirm("edit");
           }}
           isMinimized={true}
           onToggleMinimize={() => {
