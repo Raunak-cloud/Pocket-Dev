@@ -1942,6 +1942,12 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
           setCurrentGenerationProjectId(projectId);
         },
         currentProjectId || undefined,
+        {
+          requiresAuth: backendSelectedForEdit,
+          requiresDatabase: backendSelectedForEdit,
+          requiresGoogleOAuth: false,
+          requiresPasswordAuth: backendSelectedForEdit,
+        },
       );
 
       setEditProgressMessages((prev) => [
@@ -2079,6 +2085,12 @@ ${pdfUrlList}
           setCurrentGenerationProjectId(projectId);
         },
         runProjectId,
+        {
+          requiresAuth: isGenerationBackendSelected,
+          requiresDatabase: isGenerationBackendSelected,
+          requiresGoogleOAuth: false,
+          requiresPasswordAuth: isGenerationBackendSelected,
+        },
       );
 
       // If user cancelled while awaiting, discard the result

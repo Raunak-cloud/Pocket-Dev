@@ -205,44 +205,66 @@ function extractContextHint(content: string, startIndex: number): string {
   const from = Math.max(0, startIndex - 1500);
   const to = Math.min(content.length, startIndex + 1500);
   const snippet = content.slice(from, to);
+  const genericSectionLabelRe =
+    /\b(best sellers?|featured|trending|shop all|view all|new arrivals?|our products?|collections?|products?)\b/i;
 
-  // First priority: Look for article titles or main headings (h1, h2)
-  const mainHeadingMatch = snippet.match(/<h[1-2][^>]*>([^<]{8,150})<\/h[1-2]>/i);
-  if (mainHeadingMatch?.[1]) {
-    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(mainHeadingMatch[1]));
-    if (cleaned && cleaned.length >= 10) {
-      console.log(`[extractContextHint] Found main heading: "${cleaned}"`);
-      return cleaned;
-    }
+  type Candidate = { text: string; absIndex: number; kind: "heading" | "attr" | "text" };
+  const candidates: Candidate[] = [];
+
+  const pushCandidate = (
+    rawText: string | undefined,
+    localIndex: number | undefined,
+    kind: Candidate["kind"],
+  ) => {
+    if (!rawText || typeof localIndex !== "number") return;
+    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(rawText));
+    if (!cleaned || cleaned.length < 6) return;
+    if (/^[\d\W_]+$/.test(cleaned)) return;
+    candidates.push({ text: cleaned, absIndex: from + localIndex, kind });
+  };
+
+  const headingRe = /<h([1-6])[^>]*>([^<]{4,160})<\/h\1>/gi;
+  let headingMatch: RegExpExecArray | null = headingRe.exec(snippet);
+  while (headingMatch) {
+    pushCandidate(headingMatch[2], headingMatch.index, "heading");
+    headingMatch = headingRe.exec(snippet);
   }
 
-  // Second priority: Look for h3 headings near the image
-  const subHeadingMatch = snippet.match(/<h3[^>]*>([^<]{8,120})<\/h3>/i);
-  if (subHeadingMatch?.[1]) {
-    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(subHeadingMatch[1]));
-    if (cleaned && cleaned.length >= 8) {
-      console.log(`[extractContextHint] Found subheading: "${cleaned}"`);
-      return cleaned;
-    }
+  const labelAttrRe =
+    /\b(?:title|name|aria-label|product|service|category|collection|theme)\s*[:=]\s*["'`]([^"'`]{4,140})["'`]/gi;
+  let labelMatch: RegExpExecArray | null = labelAttrRe.exec(snippet);
+  while (labelMatch) {
+    pushCandidate(labelMatch[1], labelMatch.index, "attr");
+    labelMatch = labelAttrRe.exec(snippet);
   }
 
-  // Third priority: Look for title/name attributes
-  const labelMatch = snippet.match(
-    /\b(?:title|name|aria-label|product|service|category|collection|theme)\s*[:=]\s*["'`]([^"'`]{8,120})["'`]/i,
-  );
-  if (labelMatch?.[1]) {
-    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(labelMatch[1]));
-    if (cleaned && cleaned.length >= 8) return cleaned;
+  const textNodeRe = />([^<]{4,140})</g;
+  let textMatch: RegExpExecArray | null = textNodeRe.exec(snippet);
+  while (textMatch) {
+    pushCandidate(textMatch[1], textMatch.index, "text");
+    textMatch = textNodeRe.exec(snippet);
   }
 
-  // Last resort: Extract meaningful text near the image
-  const textMatch = snippet.match(/>([^<]{15,180})</);
-  if (textMatch?.[1]) {
-    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(textMatch[1]));
-    if (cleaned && cleaned.length >= 10) return cleaned;
-  }
+  if (candidates.length === 0) return "";
 
-  return "";
+  const scoreCandidate = (c: Candidate): number => {
+    const distance = Math.abs(c.absIndex - startIndex);
+    const distanceScore = Math.max(0, 5000 - distance);
+    const wordCount = c.text.split(/\s+/).length;
+    const specificityScore = Math.min(wordCount * 25, 250);
+    const kindBonus = c.kind === "attr" ? 80 : c.kind === "heading" ? 50 : 20;
+    const genericPenalty = genericSectionLabelRe.test(c.text) ? 220 : 0;
+    const longPenalty = c.text.length > 100 ? 60 : 0;
+    return distanceScore + specificityScore + kindBonus - genericPenalty - longPenalty;
+  };
+
+  const best = candidates
+    .map((candidate) => ({ candidate, score: scoreCandidate(candidate) }))
+    .sort((a, b) => b.score - a.score)[0]?.candidate;
+
+  if (!best) return "";
+  console.log(`[extractContextHint] Using nearest context (${best.kind}): "${best.text}"`);
+  return best.text;
 }
 
 function extractPlaceholderNumber(source: string): number | null {

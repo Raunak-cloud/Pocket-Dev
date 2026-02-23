@@ -128,6 +128,12 @@ export async function generateCodeWithInngest(
   onProgress?: (message: string) => void,
   onRunStart?: (projectId: string) => void,
   fixedProjectId?: string,
+  integrationRequirements?: {
+    requiresAuth?: boolean;
+    requiresDatabase?: boolean;
+    requiresGoogleOAuth?: boolean;
+    requiresPasswordAuth?: boolean;
+  },
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -150,7 +156,12 @@ export async function generateCodeWithInngest(
   });
 
   // Trigger workflow
-  await triggerCodeGenerationAction(prompt, userId, projectId);
+  await triggerCodeGenerationAction(
+    prompt,
+    userId,
+    projectId,
+    integrationRequirements,
+  );
 
   onProgress?.("[0/7] Generation started. Waiting for first update...");
 

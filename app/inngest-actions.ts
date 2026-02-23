@@ -14,7 +14,13 @@ import { INNGEST_APP_ID, inngest } from "@/lib/inngest-client";
 export async function triggerCodeGeneration(
   prompt: string,
   userId: string,
-  projectId: string
+  projectId: string,
+  integrationRequirements?: {
+    requiresAuth?: boolean;
+    requiresDatabase?: boolean;
+    requiresGoogleOAuth?: boolean;
+    requiresPasswordAuth?: boolean;
+  },
 ) {
   const sendResult = await inngest.send({
     name: "app/generate.code",
@@ -22,6 +28,7 @@ export async function triggerCodeGeneration(
       prompt,
       userId,
       projectId,
+      integrationRequirements,
     },
   });
 

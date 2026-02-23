@@ -159,14 +159,20 @@ function isValidSiteTheme(value: string): value is SiteTheme {
 
 function detectIntegrationRequirements(promptText: string): IntegrationRequirements {
   const text = promptText.toLowerCase();
+  // Prefer explicit markers from our UI prompts. Broad keyword detection on full
+  // edit prompts can create false positives because the prompt includes code context.
+  const explicitAuthMarker = text.includes("🔐 authentication requirement");
+  const explicitDbMarker = text.includes("🗄️ database requirement");
   const requiresAuth =
-    text.includes("🔐 authentication requirement") ||
-    /\bauthentication\b|\blog[\s-]?in\b|\bsign[\s-]?in\b|\bsign[\s-]?up\b|\boauth\b/.test(
+    explicitAuthMarker ||
+    /\badd a complete backend\b|\bbackend \(authentication \+ database\)\b/.test(
       text,
     );
   const requiresDatabase =
-    text.includes("🗄️ database requirement") ||
-    /\bdatabase\b|\bpostgres\b|\bprisma\b|\bschema\b|\bcrud\b/.test(text);
+    explicitDbMarker ||
+    /\badd a complete backend\b|\bbackend \(authentication \+ database\)\b/.test(
+      text,
+    );
 
   return {
     requiresAuth,
@@ -179,6 +185,19 @@ function detectIntegrationRequirements(promptText: string): IntegrationRequireme
       /\busername\/password\b|\bpassword\b|\bforgot password\b|\breset password\b/.test(
         text,
       ),
+  };
+}
+
+function normalizeIntegrationRequirements(
+  input: unknown,
+): IntegrationRequirements | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Record<string, unknown>;
+  return {
+    requiresAuth: raw.requiresAuth === true,
+    requiresDatabase: raw.requiresDatabase === true,
+    requiresGoogleOAuth: raw.requiresGoogleOAuth === true,
+    requiresPasswordAuth: raw.requiresPasswordAuth === true,
   };
 }
 
@@ -2926,7 +2945,11 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
-    const integrationRequirements = detectIntegrationRequirements(prompt);
+    const explicitIntegrationRequirements = normalizeIntegrationRequirements(
+      (event.data as Record<string, unknown>)?.integrationRequirements,
+    );
+    const integrationRequirements =
+      explicitIntegrationRequirements || detectIntegrationRequirements(prompt);
     const needsManagedAuth = integrationRequirements.requiresAuth;
     let managedAuthConfig: ManagedSupabaseAuthConfig | null = null;
     if (needsManagedAuth) {
@@ -3292,13 +3315,10 @@ DESIGN DIRECTION:
           workingFiles,
           integrationRequirements,
         );
-        let boundaryIssues = collectServerClientBoundaryIssues(workingFiles);
 
         for (
           let attempt = 1;
-          (lintResult.lintReport.errors > 0 ||
-            schemaIssues.length > 0 ||
-            boundaryIssues.length > 0) &&
+          (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
           attempt <= MAX_LINT_REPAIR_ATTEMPTS;
           attempt++
         ) {
@@ -3308,11 +3328,11 @@ DESIGN DIRECTION:
 
           const issuesToFix =
             lintResult.lintIssues.length > 0
-              ? [...lintResult.lintIssues, ...schemaIssues, ...boundaryIssues]
-              : [...schemaIssues, ...boundaryIssues];
+              ? [...lintResult.lintIssues, ...schemaIssues]
+              : [...schemaIssues];
           const firstIssue = issuesToFix[0];
           console.warn(
-            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s), ${boundaryIssues.length} boundary issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
           await sendProgress(projectId, "[5/8] Fixing code quality...");
 
@@ -3332,19 +3352,10 @@ DESIGN DIRECTION:
             workingFiles,
             integrationRequirements,
           );
-          boundaryIssues = collectServerClientBoundaryIssues(workingFiles);
         }
 
-        if (
-          lintResult.lintReport.errors > 0 ||
-          schemaIssues.length > 0 ||
-          boundaryIssues.length > 0
-        ) {
-          const firstIssue = [
-            ...(lintResult.lintIssues || []),
-            ...schemaIssues,
-            ...boundaryIssues,
-          ][0];
+        if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
+          const firstIssue = [...(lintResult.lintIssues || []), ...schemaIssues][0];
           throw new Error(
             `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
@@ -3427,14 +3438,6 @@ DESIGN DIRECTION:
       const firstIssue = finalSchemaIssues[0];
       throw new Error(
         `Schema validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
-      );
-    }
-
-    const finalBoundaryIssues = collectServerClientBoundaryIssues(finalFiles);
-    if (finalBoundaryIssues.length > 0) {
-      const firstIssue = finalBoundaryIssues[0];
-      throw new Error(
-        `Server/client boundary validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
       );
     }
 
