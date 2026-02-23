@@ -108,6 +108,13 @@ PLATFORM CONTRACT (strict):
   * For protected pages, rely on session-aware middleware/server checks; do not show login modal to authenticated users
   * If using client-side auth state, wait for auth to load before deciding to show login prompts
   * Never mount a global auth modal in app/layout or all pages; auth UI should appear only on sign-in/sign-up pages or user-triggered actions
+  * Auth page UX quality bar:
+    - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
+    - Include password visibility toggle(s)
+    - Include password confirmation on /signup
+    - Include inline validation and clear error messaging
+    - Include loading and disabled states for submit buttons
+    - Keep form visuals aligned with website purpose and theme (color, typography, spacing)
   * Do NOT generate custom Supabase auth clients, middleware, callback handlers, or custom auth API routes
   * Do NOT hardcode secrets or service-role keys
   * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
@@ -1658,18 +1665,69 @@ export async function GET(request: Request) {
     );
 
     upsertFile(
+      "lib/auth-form-theme.ts",
+      `export const AUTH_FORM_THEME = {
+  pageShell:
+    "min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white flex items-center justify-center p-6",
+  card:
+    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/70 backdrop-blur-xl p-7 space-y-6 shadow-2xl",
+  sessionCheckCard:
+    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/70 backdrop-blur-xl p-7 shadow-2xl",
+  heading: "text-3xl font-semibold tracking-tight",
+  subtitle: "text-sm text-slate-300",
+  label: "text-xs font-medium text-slate-300",
+  input:
+    "w-full rounded-xl border border-slate-600 bg-slate-800/80 px-3.5 py-2.5 text-slate-100 placeholder:text-slate-400 focus:outline-none",
+  eyeButton:
+    "absolute inset-y-0 right-2 my-1 rounded-lg px-2.5 text-xs font-medium text-slate-300 hover:bg-slate-700",
+  helperText: "text-xs text-slate-400",
+  errorText: "text-sm text-red-400",
+  footerText: "text-sm text-slate-300",
+  oauthButton:
+    "block w-full rounded-xl border border-slate-600 bg-slate-800/50 px-3 py-2.5 text-center text-sm font-medium text-slate-100 hover:bg-slate-800",
+  checkbox:
+    "h-4 w-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500/50",
+  variants: {
+    signIn: {
+      badgeClass:
+        "inline-flex items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold tracking-wide text-sky-300",
+      badgeText: "Secure Access",
+      focusRingClass: "focus:ring-2 focus:ring-sky-500/40",
+      primaryButton:
+        "w-full rounded-xl bg-sky-500 hover:bg-sky-400 px-3 py-2.5 font-semibold text-slate-950 disabled:opacity-50",
+      linkClass: "text-sky-300 hover:text-sky-200",
+    },
+    signUp: {
+      badgeClass:
+        "inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold tracking-wide text-emerald-300",
+      badgeText: "New Account",
+      focusRingClass: "focus:ring-2 focus:ring-emerald-500/40",
+      primaryButton:
+        "w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 px-3 py-2.5 font-semibold text-slate-950 disabled:opacity-50",
+      linkClass: "text-emerald-300 hover:text-emerald-200",
+    },
+  },
+} as const;
+`,
+    );
+
+    upsertFile(
       "app/sign-in/page.tsx",
       `"use client";
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AUTH_FORM_THEME } from "@/lib/auth-form-theme";
 
 export default function SignInPage() {
+  const variant = AUTH_FORM_THEME.variants.signIn;
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState("");
@@ -1694,13 +1752,22 @@ export default function SignInPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim() || !password) {
+      setError("Please enter your email and password.");
+      return;
+    }
     setLoading(true);
     setError("");
 
     const res = await fetch("/api/auth/signin", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, next: nextPath }),
+      body: JSON.stringify({
+        email,
+        password,
+        next: nextPath,
+        rememberMe,
+      }),
     });
     const raw = await res.text();
     let data: {
@@ -1728,8 +1795,8 @@ export default function SignInPage() {
 
   if (checkingSession) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
+      <main className={AUTH_FORM_THEME.pageShell}>
+        <div className={AUTH_FORM_THEME.sessionCheckCard}>
           <p className="text-sm text-slate-300">Checking your session...</p>
         </div>
       </main>
@@ -1737,37 +1804,70 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-6">
+    <main className={AUTH_FORM_THEME.pageShell}>
+      <div className={AUTH_FORM_THEME.card}>
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold">Welcome back</h1>
-          <p className="text-sm text-slate-400">Sign in to continue.</p>
+          <p className={variant.badgeClass}>{variant.badgeText}</p>
+          <h1 className={AUTH_FORM_THEME.heading}>Welcome back</h1>
+          <p className={AUTH_FORM_THEME.subtitle}>Sign in to continue to your dashboard.</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email"
-            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
-            required
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
-            required
-          />
+          <div className="space-y-1.5">
+            <label className={AUTH_FORM_THEME.label}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              autoComplete="email"
+              className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass}\`}
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className={AUTH_FORM_THEME.label}>Password</label>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className={AUTH_FORM_THEME.eyeButton}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+          </div>
 
-          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <label className="inline-flex items-center gap-2 text-slate-300">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className={AUTH_FORM_THEME.checkbox}
+              />
+              Remember me
+            </label>
+            <Link href="/sign-in" className={variant.linkClass}>
+              Forgot password?
+            </Link>
+          </div>
+
+          {error ? <p className={AUTH_FORM_THEME.errorText}>{error}</p> : null}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-blue-600 px-3 py-2 font-medium disabled:opacity-50"
+            className={variant.primaryButton}
           >
             {loading ? "Signing in..." : "Sign In"}
           </button>
@@ -1775,14 +1875,14 @@ export default function SignInPage() {
 
         <a
           href={\`/api/auth/oauth?provider=google&next=\${encodeURIComponent(nextPath)}\`}
-          className="block w-full rounded-lg border border-slate-700 px-3 py-2 text-center"
+          className={AUTH_FORM_THEME.oauthButton}
         >
           Continue with Google
         </a>
 
-        <p className="text-sm text-slate-400">
+        <p className={AUTH_FORM_THEME.footerText}>
           No account?{" "}
-          <Link href="/signup" className="text-blue-400 hover:text-blue-300">
+          <Link href="/signup" className={variant.linkClass}>
             Create one
           </Link>
         </p>
@@ -1800,12 +1900,17 @@ export default function SignInPage() {
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AUTH_FORM_THEME } from "@/lib/auth-form-theme";
 
 export default function SignupPage() {
+  const variant = AUTH_FORM_THEME.variants.signUp;
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/sign-in";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState("");
@@ -1830,6 +1935,18 @@ export default function SignupPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim()) {
+      setError("Please enter your email.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Password confirmation does not match.");
+      return;
+    }
     setLoading(true);
     setError("");
 
@@ -1864,8 +1981,8 @@ export default function SignupPage() {
 
   if (checkingSession) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
+      <main className={AUTH_FORM_THEME.pageShell}>
+        <div className={AUTH_FORM_THEME.sessionCheckCard}>
           <p className="text-sm text-slate-300">Checking your session...</p>
         </div>
       </main>
@@ -1873,45 +1990,89 @@ export default function SignupPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 space-y-6">
+    <main className={AUTH_FORM_THEME.pageShell}>
+      <div className={AUTH_FORM_THEME.card}>
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold">Create account</h1>
-          <p className="text-sm text-slate-400">Start using your app.</p>
+          <p className={variant.badgeClass}>{variant.badgeText}</p>
+          <h1 className={AUTH_FORM_THEME.heading}>Create account</h1>
+          <p className={AUTH_FORM_THEME.subtitle}>Start using your app in under a minute.</p>
         </div>
 
         <form onSubmit={submit} className="space-y-4">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email"
-            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
-            required
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2"
-            required
-          />
+          <div className="space-y-1.5">
+            <label className={AUTH_FORM_THEME.label}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              autoComplete="email"
+              className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass}\`}
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className={AUTH_FORM_THEME.label}>Password</label>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete="new-password"
+                minLength={8}
+                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className={AUTH_FORM_THEME.eyeButton}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className={AUTH_FORM_THEME.label}>Confirm Password</label>
+            <div className="relative">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter password"
+                autoComplete="new-password"
+                minLength={8}
+                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                className={AUTH_FORM_THEME.eyeButton}
+              >
+                {showConfirmPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+          </div>
+          <p className={AUTH_FORM_THEME.helperText}>
+            Use at least 8 characters with a mix of letters, numbers, and symbols.
+          </p>
 
-          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          {error ? <p className={AUTH_FORM_THEME.errorText}>{error}</p> : null}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-blue-600 px-3 py-2 font-medium disabled:opacity-50"
+            className={variant.primaryButton}
           >
             {loading ? "Creating..." : "Create account"}
           </button>
         </form>
 
-        <p className="text-sm text-slate-400">
+        <p className={AUTH_FORM_THEME.footerText}>
           Already have an account?{" "}
-          <Link href="/sign-in" className="text-blue-400 hover:text-blue-300">
+          <Link href="/sign-in" className={variant.linkClass}>
             Sign in
           </Link>
         </p>
@@ -2573,6 +2734,13 @@ STRICT IMPLEMENTATION RULES:
   * Auth CTAs must be state-aware (signed-out vs signed-in). Show user identity + logout when signed in.
   * Never show login modal for already authenticated users; wait for auth state before prompting login.
   * Do not place always-visible auth modals globally; auth surfaces only during sign-in/sign-up operations
+  * Auth page UX quality bar:
+    - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
+    - Include password visibility toggle(s)
+    - Include password confirmation on /signup
+    - Include inline validation and clear error messaging
+    - Include loading and disabled states for submit buttons
+    - Keep form visuals aligned with website purpose and theme (color, typography, spacing)
 - Preserve accessibility, semantic HTML, and responsive behavior.
 - Do not output lockfiles or unsafe file paths.
 - All returned code must parse without TypeScript/JavaScript syntax errors.

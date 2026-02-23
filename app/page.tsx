@@ -370,6 +370,11 @@ function ReactGeneratorContent() {
   >([]);
   const { startUpload } = useSupabaseUploads();
 
+  // Always keep edit history collapsed when a project is loaded/reloaded.
+  useEffect(() => {
+    setShowEditHistory(false);
+  }, [currentProjectId]);
+
   // Initialize custom hooks for publishing, GitHub export, and editor export
   const publishingHook = usePublishing({
     user,
