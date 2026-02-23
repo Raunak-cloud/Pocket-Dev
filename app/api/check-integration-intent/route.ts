@@ -6,6 +6,7 @@ const MODEL = "gemini-3-flash-preview";
 type IntentResult = {
   hasAuthIntent: boolean;
   hasDatabaseIntent: boolean;
+  hasBackendIntent: boolean;
 };
 
 function keywordIntentCheck(prompt: string): IntentResult {
@@ -53,6 +54,8 @@ function keywordIntentCheck(prompt: string): IntentResult {
     /\bneon\b/,
     /\bprisma\b/,
     /\bschema\b/,
+    /\brelation\b/,
+    /\brelations\b/,
     /\btable\b/,
     /\btables\b/,
     /\bcollection\b/,
@@ -67,9 +70,22 @@ function keywordIntentCheck(prompt: string): IntentResult {
     /\borm\b/,
   ];
 
+  const backendPatterns = [
+    /\bbackend\b/,
+    /\bserver side\b/,
+    /\bapi backend\b/,
+    /\bdata relation\b/,
+    /\bdata relationships?\b/,
+  ];
+
   const hasAuthIntent = authPatterns.some((re) => re.test(text));
   const hasDatabaseIntent = databasePatterns.some((re) => re.test(text));
-  return { hasAuthIntent, hasDatabaseIntent };
+  const hasBackendIntent = backendPatterns.some((re) => re.test(text));
+  return {
+    hasAuthIntent,
+    hasDatabaseIntent,
+    hasBackendIntent: hasBackendIntent || hasAuthIntent || hasDatabaseIntent,
+  };
 }
 
 function parseGeminiIntent(text: string): IntentResult | null {
@@ -84,6 +100,10 @@ function parseGeminiIntent(text: string): IntentResult | null {
       return {
         hasAuthIntent: parsed.hasAuthIntent,
         hasDatabaseIntent: parsed.hasDatabaseIntent,
+        hasBackendIntent:
+          typeof parsed.hasBackendIntent === "boolean"
+            ? parsed.hasBackendIntent
+            : parsed.hasAuthIntent || parsed.hasDatabaseIntent,
       };
     }
   } catch {
@@ -92,10 +112,18 @@ function parseGeminiIntent(text: string): IntentResult | null {
 
   const authMatch = normalized.match(/hasAuthIntent["\s:]+(true|false)/i);
   const dbMatch = normalized.match(/hasDatabaseIntent["\s:]+(true|false)/i);
+  const backendMatch = normalized.match(
+    /hasBackendIntent["\s:]+(true|false)/i,
+  );
   if (authMatch && dbMatch) {
+    const hasAuthIntent = authMatch[1].toLowerCase() === "true";
+    const hasDatabaseIntent = dbMatch[1].toLowerCase() === "true";
     return {
-      hasAuthIntent: authMatch[1].toLowerCase() === "true",
-      hasDatabaseIntent: dbMatch[1].toLowerCase() === "true",
+      hasAuthIntent,
+      hasDatabaseIntent,
+      hasBackendIntent: backendMatch
+        ? backendMatch[1].toLowerCase() === "true"
+        : hasAuthIntent || hasDatabaseIntent,
     };
   }
 
@@ -106,6 +134,7 @@ export async function POST(req: NextRequest) {
   let keywordResult: IntentResult = {
     hasAuthIntent: false,
     hasDatabaseIntent: false,
+    hasBackendIntent: false,
   };
 
   try {
@@ -115,6 +144,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         hasAuthIntent: false,
         hasDatabaseIntent: false,
+        hasBackendIntent: false,
       });
     }
 
@@ -140,11 +170,13 @@ export async function POST(req: NextRequest) {
 Return JSON only:
 {
   "hasAuthIntent": boolean,
-  "hasDatabaseIntent": boolean
+  "hasDatabaseIntent": boolean,
+  "hasBackendIntent": boolean
 }
 
 Set hasAuthIntent=true if prompt asks for any authentication/account/login/signup/session/protected route/OAuth style feature (including synonyms or close wording).
 Set hasDatabaseIntent=true if prompt asks for any database/data persistence/schema/query/storage backend feature (including synonyms or close wording).
+Set hasBackendIntent=true if prompt asks for backend/auth/database/relations/server-side features in general.
 
 Prompt:
 "${prompt.replace(/"/g, '\\"').slice(0, 1200)}"`,
@@ -159,6 +191,8 @@ Prompt:
       hasAuthIntent: parsed.hasAuthIntent || keywordResult.hasAuthIntent,
       hasDatabaseIntent:
         parsed.hasDatabaseIntent || keywordResult.hasDatabaseIntent,
+      hasBackendIntent:
+        parsed.hasBackendIntent || keywordResult.hasBackendIntent,
     });
   } catch {
     return NextResponse.json(keywordResult);

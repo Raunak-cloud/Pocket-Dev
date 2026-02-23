@@ -160,6 +160,20 @@ async function runProjectSql(projectRef: string, query: string): Promise<void> {
   });
 }
 
+export async function applySqlToManagedProject(
+  projectRef: string,
+  query: string,
+): Promise<void> {
+  if (!projectRef) {
+    throw new Error("Managed Supabase project ref is required.");
+  }
+  const sql = query.trim();
+  if (!sql) return;
+
+  await runProjectSql(projectRef, sql);
+  await runProjectSql(projectRef, `select pg_notify('pgrst', 'reload schema');`);
+}
+
 async function bootstrapProjectSchemaForProject(projectRef: string): Promise<void> {
   await runProjectSql(projectRef, PROJECT_BOOTSTRAP_SQL);
 }

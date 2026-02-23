@@ -22,8 +22,6 @@ import ThemeToggle from "./components/ThemeToggle";
 import {
   DeleteConfirmModal,
   CancelConfirmModal,
-  AuthModal,
-  DatabaseModal,
   TokenPurchaseModal,
   WelcomeModal,
   DomainSettingsModal,
@@ -51,6 +49,12 @@ const BASE_GENERATION_APP_COST = 2;
 const BASE_EDIT_APP_COST = 0.1;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
+const DEFAULT_BACKEND_AUTH = ["username-password"];
+const DEFAULT_BACKEND_DATABASE = [
+  "supabase-postgres",
+  "crud-api-routes",
+  "row-level-security",
+];
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const MAX_EDIT_HISTORY_ENTRIES = 200;
 
@@ -126,9 +130,9 @@ const applyEditHistoryToProject = (
 
 const inferProjectIntegrations = (
   projectData: ReactProject | null,
-): { auth: string[]; hasDatabase: boolean } => {
+): { auth: string[]; hasDatabase: boolean; hasBackend: boolean } => {
   if (!projectData) {
-    return { auth: [], hasDatabase: false };
+    return { auth: [], hasDatabase: false, hasBackend: false };
   }
 
   const allCode = projectData.files.map((f) => f.content).join("\n").toLowerCase();
@@ -177,6 +181,7 @@ const inferProjectIntegrations = (
   return {
     auth,
     hasDatabase: hasDatabaseDep || hasDatabaseCode,
+    hasBackend: auth.length > 0 && (hasDatabaseDep || hasDatabaseCode),
   };
 };
 
@@ -254,9 +259,6 @@ function ReactGeneratorContent() {
     }
     return false;
   });
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [showEditAuthModal, setShowEditAuthModal] = useState(false);
-  const [showDbModal, setShowDbModal] = useState(false);
   const [showEditIntegrationsModal, setShowEditIntegrationsModal] =
     useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -410,6 +412,28 @@ function ReactGeneratorContent() {
     }
   }, [project]);
 
+  const isGenerationBackendSelected =
+    currentAppAuth.length > 0 && currentAppDatabase.length > 0;
+  const isEditBackendSelected =
+    editAppAuth.length > 0 && currentAppDatabase.length > 0;
+
+  const setBackendSelection = useCallback((enabled: boolean) => {
+    if (!enabled) {
+      setCurrentAppAuth([]);
+      setEditAppAuth([]);
+      setCurrentAppDatabase([]);
+      return;
+    }
+
+    setCurrentAppAuth([...DEFAULT_BACKEND_AUTH]);
+    setEditAppAuth([...DEFAULT_BACKEND_AUTH]);
+    setCurrentAppDatabase([...DEFAULT_BACKEND_DATABASE]);
+  }, []);
+
+  const toggleGenerationBackendSelection = useCallback(() => {
+    setBackendSelection(!isGenerationBackendSelected);
+  }, [isGenerationBackendSelected, setBackendSelection]);
+
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
     /\bauthentication\b/i,
@@ -425,6 +449,7 @@ function ReactGeneratorContent() {
 
   const DATABASE_INTENT_PATTERNS = [
     /\bdatabase\b/i,
+    /\bbackend\b/i,
     /\bdb\b/i,
     /\bsql\b/i,
     /\bnosql\b/i,
@@ -435,11 +460,18 @@ function ReactGeneratorContent() {
     /\bsupabase\b/i,
     /\bprisma\b/i,
     /\bschema\b/i,
+    /\brelation\b/i,
+    /\brelations\b/i,
     /\btable\b/i,
     /\bquery\b/i,
     /\bcrud\b/i,
     /\bpersist\b/i,
     /\bdata model\b/i,
+  ];
+
+  const BACKEND_INTENT_PATTERNS = [
+    ...AUTH_INTENT_PATTERNS,
+    ...DATABASE_INTENT_PATTERNS,
   ];
 
   const findMatchedKeywords = (text: string, patterns: RegExp[]): string[] => {
@@ -458,19 +490,15 @@ function ReactGeneratorContent() {
   };
 
   async function detectIntegrationIntent(text: string): Promise<{
-    hasAuthIntent: boolean;
-    hasDatabaseIntent: boolean;
-    matchedAuthKeywords: string[];
-    matchedDatabaseKeywords: string[];
+    hasBackendIntent: boolean;
+    matchedBackendKeywords: string[];
   }> {
-    const localAuthIntent = AUTH_INTENT_PATTERNS.some((re) => re.test(text));
-    const localDatabaseIntent = DATABASE_INTENT_PATTERNS.some((re) =>
+    const localBackendIntent = BACKEND_INTENT_PATTERNS.some((re) =>
       re.test(text),
     );
-    const matchedAuthKeywords = findMatchedKeywords(text, AUTH_INTENT_PATTERNS);
-    const matchedDatabaseKeywords = findMatchedKeywords(
+    const matchedBackendKeywords = findMatchedKeywords(
       text,
-      DATABASE_INTENT_PATTERNS,
+      BACKEND_INTENT_PATTERNS,
     );
 
     try {
@@ -481,59 +509,38 @@ function ReactGeneratorContent() {
       });
       if (!res.ok) {
         return {
-          hasAuthIntent: localAuthIntent,
-          hasDatabaseIntent: localDatabaseIntent,
-          matchedAuthKeywords,
-          matchedDatabaseKeywords,
+          hasBackendIntent: localBackendIntent,
+          matchedBackendKeywords,
         };
       }
       const data = await res.json();
       return {
-        hasAuthIntent: data.hasAuthIntent === true || localAuthIntent,
-        hasDatabaseIntent:
-          data.hasDatabaseIntent === true || localDatabaseIntent,
-        matchedAuthKeywords,
-        matchedDatabaseKeywords,
+        hasBackendIntent: data.hasBackendIntent === true || localBackendIntent,
+        matchedBackendKeywords,
       };
     } catch {
       return {
-        hasAuthIntent: localAuthIntent,
-        hasDatabaseIntent: localDatabaseIntent,
-        matchedAuthKeywords,
-        matchedDatabaseKeywords,
+        hasBackendIntent: localBackendIntent,
+        matchedBackendKeywords,
       };
     }
   }
 
   function showIntegrationBlockedFeedback(args: {
-    hasBlockedAuth: boolean;
-    hasBlockedDatabase: boolean;
     blockedKeywords: string[];
     source: "generation" | "edit";
   }) {
-    const { hasBlockedAuth, hasBlockedDatabase, blockedKeywords, source } =
-      args;
-    const blocked =
-      hasBlockedAuth && hasBlockedDatabase
-        ? "authentication and database"
-        : hasBlockedAuth
-          ? "authentication (login features)"
-          : "database";
+    const { blockedKeywords, source } = args;
+    const blocked = "backend (authentication + database)";
     const message =
       source === "generation"
-        ? `This request is paused.\n${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using the buttons.\nUse Add Auth and Database below the prompt.`
-        : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using buttons. Use Add Auth and Database in the edit panel.`;
+        ? `This request is paused.\n${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using the backend button below the prompt.`
+        : `This request is paused. ${blocked[0].toUpperCase()}${blocked.slice(1)} should be added using Add Backend in the edit panel.`;
 
     setBlockedPromptWords(blockedKeywords.slice(0, 8));
     setAuthPromptWarning(message);
     setError(message);
-
-    if (hasBlockedAuth) {
-      setShowAuthModal(true);
-    }
-    if (hasBlockedDatabase) {
-      setShowDbModal(true);
-    }
+    setShowEditIntegrationsModal(true);
   }
 
   async function detectEditClarification(
@@ -723,9 +730,13 @@ function ReactGeneratorContent() {
             if (targetProject) {
               // Reopen the project
               openSavedProject(targetProject);
-              // Restore edit prompt and auth
+              // Restore edit prompt and backend selection
               setEditPrompt(pendingEdit.editPrompt || "");
-              setEditAppAuth(pendingEdit.editAppAuth || []);
+              if (pendingEdit.backendEnabled) {
+                setCurrentAppAuth([...DEFAULT_BACKEND_AUTH]);
+                setEditAppAuth([...DEFAULT_BACKEND_AUTH]);
+                setCurrentAppDatabase([...DEFAULT_BACKEND_DATABASE]);
+              }
               // Show toast after a short delay for UI to settle
               setTimeout(() => {
                 setTokenToast(
@@ -1201,14 +1212,14 @@ function ReactGeneratorContent() {
       if (
         currentProjectId &&
         status === "success" &&
-        (editPrompt.trim() || editAppAuth.length > 0)
+        (editPrompt.trim() || isEditBackendSelected)
       ) {
         sessionStorage.setItem(
           "pendingEdit",
           JSON.stringify({
             projectId: currentProjectId,
             editPrompt: editPrompt.trim(),
-            editAppAuth,
+            backendEnabled: isEditBackendSelected,
           }),
         );
       }
@@ -1365,42 +1376,19 @@ function ReactGeneratorContent() {
         getDatabaseAppCost(currentAppDatabase),
     );
 
-  const buildDatabaseRequirementPrompt = (
-    selectedDatabase: string[],
-    mode: "new" | "existing",
-  ) => {
-    if (selectedDatabase.length === 0) return "";
-
-    const selectedSet = new Set(selectedDatabase);
-    const scopeText =
+  const buildBackendRequirementPrompt = (mode: "new" | "existing") => {
+    const integrationScope =
       mode === "new"
         ? "for this new app"
         : "and integrate it into this existing app";
 
-    const requirements: string[] = [
-      `Use Supabase only ${scopeText}.`,
-      "Create a production-ready Supabase setup with clear env variable usage.",
-    ];
-
-    if (selectedSet.has("supabase-postgres")) {
-      requirements.push(
-        "Add a Supabase Postgres data model with practical tables, relations, and typed data access.",
-      );
-    }
-    if (selectedSet.has("crud-api-routes")) {
-      requirements.push(
-        "Implement complete CRUD API routes/server actions for the selected entities, including validation and error handling.",
-      );
-    }
-    if (selectedSet.has("row-level-security")) {
-      requirements.push(
-        "Enable and apply Row Level Security (RLS) policies so users can only access their own tenant/user-scoped data.",
-      );
-    }
-
-    return `\n\n🗄️ DATABASE REQUIREMENT:\n${requirements
-      .map((item, index) => `${index + 1}. ${item}`)
-      .join("\n")}`;
+    return `\n\n⚙️ BACKEND REQUIREMENT:
+1. Implement a complete backend system ${integrationScope} using Supabase only.
+2. Include authentication flows: sign up, sign in, sign out, session handling, and protected routes.
+3. Include data persistence: schema setup, typed data access, and practical relational tables.
+4. Include secure data operations: CRUD endpoints/actions and row-level access control where required.
+5. Use production-safe validation and error handling for auth and database operations.
+6. Ensure backend wiring is fully integrated with existing UI actions (buttons/forms), not left as placeholder code.`;
   };
 
   const isExplicitImageChangeRequest = (request: string): boolean => {
@@ -1436,7 +1424,7 @@ function ReactGeneratorContent() {
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
-      (!editPrompt.trim() && editAppAuth.length === 0) ||
+      (!editPrompt.trim() && !isEditBackendSelected) ||
       isEditing ||
       !project ||
       checkingAuthIntent ||
@@ -1444,32 +1432,19 @@ function ReactGeneratorContent() {
     )
       return;
     let resolvedClarificationHistory = [...editClarificationHistory];
-    // Block auth/database intent in text prompts; force integration buttons.
+    // Block backend/auth/database intent in text prompts; force integration button.
     if (editPrompt.trim()) {
       setCheckingAuthIntent(true);
-      const {
-        hasAuthIntent,
-        hasDatabaseIntent,
-        matchedAuthKeywords,
-        matchedDatabaseKeywords,
-      } = await detectIntegrationIntent(editPrompt);
+      const { hasBackendIntent, matchedBackendKeywords } =
+        await detectIntegrationIntent(editPrompt);
       setCheckingAuthIntent(false);
 
       const inferred = inferProjectIntegrations(project);
-      const hasSelectedAuth = editAppAuth.length > 0 || inferred.auth.length > 0;
-      const hasSelectedDatabase =
-        currentAppDatabase.length > 0 || inferred.hasDatabase;
-      const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
-      const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
-      if (hasBlockedAuth || hasBlockedDatabase) {
-        const blockedKeywords = [
-          ...(hasBlockedAuth ? matchedAuthKeywords : []),
-          ...(hasBlockedDatabase ? matchedDatabaseKeywords : []),
-        ];
+      const hasSelectedBackend = isEditBackendSelected || inferred.hasBackend;
+      const hasBlockedBackend = hasBackendIntent && !hasSelectedBackend;
+      if (hasBlockedBackend) {
         showIntegrationBlockedFeedback({
-          hasBlockedAuth,
-          hasBlockedDatabase,
-          blockedKeywords,
+          blockedKeywords: matchedBackendKeywords,
           source: "edit",
         });
         return;
@@ -1639,16 +1614,12 @@ function ReactGeneratorContent() {
     }
     const allowedPackagesList = Array.from(existingPackages).join(", ");
 
-    // Build the user request text, including auth if selected
-    const authLabels: string[] = [];
-    if (editAppAuth.includes("username-password"))
-      authLabels.push("Username/Password authentication");
-    if (editAppAuth.includes("google"))
-      authLabels.push("Google OAuth authentication");
+    // Build the user request text, including backend if selected
+    const backendSelectedForEdit = isEditBackendSelected;
     const baseUserRequest = editPrompt.trim()
       ? editPrompt.trim()
-      : authLabels.length > 0
-        ? `Add ${authLabels.join(" and ")} to the app`
+      : backendSelectedForEdit
+        ? "Add a complete backend (authentication + database) to the app"
         : editPrompt;
     const userRequest = buildClarifiedEditRequest(
       baseUserRequest,
@@ -1732,42 +1703,9 @@ ${pdfUrlList}
       }
     }
 
-    // Add authentication requirements if selected for this edit
-    if (editAppAuth.includes("username-password")) {
-      editFullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
-Implement a complete username/password authentication system into this existing app:
-1. User Registration (Sign Up) - with email/username and password
-2. User Login with session management
-3. Password Reset/Forgot Password functionality
-4. Logout functionality
-5. Protected routes that require authentication
-6. User profile display
-7. Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
-8. Include proper form validation and error handling
-9. Store user sessions securely
-10. Add authentication UI components (login form, signup form, password reset form)
-
-Integrate the authentication seamlessly into the existing app design and layout. Use Supabase Auth only.`;
+    if (backendSelectedForEdit) {
+      editFullPrompt += buildBackendRequirementPrompt("existing");
     }
-    if (editAppAuth.includes("google")) {
-      editFullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT (ADD TO EXISTING APP):
-Implement Google OAuth authentication into this existing app using Supabase Auth social sign-in:
-1. "Sign in with Google" button with proper Google branding
-2. Google OAuth via Supabase Auth provider configuration
-3. Automatic user profile creation with Google account data
-4. Session management for logged-in users
-5. Logout functionality
-6. Protected routes that require authentication
-7. Display user's Google profile picture and name
-8. Handle OAuth errors gracefully
-9. Add loading states during authentication
-
-Integrate the Google OAuth seamlessly into the existing app design and layout. Use Supabase Auth only.`;
-    }
-    editFullPrompt += buildDatabaseRequirementPrompt(
-      currentAppDatabase,
-      "existing",
-    );
 
     editFullPrompt += `\n\nðŸš¨ CRITICAL REQUIREMENT:
 You MUST return ALL of these exact files in your response: ${existingFilePaths}
@@ -1781,7 +1719,7 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       try {
         const editPromptText =
           editPrompt.trim() ||
-          (authLabels.length > 0 ? `Add ${authLabels.join(" and ")}` : "Edit");
+          (backendSelectedForEdit ? "Add backend integration" : "Edit");
         const historyId = `local_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 8)}`;
@@ -1896,39 +1834,9 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
 
     let fullPrompt = generationPrompt;
 
-    // Add authentication requirements based on user selection
-    if (currentAppAuth.includes("username-password")) {
-      fullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT:
-Implement a complete username/password authentication system with the following features:
-1. User Registration (Sign Up) - with email/username and password
-2. User Login with session management
-3. Password Reset/Forgot Password functionality
-4. Logout functionality
-5. Protected routes that require authentication
-6. User profile display
-7. Use Supabase Auth (@supabase/supabase-js + @supabase/ssr) for authentication
-8. Include proper form validation and error handling
-9. Store user sessions securely
-10. Add authentication UI components (login form, signup form, password reset form)
-
-Make sure the authentication is fully functional and integrated throughout the app. Use Supabase Auth only.`;
+    if (isGenerationBackendSelected) {
+      fullPrompt += buildBackendRequirementPrompt("new");
     }
-    if (currentAppAuth.includes("google")) {
-      fullPrompt += `\n\nðŸ” AUTHENTICATION REQUIREMENT:
-Implement Google OAuth authentication with Supabase Auth (social sign-in) with the following features:
-1. "Sign in with Google" button with proper Google branding
-2. Google OAuth via Supabase Auth provider configuration
-3. Automatic user profile creation with Google account data
-4. Session management for logged-in users
-5. Logout functionality
-6. Protected routes that require authentication
-7. Display user's Google profile picture and name
-8. Handle OAuth errors gracefully
-9. Add loading states during authentication
-
-Make sure the Google OAuth is fully functional and integrated throughout the app. Use Supabase Auth only.`;
-    }
-    fullPrompt += buildDatabaseRequirementPrompt(currentAppDatabase, "new");
 
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) =>
@@ -2034,8 +1942,8 @@ ${pdfUrlList}
       }
 
       setStatus("success");
-      setCurrentAppAuth([]); // Reset auth selection for next app
-      setCurrentAppDatabase([]); // Keep database opt-in only for each new app
+      setCurrentAppAuth([]); // Reset backend selection for next app
+      setCurrentAppDatabase([]);
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
     } catch (err) {
       if (progressIntervalRef.current) {
@@ -2065,33 +1973,20 @@ ${pdfUrlList}
     e.preventDefault();
 
     if (!prompt.trim() || status === "loading" || checkingAuthIntent) return;
-    // Block auth/database intent in text prompts; force integration buttons.
+    // Block backend/auth/database intent in text prompts; force integration button.
     if (prompt.trim()) {
       setCheckingAuthIntent(true);
-      const {
-        hasAuthIntent,
-        hasDatabaseIntent,
-        matchedAuthKeywords,
-        matchedDatabaseKeywords,
-      } = await detectIntegrationIntent(prompt);
+      const { hasBackendIntent, matchedBackendKeywords } =
+        await detectIntegrationIntent(prompt);
       setCheckingAuthIntent(false);
 
       const inferred = inferProjectIntegrations(project);
-      const hasSelectedAuth =
-        currentAppAuth.length > 0 || inferred.auth.length > 0;
-      const hasSelectedDatabase =
-        currentAppDatabase.length > 0 || inferred.hasDatabase;
-      const hasBlockedAuth = hasAuthIntent && !hasSelectedAuth;
-      const hasBlockedDatabase = hasDatabaseIntent && !hasSelectedDatabase;
-      if (hasBlockedAuth || hasBlockedDatabase) {
-        const blockedKeywords = [
-          ...(hasBlockedAuth ? matchedAuthKeywords : []),
-          ...(hasBlockedDatabase ? matchedDatabaseKeywords : []),
-        ];
+      const hasSelectedBackend =
+        isGenerationBackendSelected || inferred.hasBackend;
+      const hasBlockedBackend = hasBackendIntent && !hasSelectedBackend;
+      if (hasBlockedBackend) {
         showIntegrationBlockedFeedback({
-          hasBlockedAuth,
-          hasBlockedDatabase,
-          blockedKeywords,
+          blockedKeywords: matchedBackendKeywords,
           source: "generation",
         });
         return;
@@ -2897,7 +2792,7 @@ ${pdfUrlList}
   );
   const isEditBusy = isEditing || checkingAuthIntent || checkingEditClarity;
   const isEditSubmitDisabled =
-    (!editPrompt.trim() && editAppAuth.length === 0) || isEditBusy;
+    (!editPrompt.trim() && !isEditBackendSelected) || isEditBusy;
   const editPromptCount = editPrompt.trim().length;
   const selectedButtonKey = selectedButton
     ? getSelectedButtonKey(selectedButton)
@@ -4116,12 +4011,11 @@ ${pdfUrlList}
                           {editPromptCount} / 250 chars
                         </span>
                       </div>
-                      {/* Auth prefill tags */}
-                      {editAppAuth.length > 0 && (
-                        <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2 bg-blue-500/5 border-b border-blue-500/10">
-                          <div className="flex items-center gap-1.5">
+                      {isEditBackendSelected && (
+                        <div className="flex flex-wrap gap-2 px-4 pt-3 pb-2 bg-violet-500/5 border-b border-violet-500/10">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-500/20 text-violet-200 border border-violet-500/30 rounded-md text-xs font-medium">
                             <svg
-                              className="w-3.5 h-3.5 text-blue-400"
+                              className="w-3.5 h-3.5"
                               fill="none"
                               viewBox="0 0 24 24"
                               stroke="currentColor"
@@ -4133,91 +4027,8 @@ ${pdfUrlList}
                                 d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                               />
                             </svg>
-                            <span className="text-xs font-medium text-blue-400">
-                              Active Integrations:
-                            </span>
-                          </div>
-                          {editAppAuth.includes("username-password") && (
-                            <span className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-md text-xs font-medium">
-                              <svg
-                                className="w-3 h-3"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
-                                />
-                              </svg>
-                              Password
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditAppAuth(
-                                    editAppAuth.filter(
-                                      (a) => a !== "username-password",
-                                    ),
-                                  )
-                                }
-                                className="ml-0.5 p-0.5 rounded hover:bg-blue-500/30 text-blue-300/70 hover:text-blue-200 transition"
-                              >
-                                <svg
-                                  className="w-3 h-3"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={2}
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M6 18L18 6M6 6l12 12"
-                                  />
-                                </svg>
-                              </button>
-                            </span>
-                          )}
-                          {editAppAuth.includes("google") && (
-                            <span className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-md text-xs font-medium">
-                              <svg
-                                className="w-3 h-3"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                              >
-                                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                              </svg>
-                              Google Auth
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditAppAuth(
-                                    editAppAuth.filter((a) => a !== "google"),
-                                  )
-                                }
-                                className="ml-0.5 p-0.5 rounded hover:bg-blue-500/30 text-blue-300/70 hover:text-blue-200 transition"
-                              >
-                                <svg
-                                  className="w-3 h-3"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={2}
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M6 18L18 6M6 6l12 12"
-                                  />
-                                </svg>
-                              </button>
-                            </span>
-                          )}
+                            Backend enabled (Authentication + Database)
+                          </span>
                         </div>
                       )}
                       <textarea
@@ -4228,7 +4039,7 @@ ${pdfUrlList}
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
                             if (
-                              (editPrompt.trim() || editAppAuth.length > 0) &&
+                              (editPrompt.trim() || isEditBackendSelected) &&
                               !isEditing
                             )
                               handleEdit(e);
@@ -4236,7 +4047,7 @@ ${pdfUrlList}
                         }}
                         maxLength={250}
                         placeholder={
-                          editAppAuth.length > 0
+                          isEditBackendSelected
                             ? "Add instructions (optional)..."
                             : "Describe changes... (e.g., Change colors to blue)"
                         }
@@ -4262,11 +4073,11 @@ ${pdfUrlList}
                       onClick={() => setShowEditIntegrationsModal(true)}
                       disabled={isEditing}
                       className={`w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-medium transition-all ${
-                        (editAppAuth.length > 0 || currentAppDatabase.length > 0)
+                        isEditBackendSelected
                           ? "bg-violet-500/20 text-violet-300 border border-violet-500/40 hover:border-violet-500/60"
                           : "bg-bg-tertiary/70 text-text-secondary border border-border-secondary hover:border-violet-500/40 hover:bg-bg-tertiary hover:text-text-primary"
                       } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      title="Configure integrations (authentication and database)"
+                      title="Configure backend integration"
                     >
                       <svg
                         className="w-4 h-4 flex-shrink-0"
@@ -4281,8 +4092,8 @@ ${pdfUrlList}
                           d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
                         />
                       </svg>
-                      <span className="truncate">Add Integration</span>
-                      {(editAppAuth.length > 0 || currentAppDatabase.length > 0) && (
+                      <span className="truncate">Add Backend</span>
+                      {isEditBackendSelected && (
                         <svg
                           className="w-3.5 h-3.5 flex-shrink-0 ml-auto"
                           fill="none"
@@ -4530,27 +4341,19 @@ ${pdfUrlList}
 
                   {/* Mobile/Tablet: Layout */}
                   <div className="flex lg:hidden flex-col gap-2.5">
-                    {/* Auth selector for mobile edit */}
+                    {/* Backend selector for mobile edit */}
                     <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-xs font-medium text-text-muted">
-                          Add:
+                          Backend:
                         </span>
                         <button
                           type="button"
-                          onClick={() =>
-                            setEditAppAuth(
-                              editAppAuth.includes("username-password")
-                                ? editAppAuth.filter(
-                                    (a) => a !== "username-password",
-                                  )
-                                : [...editAppAuth, "username-password"],
-                            )
-                          }
+                          onClick={() => setShowEditIntegrationsModal(true)}
                           disabled={isEditing}
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                            editAppAuth.includes("username-password")
-                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
+                            isEditBackendSelected
+                              ? "bg-violet-600/20 text-violet-300 border border-violet-500/30"
                               : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
                           } disabled:opacity-50`}
                         >
@@ -4564,127 +4367,18 @@ ${pdfUrlList}
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                              d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
                             />
                           </svg>
-                          Password
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditAppAuth(
-                              editAppAuth.includes("google")
-                                ? editAppAuth.filter((a) => a !== "google")
-                                : [...editAppAuth, "google"],
-                            )
-                          }
-                          disabled={isEditing}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                            editAppAuth.includes("google")
-                              ? "bg-blue-600/20 text-blue-400 border border-blue-500/30"
-                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
-                          } disabled:opacity-50`}
-                        >
-                          <svg
-                            className="w-3 h-3 flex-shrink-0"
-                            viewBox="0 0 24 24"
-                            fill="currentColor"
-                          >
-                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                          </svg>
-                          Google
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowDbModal(true)}
-                          disabled={isEditing}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                            currentAppDatabase.length > 0
-                              ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30"
-                              : "bg-bg-tertiary/50 text-text-tertiary border border-border-secondary hover:border-text-faint"
-                          } disabled:opacity-50`}
-                        >
-                          <svg
-                            className="w-3 h-3 flex-shrink-0"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={1.5}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375"
-                            />
-                          </svg>
-                          Database
+                          {isEditBackendSelected ? "Configured" : "Configure"}
                         </button>
                       </div>
                     </div>
-                    {/* Auth prefill tags for mobile */}
-                    {editAppAuth.length > 0 && (
+                    {isEditBackendSelected && (
                       <div className="flex flex-wrap gap-1.5 px-1">
-                        {editAppAuth.includes("username-password") && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-md text-xs">
-                            Add Password Auth
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditAppAuth(
-                                  editAppAuth.filter(
-                                    (a) => a !== "username-password",
-                                  ),
-                                )
-                              }
-                              className="text-blue-400/60 hover:text-blue-300"
-                            >
-                              <svg
-                                className="w-3 h-3"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M6 18L18 6M6 6l12 12"
-                                />
-                              </svg>
-                            </button>
-                          </span>
-                        )}
-                        {editAppAuth.includes("google") && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-md text-xs">
-                            Add Google Auth
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditAppAuth(
-                                  editAppAuth.filter((a) => a !== "google"),
-                                )
-                              }
-                              className="text-blue-400/60 hover:text-blue-300"
-                            >
-                              <svg
-                                className="w-3 h-3"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M6 18L18 6M6 6l12 12"
-                                />
-                              </svg>
-                            </button>
-                          </span>
-                        )}
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-600/20 text-violet-300 border border-violet-500/30 rounded-md text-xs">
+                          Backend enabled (Auth + Database)
+                        </span>
                       </div>
                     )}
                     <div className="flex items-end gap-2 min-w-0">
@@ -4717,7 +4411,7 @@ ${pdfUrlList}
                             if (e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               if (
-                                (editPrompt.trim() || editAppAuth.length > 0) &&
+                                (editPrompt.trim() || isEditBackendSelected) &&
                                 !isEditing
                               )
                                 handleEdit(e);
@@ -4725,7 +4419,7 @@ ${pdfUrlList}
                           }}
                           maxLength={60}
                           placeholder={
-                            editAppAuth.length > 0
+                            isEditBackendSelected
                               ? "Instructions (optional)..."
                               : "Describe changes..."
                           }
@@ -4982,16 +4676,8 @@ ${pdfUrlList}
           <EditIntegrationsModal
             isOpen={showEditIntegrationsModal}
             onClose={() => setShowEditIntegrationsModal(false)}
-            selectedAuth={editAppAuth}
-            onAuthChange={(auth) =>
-              setEditAppAuth(
-                editAppAuth.includes(auth)
-                  ? editAppAuth.filter((a) => a !== auth)
-                  : [...editAppAuth, auth],
-              )
-            }
-            selectedDatabase={currentAppDatabase}
-            onDatabaseChange={setCurrentAppDatabase}
+            backendEnabled={isEditBackendSelected}
+            onBackendChange={setBackendSelection}
           />
         )}
 
@@ -5124,8 +4810,7 @@ ${pdfUrlList}
         prompt={prompt}
         uploadedFiles={uploadedFiles}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
-        currentAppAuth={currentAppAuth}
-        currentAppDatabase={currentAppDatabase}
+        backendEnabled={isGenerationBackendSelected}
         isRecording={isRecording}
         voiceError={voiceError}
         authPromptWarning={authPromptWarning}
@@ -5140,10 +4825,8 @@ ${pdfUrlList}
         startRecording={startRecording}
         stopRecording={stopRecording}
         setVoiceError={setVoiceError}
-        setShowAuthModal={setShowAuthModal}
-        setCurrentAppAuth={setCurrentAppAuth}
+        onToggleBackend={toggleGenerationBackendSelection}
         handleGenerate={handleGenerate}
-        setShowDbModal={setShowDbModal}
         setAuthPromptWarning={setAuthPromptWarning}
         setBlockedPromptWords={setBlockedPromptWords}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
@@ -5705,10 +5388,6 @@ ${pdfUrlList}
           );
         })()}
 
-      {/* Authentication Modal */}
-
-      {/* Database Modal */}
-
       {/* Token Purchase Modal */}
 
       {/* Extracted Modals */}
@@ -5738,28 +5417,6 @@ ${pdfUrlList}
         isEditing={isEditing}
       />
 
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        selectedAuth={currentAppAuth}
-        onAuthChange={(auth) =>
-          setCurrentAppAuth(
-            currentAppAuth.includes(auth)
-              ? currentAppAuth.filter((a) => a !== auth)
-              : [...currentAppAuth, auth],
-          )
-        }
-      />
-
-      {showDbModal && (
-        <DatabaseModal
-          isOpen={showDbModal}
-          onClose={() => setShowDbModal(false)}
-          selectedDatabase={currentAppDatabase}
-          onDatabaseChange={setCurrentAppDatabase}
-        />
-      )}
-
       <TokenPurchaseModal
         isOpen={showTokenPurchaseModal}
         onClose={() => setShowTokenPurchaseModal(false)}
@@ -5775,16 +5432,8 @@ ${pdfUrlList}
         <EditIntegrationsModal
           isOpen={showEditIntegrationsModal}
           onClose={() => setShowEditIntegrationsModal(false)}
-          selectedAuth={editAppAuth}
-          onAuthChange={(auth) =>
-            setEditAppAuth(
-              editAppAuth.includes(auth)
-                ? editAppAuth.filter((a) => a !== auth)
-                : [...editAppAuth, auth],
-            )
-          }
-          selectedDatabase={currentAppDatabase}
-          onDatabaseChange={setCurrentAppDatabase}
+          backendEnabled={isEditBackendSelected}
+          onBackendChange={setBackendSelection}
         />
       )}
 

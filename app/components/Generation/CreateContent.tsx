@@ -57,8 +57,7 @@ interface CreateContentProps {
   prompt: string;
   uploadedFiles: UploadedFile[];
   fileInputRef: React.RefObject<HTMLInputElement>;
-  currentAppAuth: string[];
-  currentAppDatabase: string[];
+  backendEnabled: boolean;
   isRecording: boolean;
   voiceError: string | null;
   authPromptWarning: string | null;
@@ -73,10 +72,8 @@ interface CreateContentProps {
   startRecording: () => void;
   stopRecording: () => void;
   setVoiceError: (val: string | null) => void;
-  setShowAuthModal: (val: boolean) => void;
-  setCurrentAppAuth: (val: string[]) => void;
+  onToggleBackend: () => void;
   handleGenerate: (e: React.FormEvent) => void;
-  setShowDbModal: (val: boolean) => void;
   setAuthPromptWarning: (val: string | null) => void;
   setBlockedPromptWords: (val: string[]) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
@@ -92,8 +89,7 @@ export default function CreateContent({
   prompt,
   uploadedFiles,
   fileInputRef,
-  currentAppAuth,
-  currentAppDatabase,
+  backendEnabled,
   isRecording,
   voiceError,
   authPromptWarning,
@@ -108,10 +104,8 @@ export default function CreateContent({
   startRecording,
   stopRecording,
   setVoiceError,
-  setShowAuthModal,
-  setCurrentAppAuth,
+  onToggleBackend,
   handleGenerate,
-  setShowDbModal,
   setAuthPromptWarning,
   setBlockedPromptWords,
   textareaRef,
@@ -402,7 +396,9 @@ export default function CreateContent({
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                if (prompt.trim()) handleGenerate(e as any);
+                if (prompt.trim()) {
+                  handleGenerate(e as unknown as React.FormEvent);
+                }
               }
             }}
             rows={1}
@@ -476,36 +472,12 @@ export default function CreateContent({
               <div className="w-px h-5 bg-border-secondary mx-0.5" />
               <button
                 type="button"
-                onClick={() => setShowAuthModal(true)}
-                className={`p-2 rounded-lg transition ${currentAppAuth.length > 0 ? "text-blue-400 bg-blue-500/10 hover:bg-blue-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                onClick={onToggleBackend}
+                className={`p-2 rounded-lg transition ${backendEnabled ? "text-violet-300 bg-violet-500/10 hover:bg-violet-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
                 title={
-                  currentAppAuth.length > 0
-                    ? `Auth: ${currentAppAuth.map((a) => (a === "username-password" ? "Username/Password" : "Google OAuth")).join(" + ")}`
-                    : "Add authentication"
-                }
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                  />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDbModal(true)}
-                className={`p-2 rounded-lg transition ${currentAppDatabase.length > 0 ? "text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
-                title={
-                  currentAppDatabase.length > 0
-                    ? "Database configured"
-                    : "Database options"
+                  backendEnabled
+                    ? "Backend enabled (authentication + database)"
+                    : "Enable backend (authentication + database)"
                 }
               >
                 <svg
@@ -569,85 +541,30 @@ export default function CreateContent({
         </div>
       </form>
 
-      {currentAppAuth.length > 0 && (
+      {backendEnabled && (
         <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap max-w-2xl">
-          {currentAppAuth.map((auth) => (
-            <div
-              key={auth}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full"
+          <button
+            type="button"
+            onClick={onToggleBackend}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-100 border border-violet-300 rounded-full hover:bg-violet-200 transition dark:bg-violet-500/10 dark:border-violet-500/30 dark:hover:bg-violet-500/20"
+          >
+            <svg
+              className="w-3.5 h-3.5 text-violet-700 dark:text-violet-300"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.8}
             >
-              <svg
-                className="w-3.5 h-3.5 text-blue-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.5}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-                />
-              </svg>
-              <span className="text-xs text-blue-300 font-medium">
-                {auth === "username-password"
-                  ? "Username/Password"
-                  : "Google OAuth"}
-              </span>
-              <span className="text-xs text-violet-400">(2 tokens)</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setCurrentAppAuth(currentAppAuth.filter((a) => a !== auth))
-                }
-                className="ml-0.5 text-text-tertiary hover:text-text-primary transition"
-              >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {currentAppDatabase.length > 0 && (
-        <div className="flex items-center justify-center gap-2 mt-2 flex-wrap max-w-2xl">
-          {currentAppDatabase.map((db) => (
-            <div
-              key={db}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full"
-            >
-              <svg
-                className="w-3.5 h-3.5 text-emerald-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.5}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375"
-                />
-              </svg>
-              <span className="text-xs text-emerald-300 font-medium">
-                {db
-                  .replace(/-/g, " ")
-                  .replace(/\b\w/g, (ch) => ch.toUpperCase())}
-              </span>
-            </div>
-          ))}
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+              />
+            </svg>
+            <span className="text-xs text-violet-800 font-medium dark:text-violet-200">
+              Backend enabled (Auth + Database)
+            </span>
+          </button>
         </div>
       )}
     </>

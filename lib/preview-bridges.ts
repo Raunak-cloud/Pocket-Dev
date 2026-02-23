@@ -563,6 +563,26 @@ function ensureBridgeInLayout(layoutContent: string): string {
   ];
 
   let next = layoutContent;
+
+  // Repair previously corrupted signatures caused by older bridge injection
+  // logic that replaced the first "{children}" occurrence globally.
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*(?:<PocketTextEditBridge\s*\/>\s*)?(?:<PocketAuthPreviewBridge\s*\/>\s*)?\{\s*children\s*\}\s*:\s*\{\s*children\s*:\s*React\.ReactNode\s*\}\s*\)/g,
+    "$1({ children }: { children: React.ReactNode })",
+  );
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*(?:<PocketTextEditBridge\s*\/>\s*)?(?:<PocketAuthPreviewBridge\s*\/>\s*)?\{\s*children\s*\}\s*\)/g,
+    "$1({ children })",
+  );
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*[^)]*<[^)]*\{\s*children\s*\}\s*:\s*\{\s*children\s*:\s*React\.ReactNode\s*\}[^)]*\)/g,
+    "$1({ children }: { children: React.ReactNode })",
+  );
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*[^)]*<[^)]*\{\s*children\s*\}[^)]*\)/g,
+    "$1({ children })",
+  );
+
   for (const importLine of importsToEnsure) {
     if (next.includes(importLine)) continue;
     const imports = next.match(/^import[^\n]*$/gm);
@@ -580,17 +600,42 @@ function ensureBridgeInLayout(layoutContent: string): string {
     }
   }
 
-  if (!next.includes("<PocketTextEditBridge />")) {
-    next = next.replace(
-      /\{\s*children\s*\}/,
-      "<PocketTextEditBridge />{children}",
-    );
+  const hasTextBridge = next.includes("<PocketTextEditBridge />");
+  const hasAuthBridge = next.includes("<PocketAuthPreviewBridge />");
+  if (hasTextBridge && hasAuthBridge) {
+    return next;
   }
-  if (!next.includes("<PocketAuthPreviewBridge />")) {
+
+  const bridgesToInject = [
+    !hasTextBridge ? "<PocketTextEditBridge />" : null,
+    !hasAuthBridge ? "<PocketAuthPreviewBridge />" : null,
+  ]
+    .filter(Boolean)
+    .join("\n        ");
+
+  if (!bridgesToInject) {
+    return next;
+  }
+
+  // Prefer safe injection directly inside <body> to avoid touching function
+  // parameters or type annotations.
+  if (/<body\b[^>]*>/i.test(next)) {
     next = next.replace(
-      /\{\s*children\s*\}/,
-      "<PocketAuthPreviewBridge />{children}",
+      /(<body\b[^>]*>)/i,
+      `$1\n        ${bridgesToInject}`,
     );
+    return next;
+  }
+
+  // Fallback: only replace {children} inside the return JSX region.
+  const returnIdx = next.indexOf("return");
+  if (returnIdx >= 0) {
+    const before = next.slice(0, returnIdx);
+    const after = next.slice(returnIdx).replace(
+      /\{\s*children\s*\}/,
+      `${bridgesToInject}\n        {children}`,
+    );
+    next = `${before}${after}`;
   }
 
   return next;

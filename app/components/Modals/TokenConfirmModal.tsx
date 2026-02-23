@@ -35,6 +35,7 @@ export function TokenConfirmModal({
 
   const isGeneration = confirmationType === "generation";
   const authList = isGeneration ? currentAppAuth : editAppAuth;
+  const backendEnabled = authCost > 0 && databaseCost > 0;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -103,19 +104,37 @@ export function TokenConfirmModal({
                 </span>
                 <span className="font-medium text-text-primary">-{baseCost}</span>
               </div>
-              {authCost > 0 && (
+              {backendEnabled ? (
                 <div className="flex items-center justify-between">
                   <span className="text-text-secondary">
-                    Authentication ({authList.length} option{authList.length === 1 ? "" : "s"})
+                    Backend integration (Auth + Database)
                   </span>
-                  <span className="font-medium text-text-primary">-{authCost}</span>
+                  <span className="font-medium text-text-primary">
+                    -{authCost + databaseCost}
+                  </span>
                 </div>
-              )}
-              {databaseCost > 0 && (
-                <div className="flex items-center justify-between">
-                  <span className="text-text-secondary">Database setup</span>
-                  <span className="font-medium text-text-primary">-{databaseCost}</span>
-                </div>
+              ) : (
+                <>
+                  {authCost > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-text-secondary">
+                        Authentication ({authList.length} option
+                        {authList.length === 1 ? "" : "s"})
+                      </span>
+                      <span className="font-medium text-text-primary">
+                        -{authCost}
+                      </span>
+                    </div>
+                  )}
+                  {databaseCost > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-text-secondary">Database setup</span>
+                      <span className="font-medium text-text-primary">
+                        -{databaseCost}
+                      </span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 mt-2 border-t border-border-secondary/50">

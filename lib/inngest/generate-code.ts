@@ -11,6 +11,7 @@ import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
 import {
   acquireAuthConfigForBindingKey,
+  applySqlToManagedProject,
   type ManagedSupabaseAuthConfig,
 } from "@/lib/supabase-project-pool";
 import ts from "typescript";
@@ -22,6 +23,7 @@ const MAX_SYNTAX_REPAIR_ATTEMPTS = 2;
 const MAX_JSON_REPAIR_ATTEMPTS = 2;
 const MAX_STRUCTURE_REPAIR_ATTEMPTS = 2;
 const MAX_UX_REPAIR_ATTEMPTS = 3;
+const MAX_SCHEMA_REPAIR_ATTEMPTS = 2;
 const MAX_FILE_COUNT = 300;
 const MAX_FILE_CONTENT_LENGTH = 300_000;
 
@@ -98,9 +100,17 @@ PLATFORM CONTRACT (strict):
     - "/sign-in"
     - "/signup"
     - POST "/api/auth/signout" for logout buttons/forms
+    - GET "/api/auth/me" for client-side auth-state feedback (signed-in CTA/avatar/name)
+  * When auth UI is requested, auth CTAs must be session-aware:
+    - Signed out: show sign-in CTA/link
+    - Signed in: show user identity (email/name) and a logout action wired to POST "/api/auth/signout"
+    - Do not keep static "Sign In" CTA after successful auth
+  * For protected pages, rely on session-aware middleware/server checks; do not show login modal to authenticated users
+  * If using client-side auth state, wait for auth to load before deciding to show login prompts
   * Never mount a global auth modal in app/layout or all pages; auth UI should appear only on sign-in/sign-up pages or user-triggered actions
   * Do NOT generate custom Supabase auth clients, middleware, callback handlers, or custom auth API routes
   * Do NOT hardcode secrets or service-role keys
+  * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
 - Do not output malformed PostCSS config shapes.
 - Navigation must work on desktop and mobile (include hamburger toggle with open/close behavior on small screens).
 - Avoid horizontal overflow on mobile.
@@ -167,7 +177,7 @@ function projectNeedsManagedSupabase(
   dependencies: Record<string, string>,
   requirements: IntegrationRequirements,
 ): boolean {
-  if (requirements.requiresAuth || requirements.requiresDatabase) {
+  if (requirements.requiresAuth) {
     return true;
   }
 
@@ -180,23 +190,7 @@ function projectNeedsManagedSupabase(
       ["@supabase/supabase-js", "@supabase/ssr"].includes(pkg),
     );
 
-  const hasDatabaseSignals =
-    /DATABASE_URL|prisma\/schema\.prisma|@prisma\/client|drizzle|postgres|mysql|mongodb/i.test(
-      joined,
-    ) ||
-    Object.keys(dependencies).some((pkg) =>
-      [
-        "@prisma/client",
-        "prisma",
-        "pg",
-        "postgres",
-        "mysql2",
-        "mongodb",
-        "drizzle-orm",
-      ].includes(pkg),
-    );
-
-  return hasSupabaseSignals || hasDatabaseSignals;
+  return hasSupabaseSignals;
 }
 
 async function detectThemeWithGemini(userPrompt: string): Promise<SiteTheme> {
@@ -825,6 +819,31 @@ function ensureRequiredFiles(
     return `${lines.join("\n")}\n`;
   }
 
+  function isSupabaseDatabaseUrl(value: string): boolean {
+    const url = (value || "").toLowerCase();
+    if (!url.startsWith("postgres://") && !url.startsWith("postgresql://")) {
+      return false;
+    }
+    return url.includes("supabase.co") || url.includes("supabase.com");
+  }
+
+  function resolveSharedSupabaseDatabaseUrl(existingEnv: Map<string, string>): string {
+    const configuredShared =
+      existingEnv.get("SUPABASE_SHARED_DATABASE_URL") ||
+      process.env.SUPABASE_SHARED_DATABASE_URL ||
+      "";
+    if (configuredShared) {
+      return configuredShared;
+    }
+
+    const existingDatabaseUrl = existingEnv.get("DATABASE_URL") || "";
+    if (isSupabaseDatabaseUrl(existingDatabaseUrl)) {
+      return existingDatabaseUrl;
+    }
+
+    return "";
+  }
+
   function buildBrowserSupabaseClientContent(useSsr: boolean): string {
     if (useSsr) {
       return `import { createBrowserClient } from "@supabase/ssr";
@@ -1281,44 +1300,109 @@ export const config = {
   if (hasAuthIntegration) {
     upsertFile(
       "app/auth/callback/route.ts",
-      `import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function GET(request: Request) {
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/";
+  const redirectUrl = new URL(next, origin);
+  const response = NextResponse.redirect(redirectUrl);
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return response;
+  }
 
   if (code) {
-    const supabase = await createClient();
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
+    });
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  return NextResponse.redirect(\`\${origin}\${next}\`);
+  return response;
 }
 `,
     );
 
     upsertFile(
       "app/api/auth/signin/route.ts",
-      `import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function POST(request: Request) {
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+function applyAuthCookies(from: NextResponse, to: NextResponse) {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json(
+      { success: false, error: "Missing Supabase environment variables" },
+      { status: 500 },
+    );
+  }
+
   try {
     const { email, password, next } = await request.json();
-    const supabase = await createClient();
+    const cookieCarrier = NextResponse.next();
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieCarrier.cookies.set(name, value, options);
+          });
+        },
+      },
+    });
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: String(email || ""),
       password: String(password || ""),
     });
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+      const res = NextResponse.json(
+        { success: false, error: error.message },
+        { status: 400 },
+      );
+      applyAuthCookies(cookieCarrier, res);
+      return res;
     }
 
-    return NextResponse.json({ success: true, next: typeof next === "string" ? next : "/" });
+    const res = NextResponse.json({
+      success: true,
+      next: typeof next === "string" ? next : "/",
+      user: data.user ? { id: data.user.id, email: data.user.email ?? null } : null,
+    });
+    applyAuthCookies(cookieCarrier, res);
+    return res;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected server error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });
@@ -1329,27 +1413,66 @@ export async function POST(request: Request) {
 
     upsertFile(
       "app/api/auth/signup/route.ts",
-      `import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function POST(request: Request) {
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+function applyAuthCookies(from: NextResponse, to: NextResponse) {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json(
+      { success: false, error: "Missing Supabase environment variables" },
+      { status: 500 },
+    );
+  }
+
   try {
     const { email, password, next } = await request.json();
-    const supabase = await createClient();
+    const cookieCarrier = NextResponse.next();
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieCarrier.cookies.set(name, value, options);
+          });
+        },
+      },
+    });
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email: String(email || ""),
       password: String(password || ""),
     });
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+      const res = NextResponse.json(
+        { success: false, error: error.message },
+        { status: 400 },
+      );
+      applyAuthCookies(cookieCarrier, res);
+      return res;
     }
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       success: true,
       next: typeof next === "string" ? next : "/sign-in",
+      user: data.user ? { id: data.user.id, email: data.user.email ?? null } : null,
     });
+    applyAuthCookies(cookieCarrier, res);
+    return res;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected server error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });
@@ -1360,13 +1483,103 @@ export async function POST(request: Request) {
 
     upsertFile(
       "app/api/auth/signout/route.ts",
-      `import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function POST() {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-  return NextResponse.json({ success: true, next: "/sign-in" });
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+function applyAuthCookies(from: NextResponse, to: NextResponse) {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json(
+      { success: false, error: "Missing Supabase environment variables" },
+      { status: 500 },
+    );
+  }
+
+  const cookieCarrier = NextResponse.next();
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          cookieCarrier.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    const res = NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    applyAuthCookies(cookieCarrier, res);
+    return res;
+  }
+
+  const res = NextResponse.json({ success: true, next: "/sign-in" });
+  applyAuthCookies(cookieCarrier, res);
+  return res;
+}
+`,
+    );
+
+    upsertFile(
+      "app/api/auth/me/route.ts",
+      `import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+export async function GET(request: NextRequest) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json(
+      { success: false, signedIn: false, error: "Missing Supabase environment variables" },
+      { status: 500 },
+    );
+  }
+
+  const cookieCarrier = NextResponse.next();
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          cookieCarrier.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const res = NextResponse.json({
+    success: true,
+    signedIn: Boolean(user),
+    user: user ? { id: user.id, email: user.email ?? null } : null,
+  });
+  for (const cookie of cookieCarrier.cookies.getAll()) {
+    res.cookies.set(cookie);
+  }
+  return res;
 }
 `,
     );
@@ -1403,13 +1616,35 @@ export async function GET(request: Request) {
       `"use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 export default function SignInPage() {
+  const searchParams = useSearchParams();
+  const nextPath = searchParams.get("next") || "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const verify = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.signedIn) {
+          window.location.replace(nextPath);
+          return;
+        }
+      } catch {
+        // If auth check fails, allow manual sign-in flow.
+      }
+      setCheckingSession(false);
+    };
+
+    void verify();
+  }, [nextPath]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1419,10 +1654,15 @@ export default function SignInPage() {
     const res = await fetch("/api/auth/signin", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, next: "/" }),
+      body: JSON.stringify({ email, password, next: nextPath }),
     });
     const raw = await res.text();
-    let data: { success?: boolean; error?: string; next?: string } = {};
+    let data: {
+      success?: boolean;
+      error?: string;
+      next?: string;
+      user?: { id?: string; email?: string | null } | null;
+    } = {};
     try {
       data = raw ? JSON.parse(raw) : {};
     } catch {
@@ -1439,6 +1679,16 @@ export default function SignInPage() {
 
     window.location.href = data?.next || "/";
   };
+
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
+          <p className="text-sm text-slate-300">Checking your session...</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
@@ -1478,7 +1728,7 @@ export default function SignInPage() {
         </form>
 
         <a
-          href="/api/auth/oauth?provider=google&next=%2F"
+          href={\`/api/auth/oauth?provider=google&next=\${encodeURIComponent(nextPath)}\`}
           className="block w-full rounded-lg border border-slate-700 px-3 py-2 text-center"
         >
           Continue with Google
@@ -1502,13 +1752,35 @@ export default function SignInPage() {
       `"use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 export default function SignupPage() {
+  const searchParams = useSearchParams();
+  const nextPath = searchParams.get("next") || "/sign-in";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const verify = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.signedIn) {
+          window.location.replace("/");
+          return;
+        }
+      } catch {
+        // If auth check fails, allow manual sign-up flow.
+      }
+      setCheckingSession(false);
+    };
+
+    void verify();
+  }, [nextPath]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1518,10 +1790,15 @@ export default function SignupPage() {
     const res = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, next: "/sign-in" }),
+      body: JSON.stringify({ email, password, next: nextPath }),
     });
     const raw = await res.text();
-    let data: { success?: boolean; error?: string; next?: string } = {};
+    let data: {
+      success?: boolean;
+      error?: string;
+      next?: string;
+      user?: { id?: string; email?: string | null } | null;
+    } = {};
     try {
       data = raw ? JSON.parse(raw) : {};
     } catch {
@@ -1538,6 +1815,16 @@ export default function SignupPage() {
 
     window.location.href = data?.next || "/sign-in";
   };
+
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
+          <p className="text-sm text-slate-300">Checking your session...</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
@@ -1666,15 +1953,14 @@ export default function SignupPage() {
     }
 
     if (hasDatabaseIntegration) {
-      const managedDatabaseUrl = managedAuthConfig?.databaseUrl || "";
-      const legacyDatabaseUrl =
-        !managedAuthConfig &&
-        (existingEnv.get("DATABASE_URL") || process.env.DATABASE_URL || "");
-      if (managedDatabaseUrl) {
-        envValues.DATABASE_URL = managedDatabaseUrl;
-      } else if (legacyDatabaseUrl) {
-        envValues.DATABASE_URL = legacyDatabaseUrl;
+      const sharedSupabaseDatabaseUrl = resolveSharedSupabaseDatabaseUrl(existingEnv);
+      if (!sharedSupabaseDatabaseUrl) {
+        throw new Error(
+          "Database integration requires Supabase Postgres. Set SUPABASE_SHARED_DATABASE_URL to your shared Supabase connection string.",
+        );
       }
+
+      envValues.DATABASE_URL = sharedSupabaseDatabaseUrl;
     }
 
     if (Object.keys(envValues).length > 0) {
@@ -1956,6 +2242,115 @@ function validateSyntaxOrThrow(files: GeneratedFile[]) {
   }
 }
 
+function extractSupabaseTableReferences(files: GeneratedFile[]): string[] {
+  const tableNames = new Set<string>();
+  const codeFiles = files.filter(
+    (f) =>
+      f.path.endsWith(".ts") ||
+      f.path.endsWith(".tsx") ||
+      f.path.endsWith(".js") ||
+      f.path.endsWith(".jsx"),
+  );
+
+  for (const file of codeFiles) {
+    const re = /\.from\(\s*["'`]([a-zA-Z0-9_.-]+)["'`]\s*\)/g;
+    for (const match of file.content.matchAll(re)) {
+      const raw = String(match[1] || "").trim();
+      if (!raw) continue;
+      const lowered = raw.toLowerCase();
+      if (
+        lowered.startsWith("auth.") ||
+        lowered.startsWith("storage.") ||
+        lowered.startsWith("information_schema.") ||
+        lowered.startsWith("pg_catalog.")
+      ) {
+        continue;
+      }
+      const normalized = lowered.includes(".")
+        ? lowered.split(".").pop() || lowered
+        : lowered;
+      if (normalized) {
+        tableNames.add(normalized);
+      }
+    }
+  }
+
+  return Array.from(tableNames.values()).sort();
+}
+
+function extractCreatedTablesFromSql(sql: string): Set<string> {
+  const tables = new Set<string>();
+  const re =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?/gi;
+  for (const match of sql.matchAll(re)) {
+    const table = String(match[1] || "").toLowerCase();
+    if (table) {
+      tables.add(table);
+    }
+  }
+  return tables;
+}
+
+function collectSupabaseSchemaIssues(
+  files: GeneratedFile[],
+  requirements: IntegrationRequirements,
+): LintIssue[] {
+  if (!requirements.requiresDatabase) return [];
+
+  const issues: LintIssue[] = [];
+  const schemaFile = files.find(
+    (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
+  );
+
+  if (!schemaFile) {
+    issues.push({
+      path: "supabase/schema.sql",
+      line: 1,
+      column: 1,
+      rule: "schema/missing-file",
+      message:
+        "Database integration requires supabase/schema.sql with CREATE TABLE statements.",
+    });
+    return issues;
+  }
+
+  const schemaContent = schemaFile.content || "";
+  const createdTables = extractCreatedTablesFromSql(schemaContent);
+  const referencedTables = extractSupabaseTableReferences(files);
+
+  if (createdTables.size === 0) {
+    issues.push({
+      path: "supabase/schema.sql",
+      line: 1,
+      column: 1,
+      rule: "schema/no-create-table",
+      message:
+        "supabase/schema.sql must include CREATE TABLE statements for app persistence.",
+    });
+  }
+
+  for (const table of referencedTables) {
+    if (!createdTables.has(table)) {
+      issues.push({
+        path: "supabase/schema.sql",
+        line: 1,
+        column: 1,
+        rule: "schema/missing-table",
+        message: `Table "${table}" is used in code via supabase.from(...) but not created in supabase/schema.sql.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function buildSchemaBootstrapSql(schemaSql: string): string {
+  const trimmed = schemaSql.trim();
+  const prelude = `create extension if not exists "pgcrypto";`;
+  if (!trimmed) return prelude;
+  return `${prelude}\n\n${trimmed}`;
+}
+
 async function lintAllFiles(files: GeneratedFile[]): Promise<{
   fixedFiles: GeneratedFile[];
   lintReport: { passed: boolean; errors: number; warnings: number };
@@ -2058,9 +2453,7 @@ export const generateCodeFunction = inngest.createFunction(
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
     const integrationRequirements = detectIntegrationRequirements(prompt);
-    const needsManagedAuth =
-      integrationRequirements.requiresAuth ||
-      integrationRequirements.requiresDatabase;
+    const needsManagedAuth = integrationRequirements.requiresAuth;
     let managedAuthConfig: ManagedSupabaseAuthConfig | null = null;
     if (needsManagedAuth) {
       managedAuthConfig = await step.run("allocate-managed-supabase", async () => {
@@ -2095,6 +2488,9 @@ STRICT IMPLEMENTATION RULES:
   * Auth internals are prebuilt by platform scaffolding; do not generate custom auth internals
   * If auth UI is needed, only link CTAs/buttons to: "/sign-in", "/signup"
   * For logout buttons, submit POST to "/api/auth/signout"
+  * For client-side signed-in feedback (CTA/avatar/name), read GET "/api/auth/me"
+  * Auth CTAs must be state-aware (signed-out vs signed-in). Show user identity + logout when signed in.
+  * Never show login modal for already authenticated users; wait for auth state before prompting login.
   * Do not place always-visible auth modals globally; auth surfaces only during sign-in/sign-up operations
 - Preserve accessibility, semantic HTML, and responsive behavior.
 - Do not output lockfiles or unsafe file paths.
@@ -2336,6 +2732,43 @@ DESIGN DIRECTION:
           dependencies = repaired.dependencies;
         }
 
+        for (
+          let attempt = 1;
+          attempt <= MAX_SCHEMA_REPAIR_ATTEMPTS + 1;
+          attempt++
+        ) {
+          const schemaIssues = collectSupabaseSchemaIssues(
+            files,
+            integrationRequirements,
+          );
+          if (schemaIssues.length === 0) {
+            break;
+          }
+
+          if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
+            const first = schemaIssues[0];
+            throw new Error(
+              `Schema repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+            );
+          }
+
+          console.warn(
+            `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
+          );
+          await sendProgress(projectId, "[4/7] Strengthening backend setup...");
+
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: schemaIssues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+          });
+          files = repaired.files;
+          dependencies = repaired.dependencies;
+        }
+
         validateSyntaxOrThrow(files);
         console.log(`Parsed ${files.length} files successfully`);
         return { files, dependencies };
@@ -2372,10 +2805,14 @@ DESIGN DIRECTION:
         let workingFiles = files;
         let workingDependencies = dependencies;
         let lintResult = await lintAllFiles(workingFiles);
+        let schemaIssues = collectSupabaseSchemaIssues(
+          workingFiles,
+          integrationRequirements,
+        );
 
         for (
           let attempt = 1;
-          lintResult.lintReport.errors > 0 &&
+          (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
           attempt <= MAX_LINT_REPAIR_ATTEMPTS;
           attempt++
         ) {
@@ -2383,9 +2820,13 @@ DESIGN DIRECTION:
             throw new Error("Generation cancelled by user");
           }
 
-          const firstIssue = lintResult.lintIssues[0];
+          const issuesToFix =
+            lintResult.lintIssues.length > 0
+              ? [...lintResult.lintIssues, ...schemaIssues]
+              : schemaIssues;
+          const firstIssue = issuesToFix[0];
           console.warn(
-            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
           await sendProgress(projectId, "[5/7] Fixing code quality...");
 
@@ -2393,7 +2834,7 @@ DESIGN DIRECTION:
             originalPrompt: prompt,
             files: workingFiles,
             dependencies: workingDependencies,
-            lintIssues: lintResult.lintIssues,
+            lintIssues: issuesToFix,
             requirements: integrationRequirements,
             managedAuthConfig,
           });
@@ -2401,10 +2842,17 @@ DESIGN DIRECTION:
           workingFiles = repaired.files;
           workingDependencies = repaired.dependencies;
           lintResult = await lintAllFiles(workingFiles);
+          schemaIssues = collectSupabaseSchemaIssues(
+            workingFiles,
+            integrationRequirements,
+          );
         }
 
-        if (lintResult.lintReport.errors > 0) {
-          const firstIssue = lintResult.lintIssues[0];
+        if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
+          const firstIssue =
+            lintResult.lintIssues.length > 0
+              ? lintResult.lintIssues[0]
+              : schemaIssues[0];
           throw new Error(
             `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
@@ -2433,7 +2881,43 @@ DESIGN DIRECTION:
         `Post-scaffold lint failed. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
       );
     }
-    // Step 5: Notify completion via API
+
+    const finalSchemaIssues = collectSupabaseSchemaIssues(
+      finalFiles,
+      integrationRequirements,
+    );
+    if (finalSchemaIssues.length > 0) {
+      const firstIssue = finalSchemaIssues[0];
+      throw new Error(
+        `Schema validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
+      );
+    }
+
+    if (integrationRequirements.requiresDatabase) {
+      if (!managedAuthConfig?.projectRef) {
+        throw new Error(
+          "Database integration requires a managed Supabase project, but no managed project was allocated.",
+        );
+      }
+
+      const schemaFile = finalFiles.find(
+        (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
+      );
+      if (!schemaFile || !schemaFile.content.trim()) {
+        throw new Error(
+          "Database integration requires a non-empty supabase/schema.sql file.",
+        );
+      }
+
+      await sendProgress(projectId, "[6/7] Setting up backend data...");
+      await step.run("bootstrap-managed-supabase-schema", async () => {
+        const sql = buildSchemaBootstrapSql(schemaFile.content);
+        await applySqlToManagedProject(managedAuthConfig.projectRef, sql);
+        return { projectRef: managedAuthConfig.projectRef, applied: true };
+      });
+    }
+
+    // Step 6: Notify completion via API
     await sendProgress(projectId, "[6/7] Finalizing and saving your app...");
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;

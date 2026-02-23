@@ -45,6 +45,13 @@ This project now supports strict per-app Supabase isolation for generated apps.
   - Example:
     `postgresql://postgres:{DB_PASSWORD}@db.{PROJECT_REF}.supabase.co:5432/postgres`
 
+## Shared database mode (no DB isolation)
+
+- `SUPABASE_SHARED_DATABASE_URL`
+  - If set, generated apps with database integration will all use this single Supabase Postgres URL as `DATABASE_URL`.
+  - This disables per-app DB isolation for generated apps while still allowing managed Supabase auth allocation.
+  - Must be a Supabase Postgres connection string (`postgresql://...supabase...`).
+
 ## Lifecycle behavior
 
 - Generation allocates a pool project when auth/db is requested.

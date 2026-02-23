@@ -64,27 +64,69 @@ function ensureImport(content: string, providerName: string, providerPath: strin
   return `${content.slice(0, insertAt)}\n${importLine}${content.slice(insertAt)}`;
 }
 
+function repairCorruptedLayoutSignature(content: string): string {
+  let next = content;
+
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*[^)]*<[^)]*\{\s*children\s*\}\s*:\s*\{\s*children\s*:\s*React\.ReactNode\s*\}[^)]*\)/g,
+    "$1({ children }: { children: React.ReactNode })",
+  );
+  next = next.replace(
+    /(export\s+default\s+function\s+[A-Za-z0-9_]+\s*)\(\s*[^)]*<[^)]*\{\s*children\s*\}[^)]*\)/g,
+    "$1({ children })",
+  );
+
+  return next;
+}
+
 function wrapChildrenWithProviders(content: string, providers: string[]): string {
   if (providers.length === 0) return content;
-  if (!/\{children\}/.test(content)) return content;
+  if (!/\{\s*children\s*\}/.test(content)) return content;
 
   const wrapper = providers.reduceRight(
     (acc, provider) => `<${provider}>${acc}</${provider}>`,
-    "{children}"
+    "{children}",
   );
 
-  return content.replace("{children}", wrapper);
+  if (/<body\b[^>]*>/i.test(content)) {
+    const bodyMatch = content.match(/<body\b[^>]*>/i);
+    if (bodyMatch?.index !== undefined) {
+      const start = bodyMatch.index + bodyMatch[0].length;
+      const before = content.slice(0, start);
+      const after = content.slice(start).replace(/\{\s*children\s*\}/, wrapper);
+      return `${before}${after}`;
+    }
+  }
+
+  const returnIdx = content.indexOf("return");
+  if (returnIdx >= 0) {
+    const before = content.slice(0, returnIdx);
+    const after = content.slice(returnIdx).replace(/\{\s*children\s*\}/, wrapper);
+    return `${before}${after}`;
+  }
+
+  return content;
 }
 
 function applyProviderGuards(files: FileEntry[]): FileEntry[] {
-  const layout = files.find((f) => f.path === "app/layout.tsx");
+  const layoutCandidates = [
+    "app/layout.tsx",
+    "app/layout.jsx",
+    "app/layout.ts",
+    "app/layout.js",
+    "src/app/layout.tsx",
+    "src/app/layout.jsx",
+    "src/app/layout.ts",
+    "src/app/layout.js",
+  ];
+  const layout = files.find((f) => layoutCandidates.includes(f.path));
   if (!layout) return files;
 
   const providerToPath = collectProviderExports(files);
   const requiredProviders = collectRequiredProviders(files);
   if (requiredProviders.size === 0) return files;
 
-  let nextLayout = layout.content;
+  let nextLayout = repairCorruptedLayoutSignature(layout.content);
   const missingProviders: string[] = [];
 
   for (const provider of requiredProviders) {
@@ -103,7 +145,7 @@ function applyProviderGuards(files: FileEntry[]): FileEntry[] {
   nextLayout = wrapChildrenWithProviders(nextLayout, missingProviders);
 
   return files.map((f) =>
-    f.path === "app/layout.tsx" ? { ...f, content: nextLayout } : f
+    f.path === layout.path ? { ...f, content: nextLayout } : f,
   );
 }
 
@@ -127,4 +169,3 @@ export function ensureProviderGuardsForFileMap(
   }
   return next;
 }
-
