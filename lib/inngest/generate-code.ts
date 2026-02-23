@@ -2556,6 +2556,8 @@ function buildSchemaBootstrapSql(schemaSql: string): string {
   const prelude = `create extension if not exists "pgcrypto";`;
   if (!trimmed) return prelude;
 
+  const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+
   const normalized = trimmed.replace(/\r\n/g, "\n");
 
   // Make common DDL idempotent across repeated edit runs.
@@ -2581,7 +2583,15 @@ function buildSchemaBootstrapSql(schemaSql: string): string {
   while ((match = policyRe.exec(withIdempotentCreates)) !== null) {
     const policyName = match[1];
     const tableName = match[2];
-    policyDrops.push(`drop policy if exists ${policyName} on ${tableName};`);
+    const tableLookup = escapeSqlLiteral(tableName);
+    const dropStmt = escapeSqlLiteral(
+      `drop policy if exists ${policyName} on ${tableName};`,
+    );
+    policyDrops.push(`do $$ begin
+  if to_regclass('${tableLookup}') is not null then
+    execute '${dropStmt}';
+  end if;
+end $$;`);
   }
 
   const dedupedDrops = Array.from(new Set(policyDrops));
@@ -2590,7 +2600,57 @@ function buildSchemaBootstrapSql(schemaSql: string): string {
       ? `-- idempotent policy reset for repeat runs\n${dedupedDrops.join("\n")}\n`
       : "";
 
-  return `${prelude}\n\n${policyPrelude}${withIdempotentCreates}`;
+  // Guard RLS/policy statements so missing tables do not fail bootstrap.
+  const withGuardedRls = withIdempotentCreates.replace(
+    /\balter\s+table\s+((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)\s+(enable|disable|force|no\s+force)\s+row\s+level\s+security\s*;/gi,
+    (stmt, tableExpr: string) => {
+      const tableLookup = escapeSqlLiteral(tableExpr);
+      const executeStmt = escapeSqlLiteral(String(stmt).trim());
+      return `do $$ begin
+  if to_regclass('${tableLookup}') is not null then
+    execute '${executeStmt}';
+  end if;
+end $$;`;
+    },
+  );
+
+  const withGuardedPolicies = withGuardedRls.replace(
+    /\bcreate\s+policy\s+("[^"]+"|[A-Za-z_][\w$]*)\s+on\s+((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))?)[\s\S]*?;/gi,
+    (stmt, _policyName: string, tableExpr: string) => {
+      const tableLookup = escapeSqlLiteral(tableExpr);
+      const executeStmt = String(stmt).trim();
+      const executeDollarTag = "$policy$";
+      return `do $$ begin
+  if to_regclass('${tableLookup}') is not null then
+    execute ${executeDollarTag}${executeStmt}${executeDollarTag};
+  end if;
+end $$;`;
+    },
+  );
+
+  return `${prelude}\n\n${policyPrelude}${withGuardedPolicies}`;
+}
+
+function buildTableCreationPhaseSql(schemaSql: string): string {
+  const trimmed = schemaSql.trim();
+  const prelude = `create extension if not exists "pgcrypto";`;
+  if (!trimmed) return prelude;
+
+  const normalized = trimmed.replace(/\r\n/g, "\n");
+  const createTableStatements = Array.from(
+    normalized.matchAll(/\bcreate\s+table[\s\S]*?;/gi),
+  ).map((m) =>
+    String(m[0] || "").replace(
+      /\bcreate\s+table\s+(?!if\s+not\s+exists\b)/i,
+      "create table if not exists ",
+    ),
+  );
+
+  if (createTableStatements.length === 0) {
+    return prelude;
+  }
+
+  return `${prelude}\n\n-- phase 1: create tables first\n${createTableStatements.join("\n\n")}`;
 }
 
 async function lintAllFiles(files: GeneratedFile[]): Promise<{
@@ -3160,6 +3220,9 @@ DESIGN DIRECTION:
 
       await sendProgress(projectId, "[6/7] Setting up backend data...");
       await step.run("bootstrap-managed-supabase-schema", async () => {
+        const tablePhaseSql = buildTableCreationPhaseSql(schemaFile.content);
+        await applySqlToManagedProject(managedAuthConfig.projectRef, tablePhaseSql);
+
         const sql = buildSchemaBootstrapSql(schemaFile.content);
         await applySqlToManagedProject(managedAuthConfig.projectRef, sql);
         return { projectRef: managedAuthConfig.projectRef, applied: true };
