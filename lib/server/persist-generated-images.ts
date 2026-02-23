@@ -452,19 +452,40 @@ function buildGenerationPrompt(
   globalContextHint?: string,
   exclusionHint?: string,
 ): string {
-  // If this is a user-provided prompt (from image regeneration), use it with minimal additions
+  // If this is a user-provided prompt (from image regeneration), respect their intent
+  // but frame it as a single photographic subject to prevent collection/grid output.
   if (isUserProvided) {
     const userPrompt = trimPrompt(prompt);
     if (!userPrompt) {
       return `${getThemeDefaultPrompt(siteTheme)}, high quality, photorealistic`;
     }
-    const minimalPrompt = `${userPrompt}. Single subject, photorealistic photograph. NEVER generate collage, grid, multiple images, text, labels, or clipart.`;
-    const truncatedUserPrompt = minimalPrompt.slice(0, 500);
+
+    // Check if the user already wrote a complete descriptive prompt (5+ words)
+    // vs a short label like "german shepherd" or "pizza"
+    const wordCount = userPrompt.split(/\s+/).length;
+    let positivePrompt: string;
+
+    if (wordCount >= 5) {
+      // User wrote a detailed prompt — use it directly, just ensure singular framing
+      positivePrompt = `A professional photograph of ${userPrompt}, one single subject centered in frame, sharp focus, clean background`;
+    } else {
+      // Short prompt like "german shepherd" — the model needs more guidance to avoid
+      // generating a breed reference sheet / collection / collage
+      positivePrompt = `A close-up professional photograph of one single ${userPrompt}, centered in the frame, looking natural, soft studio lighting, clean blurred background, shallow depth of field, photorealistic, high detail`;
+    }
+
+    const negativePrompt = "collage, grid, multiple subjects, collection, reference sheet, side by side, split image, text, labels, captions, watermarks, clipart, cartoon, illustration, low quality, blurry";
+
+    const finalPrompt = `${positivePrompt}. NEVER generate: ${negativePrompt}`;
+    const truncatedPrompt = finalPrompt.slice(0, 500);
+
     console.log(`\n========== IMAGE PROMPT (User-Provided) [${source}] ==========`);
-    console.log(`  Original input: "${userPrompt}"`);
-    console.log(`  FINAL PROMPT → "${truncatedUserPrompt}"`);
+    console.log(`  Original input:  "${userPrompt}" (${wordCount} words)`);
+    console.log(`  Positive prompt: "${positivePrompt}"`);
+    console.log(`  Negative prompt: "${negativePrompt}"`);
+    console.log(`  FINAL PROMPT →   "${truncatedPrompt}"`);
     console.log(`=============================================================\n`);
-    return truncatedUserPrompt;
+    return truncatedPrompt;
   }
 
   // --- AUTO-GENERATED PROMPT CONSTRUCTION ---
