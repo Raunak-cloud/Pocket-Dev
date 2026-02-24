@@ -126,6 +126,7 @@ ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Target stack: Next.js App Router + TypeScript + Tailwind utility classes.
 - Required core files: app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css.
+- DO NOT generate app/not-found.tsx — it is automatically injected by the platform. Do not include it in your output.
 - MULTI-PAGE RULE: Every internal navigation link in the navbar/header/footer MUST have a corresponding page file. If the navbar contains links to "About", "Services", "Contact", "Blog", etc., you MUST generate app/about/page.tsx, app/services/page.tsx, app/contact/page.tsx, app/blog/page.tsx, etc. No dead links — every href="/path" must resolve to a real page.
 - Each generated sub-page should have real, domain-appropriate content (not just a placeholder heading). At minimum include: a hero/header section, 1-2 content sections relevant to the page topic, and consistent navigation (shared layout).
 - Use Next.js App Router file-based routing: each page is a separate app/{route}/page.tsx file.
@@ -2386,6 +2387,40 @@ export default function SignupPage() {
   }
 
   files = ensureProviderGuardsForGeneratedFiles(files);
+
+  // Inject a pre-built not-found.tsx for all projects — saves AI tokens
+  // and ensures a consistent, branded 404 page.
+  upsertFile(
+    "app/not-found.tsx",
+    `import Link from "next/link";
+
+export default function NotFound() {
+  return (
+    <div className="min-h-screen flex items-center justify-center px-6 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-950 dark:to-gray-900">
+      <div className="text-center max-w-md">
+        <p className="text-8xl font-extrabold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+          404
+        </p>
+        <h1 className="mt-4 text-2xl font-bold text-gray-900 dark:text-white">
+          Page not found
+        </h1>
+        <p className="mt-3 text-gray-600 dark:text-gray-400 leading-relaxed">
+          Sorry, the page you are looking for does not exist or has been moved.
+        </p>
+        <Link
+          href="/"
+          className="mt-8 inline-flex items-center gap-2 rounded-lg bg-gray-900 dark:bg-white px-5 py-2.5 text-sm font-medium text-white dark:text-gray-900 transition-all hover:opacity-90"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+          Back to Home
+        </Link>
+      </div>
+    </div>
+  );
+}
+`,
+  );
+
   return files;
 }
 
@@ -3308,6 +3343,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
 - Return a complete runnable project with app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
+- DO NOT generate app/not-found.tsx — it is automatically injected by the platform.
 - EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
 - Each sub-page must contain real, domain-relevant content — at minimum a hero/header + 1-2 meaningful content sections. Not just an empty placeholder.
 - If app/globals.css contains @layer base/components/utilities, include matching @tailwind directives.
