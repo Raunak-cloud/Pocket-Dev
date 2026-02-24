@@ -30,6 +30,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshUserData: () => Promise<void>;
+  applyAppTokenBalance: (appTokens: number) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -136,6 +137,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [authUser, isSignedIn]);
 
+  const applyAppTokenBalance = useCallback((appTokens: number) => {
+    setUserData((prev) => {
+      if (!prev) return prev;
+      return { ...prev, appTokens };
+    });
+  }, []);
+
   // Create a compatible user object for components expecting Firebase user
   const compatibleUser: CompatibleUser | null = authUser ? {
     uid: authUser.id,
@@ -153,7 +161,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearNewUser,
       signInWithGoogle,
       signOut,
-      refreshUserData
+      refreshUserData,
+      applyAppTokenBalance
     }}>
       {children}
     </AuthContext.Provider>
@@ -167,4 +176,3 @@ export function useAuth() {
   }
   return context;
 }
-

@@ -1,7 +1,6 @@
 ﻿import { auth } from '@/lib/supabase-auth/server';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { deductAppTokens } from '@/lib/db-utils';
 import { rebindAuthConfigBindingKey } from '@/lib/supabase-project-pool';
 
 export async function POST(req: Request) {
@@ -39,17 +38,6 @@ export async function POST(req: Request) {
 
     // Use Prisma transaction to create project and update user atomically
     const result = await prisma.$transaction(async (tx) => {
-      // Deduct 2 app tokens
-      const tokenResult = await deductAppTokens(
-        user.id,
-        2,
-        `Project creation: ${prompt.substring(0, 50)}...`,
-      );
-
-      if (!tokenResult.success) {
-        throw new Error(tokenResult.error || 'Failed to deduct app tokens');
-      }
-
       // Create project
       const project = await tx.project.create({
         data: {
@@ -76,7 +64,15 @@ export async function POST(req: Request) {
       await rebindAuthConfigBindingKey(generationRunBindingKey, result.id);
     }
 
-    return NextResponse.json({ projectId: result.id });
+    const updatedUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { appTokens: true },
+    });
+
+    return NextResponse.json({
+      projectId: result.id,
+      appTokens: updatedUser?.appTokens ?? user.appTokens,
+    });
   } catch (error) {
     console.error('[POST /api/projects/create] Error:', error);
     return NextResponse.json(

@@ -236,6 +236,7 @@ function ReactGeneratorContent() {
     userData,
     loading: authLoading,
     refreshUserData,
+    applyAppTokenBalance,
     isNewUser,
     clearNewUser,
   } = useAuth();
@@ -307,6 +308,7 @@ function ReactGeneratorContent() {
     useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState<
     "generation" | "edit" | null
   >(null);
@@ -863,7 +865,12 @@ function ReactGeneratorContent() {
       throw new Error(data.error || "Failed to save project");
     }
 
-    await refreshUserData();
+    if (typeof data.appTokens === "number") {
+      applyAppTokenBalance(data.appTokens);
+      void refreshUserData();
+    } else {
+      await refreshUserData();
+    }
     return data.projectId as string;
   };
 
@@ -1209,8 +1216,9 @@ function ReactGeneratorContent() {
 
   // Delete project
   const deleteProject = async (projectId: string) => {
-    if (!user) return;
+    if (!user || isDeletingProject) return;
 
+    setIsDeletingProject(true);
     try {
       const response = await fetch("/api/projects/delete", {
         method: "DELETE",
@@ -1233,11 +1241,14 @@ function ReactGeneratorContent() {
 
       // Refresh projects list
       await loadSavedProjects();
+      await refreshUserData();
       setShowDeleteModal(false);
       setProjectToDelete(null);
     } catch (error) {
       console.error("Error deleting project:", error);
       setError("Failed to delete project. Please try again.");
+    } finally {
+      setIsDeletingProject(false);
     }
   };
 
@@ -1548,6 +1559,36 @@ function ReactGeneratorContent() {
     );
   const getEditAppCost = () =>
     roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total);
+
+  const confirmGenerationStart = async () => {
+    const generationCost = getGenerationAppCost();
+    const appTokenBalance = userData?.appTokens || 0;
+
+    // Reflect deduction immediately in the UI on confirm click.
+    applyAppTokenBalance(roundToken(Math.max(0, appTokenBalance - generationCost)));
+    setShowTokenConfirmModal(null);
+
+    try {
+      await adjustAppTokens(-generationCost, "Project creation token usage");
+    } catch (err) {
+      console.error("Error deducting generation tokens:", err);
+      await refreshUserData();
+      const message =
+        err instanceof Error ? err.message : "Failed to deduct app tokens";
+      setError(message);
+      if (message.toLowerCase().includes("insufficient")) {
+        const deficit = Math.max(0, generationCost - appTokenBalance);
+        setInsufficientTokenMessage(
+          `You need ${formatTokens(generationCost)} app tokens to continue but only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more app token${deficit > 1 ? "s" : ""} to continue.`,
+        );
+        setTokenPurchaseAmount(0);
+        setShowTokenPurchaseModal(true);
+      }
+      return;
+    }
+
+    startGeneration();
+  };
 
   const buildBackendRequirementPrompt = (mode: "new" | "existing") => {
     const integrationScope =
@@ -4838,12 +4879,14 @@ ${pdfUrlList}
         <DeleteConfirmModal
           isOpen={showDeleteModal && !!projectToDelete}
           onClose={() => {
+            if (isDeletingProject) return;
             setShowDeleteModal(false);
             setProjectToDelete(null);
           }}
           onConfirm={() => {
             if (projectToDelete) deleteProject(projectToDelete);
           }}
+          isLoading={isDeletingProject}
         />
 
         {/* Token Confirmation Modal (success view) */}
@@ -4867,8 +4910,7 @@ ${pdfUrlList}
 
             const handleConfirm = () => {
               if (isGeneration) {
-                setShowTokenConfirmModal(null);
-                startGeneration();
+                void confirmGenerationStart();
               } else {
                 proceedWithEdit();
               }
@@ -5513,9 +5555,11 @@ ${pdfUrlList}
             <div className="relative px-6 pt-8 pb-4 text-center">
               <button
                 onClick={() => {
+                  if (isDeletingProject) return;
                   setShowDeleteModal(false);
                   setProjectToDelete(null);
                 }}
+                disabled={isDeletingProject}
                 className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
               >
                 <svg
@@ -5558,28 +5602,59 @@ ${pdfUrlList}
             <div className="px-6 pb-6 space-y-3">
               <button
                 onClick={() => deleteProject(projectToDelete)}
-                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+                disabled={isDeletingProject}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 disabled:bg-red-400 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-                Delete Project
+                {isDeletingProject ? (
+                  <>
+                    <svg
+                      className="w-5 h-5 animate-spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                      />
+                    </svg>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                    Delete Project
+                  </>
+                )}
               </button>
               <button
                 onClick={() => {
+                  if (isDeletingProject) return;
                   setShowDeleteModal(false);
                   setProjectToDelete(null);
                 }}
+                disabled={isDeletingProject}
                 className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
               >
                 Cancel
@@ -5613,8 +5688,7 @@ ${pdfUrlList}
 
           const handleConfirm = () => {
             if (isGeneration) {
-              setShowTokenConfirmModal(null);
-              startGeneration();
+              void confirmGenerationStart();
             } else {
               proceedWithEdit();
             }

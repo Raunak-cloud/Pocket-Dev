@@ -126,6 +126,9 @@ ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Target stack: Next.js App Router + TypeScript + Tailwind utility classes.
 - Required core files: app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css.
+- MULTI-PAGE RULE: Every internal navigation link in the navbar/header/footer MUST have a corresponding page file. If the navbar contains links to "About", "Services", "Contact", "Blog", etc., you MUST generate app/about/page.tsx, app/services/page.tsx, app/contact/page.tsx, app/blog/page.tsx, etc. No dead links — every href="/path" must resolve to a real page.
+- Each generated sub-page should have real, domain-appropriate content (not just a placeholder heading). At minimum include: a hero/header section, 1-2 content sections relevant to the page topic, and consistent navigation (shared layout).
+- Use Next.js App Router file-based routing: each page is a separate app/{route}/page.tsx file.
 - Never output lockfiles.
 - Do not output malformed PostCSS/Tailwind config shapes.
 - If app/globals.css uses @layer base/components/utilities, include matching @tailwind directives.
@@ -142,6 +145,7 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Mobile menu must render on top of content, have readable contrast, and occupy full phone height (h-screen/min-h-screen/100dvh/inset-y-0).
 - Avoid nested/independent scrollbars in nav/header/menu wrappers.
 - Desktop nav should include the brand name/logo and key navigation links with hover effects.
+- CRITICAL: Every navigation link must point to a real route with a generated page. If the nav has "About", "Services", "Pricing", "Contact" — generate app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/contact/page.tsx. No dead links or anchor-only fallbacks for top-level nav items.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AUTHENTICATION & BACKEND-DEPENDENT UI (KEEP INTACT)
@@ -201,7 +205,6 @@ ALT TEXT IS THE IMAGE PROMPT — WRITE IT LIKE A PHOTOGRAPHER'S BRIEF:
 DOMAIN ACCURACY — MATCH THE BUSINESS:
 - For a restaurant: describe specific dishes with ingredients, plating style, table setting, and restaurant ambiance.
 - For e-commerce: describe the exact product in detail — material, color, shape, size context, packaging, lifestyle usage.
-- For SaaS/tech: describe workspace scenes, team collaboration moments, abstract data visualizations, or clean device mockups.
 - For real estate: describe specific room types with architectural details, finishes, natural light, and staging.
 - For fitness: describe specific exercises, equipment, gym environments, or healthy meals with precise detail.
 - For education: describe specific learning scenarios, classroom settings, study materials, or student interactions.
@@ -217,11 +220,18 @@ EXAMPLES OF GOOD ALT TEXT:
 ✓ "Aerial drone view of a modern minimalist house with infinity pool surrounded by tropical landscaping, late afternoon warm sunlight casting long shadows"
 ✓ "Close-up of a premium mechanical keyboard with custom cherry blossom keycaps, soft pink LED backlighting, on a clean white desk setup with a succulent plant"
 ✓ "Professional female chef in white uniform plating an elegant dessert with tweezers in a modern commercial kitchen, soft overhead lighting, shallow focus"
+✓ "Abstract glowing blue digital shield with encrypted binary code patterns orbiting around it, dark tech background with subtle hexagonal grid, futuristic cybersecurity concept, dramatic blue neon lighting" (for blockchain security feature)
+✓ "Electric blue lightning bolts converging on a central glowing crystalline node, dark background with radial motion blur trails and particle sparks, abstract speed and performance concept" (for tech performance feature)
+✓ "Two glowing translucent spheres connected by streams of golden light particles flowing between them, deep space dark background with subtle star field, abstract cross-chain interoperability concept" (for blockchain cross-chain feature)
+✓ "Isometric 3D floating dashboard with holographic data charts and glowing analytics graphs, clean white background with soft purple gradient, modern SaaS analytics concept" (for SaaS dashboard feature)
 
 EXAMPLES OF BAD ALT TEXT (NEVER DO THIS):
 ✗ "hero image" / "product photo" / "team member" / "food image" / "background"
 ✗ "professional image of our service" / "high quality photo"
 ✗ "image 1" / "photo of product" / "banner image"
+✗ "security guard in uniform" (for a blockchain security feature — use abstract digital visuals instead)
+✗ "man running fast" (for a tech performance feature — use abstract energy/speed visuals instead)
+✗ "people shaking hands" (for a partnership feature — use abstract connected nodes instead)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FINAL QUALITY BAR
@@ -232,7 +242,13 @@ FINAL QUALITY BAR
 - Escape newlines with \\n and tabs with \\t in JSON string content.
 - Write realistic, domain-appropriate copy — not filler text.`;
 
-type SiteTheme = "food" | "fashion" | "interior" | "automotive" | "people" | "generic";
+type SiteTheme =
+  | "food"
+  | "fashion"
+  | "interior"
+  | "automotive"
+  | "people"
+  | "generic";
 
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -243,10 +259,19 @@ function getGeminiClient() {
 }
 
 function isValidSiteTheme(value: string): value is SiteTheme {
-  return ["food", "fashion", "interior", "automotive", "people", "generic"].includes(value);
+  return [
+    "food",
+    "fashion",
+    "interior",
+    "automotive",
+    "people",
+    "generic",
+  ].includes(value);
 }
 
-function detectIntegrationRequirements(promptText: string): IntegrationRequirements {
+function detectIntegrationRequirements(
+  promptText: string,
+): IntegrationRequirements {
   const text = promptText.toLowerCase();
   // Prefer explicit markers from our UI prompts. Broad keyword detection on full
   // edit prompts can create false positives because the prompt includes code context.
@@ -329,10 +354,16 @@ Return ONLY one word (the theme name). No explanation.`;
   });
 
   const result = await model.generateContent({
-    contents: [{
-      role: "user",
-      parts: [{ text: `${systemPrompt}\n\nUser request: "${userPrompt}"\n\nTheme:` }]
-    }],
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `${systemPrompt}\n\nUser request: "${userPrompt}"\n\nTheme:`,
+          },
+        ],
+      },
+    ],
   });
 
   const text = result.response.text().trim().toLowerCase();
@@ -354,7 +385,10 @@ async function extractThemeFromPrompt(prompt: string): Promise<SiteTheme> {
       return aiTheme;
     }
   } catch (error) {
-    console.warn('[Theme] AI detection failed, will use code analysis fallback:', error);
+    console.warn(
+      "[Theme] AI detection failed, will use code analysis fallback:",
+      error,
+    );
   }
 
   // Will fall back to code analysis later in the pipeline
@@ -495,7 +529,9 @@ function normalizeGeneratedFilesOrThrow(value: unknown): GeneratedFile[] {
 
     byPath.set(normalizedPath, item.content.replace(/^\uFEFF/, ""));
     if (byPath.size > MAX_FILE_COUNT) {
-      throw new Error(`AI response contains too many files (>${MAX_FILE_COUNT}).`);
+      throw new Error(
+        `AI response contains too many files (>${MAX_FILE_COUNT}).`,
+      );
     }
   }
 
@@ -525,7 +561,12 @@ function normalizeParsedProjectOrThrow(parsed: ParsedAIResponse): {
 }
 
 function validateProjectStructureOrThrow(files: GeneratedFile[]) {
-  const required = new Set(["app/layout.tsx", "app/page.tsx", "app/loading.tsx", "app/globals.css"]);
+  const required = new Set([
+    "app/layout.tsx",
+    "app/page.tsx",
+    "app/loading.tsx",
+    "app/globals.css",
+  ]);
   const existing = new Set(files.map((f) => f.path));
   const missing = Array.from(required).filter((path) => !existing.has(path));
 
@@ -556,7 +597,7 @@ function escapeControlCharsInJSONStringValues(input: string): string {
 
     if (!inString) {
       out += ch;
-      if (ch === "\"") inString = true;
+      if (ch === '"') inString = true;
       continue;
     }
 
@@ -572,7 +613,7 @@ function escapeControlCharsInJSONStringValues(input: string): string {
       continue;
     }
 
-    if (ch === "\"") {
+    if (ch === '"') {
       out += ch;
       inString = false;
       continue;
@@ -618,8 +659,8 @@ function normalizeEscapedTokensOutsideStrings(input: string): string {
           i++;
           continue;
         }
-        if (next === "\"") {
-          out += "\"";
+        if (next === '"') {
+          out += '"';
           i++;
           inString = true;
           continue;
@@ -627,7 +668,7 @@ function normalizeEscapedTokensOutsideStrings(input: string): string {
       }
 
       out += ch;
-      if (ch === "\"") {
+      if (ch === '"') {
         inString = true;
       }
       continue;
@@ -645,7 +686,7 @@ function normalizeEscapedTokensOutsideStrings(input: string): string {
       continue;
     }
 
-    if (ch === "\"") {
+    if (ch === '"') {
       out += ch;
       inString = false;
       continue;
@@ -657,9 +698,11 @@ function normalizeEscapedTokensOutsideStrings(input: string): string {
   return out;
 }
 
-function tryParsePossiblyDoubleEncodedJSON(input: string): ParsedAIResponse | null {
+function tryParsePossiblyDoubleEncodedJSON(
+  input: string,
+): ParsedAIResponse | null {
   const trimmed = input.trim();
-  if (!(trimmed.startsWith("\"") && trimmed.endsWith("\""))) {
+  if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
     return null;
   }
 
@@ -688,7 +731,10 @@ function logParseErrorContext(input: string, error: unknown) {
 
   console.error("Failed to parse AI response as JSON:", message);
   console.error("First 500 chars:", input.slice(0, 500));
-  console.error("Last 500 chars:", input.slice(Math.max(0, input.length - 500)));
+  console.error(
+    "Last 500 chars:",
+    input.slice(Math.max(0, input.length - 500)),
+  );
 }
 
 function parseAIGeneratedJSON(text: string): ParsedAIResponse {
@@ -914,21 +960,26 @@ function ensureRequiredFiles(
       const eq = trimmed.indexOf("=");
       if (eq <= 0) continue;
       const key = trimmed.slice(0, eq).trim();
-      const value = trimmed.slice(eq + 1);
+      const value = trimmed.slice(eq + 1).trim();
       vars.set(key, value);
     }
     return vars;
   }
 
-  function buildEnvContent(existing?: string, required?: Record<string, string>): string {
+  function buildEnvContent(
+    existing?: string,
+    required?: Record<string, string>,
+  ): string {
     const env = parseEnvContent(existing || "");
     for (const [key, value] of Object.entries(required || {})) {
-      if (value && value.length > 0) {
+      if (value !== undefined && value !== null) {
         env.set(key, value);
       }
     }
 
-    const lines = Array.from(env.entries()).map(([key, value]) => `${key}=${value}`);
+    const lines = Array.from(env.entries()).map(
+      ([key, value]) => `${key}=${value}`,
+    );
     return `${lines.join("\n")}\n`;
   }
 
@@ -940,7 +991,9 @@ function ensureRequiredFiles(
     return url.includes("supabase.co") || url.includes("supabase.com");
   }
 
-  function resolveSharedSupabaseDatabaseUrl(existingEnv: Map<string, string>): string {
+  function resolveSharedSupabaseDatabaseUrl(
+    existingEnv: Map<string, string>,
+  ): string {
     const configuredShared =
       existingEnv.get("SUPABASE_SHARED_DATABASE_URL") ||
       process.env.SUPABASE_SHARED_DATABASE_URL ||
@@ -999,7 +1052,9 @@ function ensureRequiredFiles(
     return deps;
   }
 
-  function stripSupabaseEnvForPublicApps(sourceFiles: GeneratedFile[]): GeneratedFile[] {
+  function stripSupabaseEnvForPublicApps(
+    sourceFiles: GeneratedFile[],
+  ): GeneratedFile[] {
     return sourceFiles.map((file) => {
       if (file.path !== ".env.local") return file;
       const filtered = file.content
@@ -1141,7 +1196,10 @@ ${canonicalSupabaseAnonDecl}
     patched = patched
       .replace(/process\.env\.NEXT_PUBLIC_SUPABASE_URL!?/g, "supabaseUrl")
       .replace(/process\.env\.SUPABASE_URL!?/g, "supabaseUrl")
-      .replace(/process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY!?/g, "supabaseAnonKey")
+      .replace(
+        /process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY!?/g,
+        "supabaseAnonKey",
+      )
       .replace(
         /process\.env\.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!?/g,
         "supabaseAnonKey",
@@ -1165,11 +1223,13 @@ ${canonicalSupabaseAnonDecl}
       patched = patched
         .replace(
           /export\s+async\s+function\s+middleware\s*\([^)]*\)\s*\{/,
-          (m) => `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
+          (m) =>
+            `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
         )
         .replace(
           /export\s+function\s+middleware\s*\([^)]*\)\s*\{/,
-          (m) => `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
+          (m) =>
+            `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
         );
     }
 
@@ -1214,7 +1274,9 @@ ${canonicalSupabaseAnonDecl}
 
     const normalized =
       missing.length === 0 ? content : `${missing.join("\n")}\n\n${content}`;
-    return ensureMobileOverflowGuard(stripUnsupportedApplyUtilities(normalized));
+    return ensureMobileOverflowGuard(
+      stripUnsupportedApplyUtilities(normalized),
+    );
   }
 
   const fileMap = new Map(files.map((f) => [f.path, f]));
@@ -1384,11 +1446,17 @@ html, body {
   // Remove deprecated tenant-specific scaffolding.
   files = files.filter((file) => {
     const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
-    return normalizedPath !== "lib/supabase/tenant.ts" && normalizedPath !== "app/unauthorized/page.tsx";
+    return (
+      normalizedPath !== "lib/supabase/tenant.ts" &&
+      normalizedPath !== "app/unauthorized/page.tsx"
+    );
   });
 
   if (hasAuthIntegration) {
-    upsertFile("lib/supabase/client.ts", buildBrowserSupabaseClientContent(true));
+    upsertFile(
+      "lib/supabase/client.ts",
+      buildBrowserSupabaseClientContent(true),
+    );
   }
 
   if (hasAuthIntegration) {
@@ -2208,7 +2276,10 @@ export default function SignupPage() {
     );
   }
 
-  if ((hasAuthIntegration || hasDatabaseIntegration) && !fileMap.has("supabase/schema.sql")) {
+  if (
+    (hasAuthIntegration || hasDatabaseIntegration) &&
+    !fileMap.has("supabase/schema.sql")
+  ) {
     files.push({
       path: "supabase/schema.sql",
       content: `-- No default SQL bootstrap is required for app-scoped auth.
@@ -2245,7 +2316,10 @@ export default function SignupPage() {
     ) {
       return { ...file, content: normalizeMiddlewareSupabaseEnv(file.content) };
     }
-    if (normalizedPath === "supabase/schema.sql" && /user_tenants/i.test(file.content)) {
+    if (
+      normalizedPath === "supabase/schema.sql" &&
+      /user_tenants/i.test(file.content)
+    ) {
       return {
         ...file,
         content: `-- No default SQL bootstrap is required for app-scoped auth.
@@ -2284,7 +2358,8 @@ export default function SignupPage() {
     }
 
     if (hasDatabaseIntegration) {
-      const sharedSupabaseDatabaseUrl = resolveSharedSupabaseDatabaseUrl(existingEnv);
+      const sharedSupabaseDatabaseUrl =
+        resolveSharedSupabaseDatabaseUrl(existingEnv);
       if (!sharedSupabaseDatabaseUrl) {
         throw new Error(
           "Database integration requires Supabase Postgres. Set SUPABASE_SHARED_DATABASE_URL to your shared Supabase connection string.",
@@ -2339,8 +2414,9 @@ function collectSyntaxIssues(files: GeneratedFile[]): LintIssue[] {
       scriptKind,
     );
 
-    const parseDiagnostics = (sf as unknown as { parseDiagnostics?: ts.Diagnostic[] })
-      .parseDiagnostics || [];
+    const parseDiagnostics =
+      (sf as unknown as { parseDiagnostics?: ts.Diagnostic[] })
+        .parseDiagnostics || [];
     if (parseDiagnostics.length === 0) continue;
 
     const first = parseDiagnostics[0];
@@ -2366,7 +2442,10 @@ function hasUseClientDirective(content: string): boolean {
   return useClientRe.test(withoutBom);
 }
 
-function lineColumnAt(content: string, index: number): { line: number; column: number } {
+function lineColumnAt(
+  content: string,
+  index: number,
+): { line: number; column: number } {
   const before = content.slice(0, Math.max(0, index));
   const lines = before.split("\n");
   return {
@@ -2375,7 +2454,9 @@ function lineColumnAt(content: string, index: number): { line: number; column: n
   };
 }
 
-function collectServerClientBoundaryIssues(files: GeneratedFile[]): LintIssue[] {
+function collectServerClientBoundaryIssues(
+  files: GeneratedFile[],
+): LintIssue[] {
   const appSourceFiles = files.filter((f) => {
     const normalizedPath = f.path.replace(/\\/g, "/");
     return (
@@ -2390,6 +2471,8 @@ function collectServerClientBoundaryIssues(files: GeneratedFile[]): LintIssue[] 
   for (const file of appSourceFiles) {
     if (hasUseClientDirective(file.content)) continue;
 
+    // Reset lastIndex to prevent state bleeding between files with global regex
+    eventHandlerRe.lastIndex = 0;
     const match = eventHandlerRe.exec(file.content);
     if (!match) continue;
 
@@ -2412,7 +2495,146 @@ function collectServerClientBoundaryIssues(files: GeneratedFile[]): LintIssue[] 
   return issues;
 }
 
-function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
+const KNOWN_NEXT_IMPORT_FIXUPS: Record<string, string> = {
+  link: "next/link",
+  image: "next/image",
+  navigation: "next/navigation",
+  headers: "next/headers",
+  server: "next/server",
+  "font/google": "next/font/google",
+};
+
+function applyKnownImportSpecifierFixups(files: GeneratedFile[]): GeneratedFile[] {
+  return files.map((file) => {
+    if (!/\.(tsx|ts|jsx|js)$/.test(file.path.toLowerCase())) {
+      return file;
+    }
+
+    let nextContent = file.content;
+    for (const [wrongSpecifier, correctSpecifier] of Object.entries(
+      KNOWN_NEXT_IMPORT_FIXUPS,
+    )) {
+      const fromRe = new RegExp(
+        `\\bfrom\\s+["']${wrongSpecifier.replace("/", "\\/")}["']`,
+        "g",
+      );
+      const importRe = new RegExp(
+        `\\bimport\\(\\s*["']${wrongSpecifier.replace("/", "\\/")}["']\\s*\\)`,
+        "g",
+      );
+      const requireRe = new RegExp(
+        `\\brequire\\(\\s*["']${wrongSpecifier.replace("/", "\\/")}["']\\s*\\)`,
+        "g",
+      );
+      nextContent = nextContent
+        .replace(fromRe, `from "${correctSpecifier}"`)
+        .replace(importRe, `import("${correctSpecifier}")`)
+        .replace(requireRe, `require("${correctSpecifier}")`);
+    }
+
+    if (nextContent === file.content) return file;
+    return { ...file, content: nextContent };
+  });
+}
+
+function extractModuleSpecifiers(content: string): string[] {
+  const specifiers = new Set<string>();
+  const fromRe = /\bfrom\s+["']([^"']+)["']/g;
+  const importRe = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
+  const requireRe = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+
+  for (const match of content.matchAll(fromRe)) {
+    specifiers.add(String(match[1] || "").trim());
+  }
+  for (const match of content.matchAll(importRe)) {
+    specifiers.add(String(match[1] || "").trim());
+  }
+  for (const match of content.matchAll(requireRe)) {
+    specifiers.add(String(match[1] || "").trim());
+  }
+  return Array.from(specifiers).filter(Boolean);
+}
+
+function getPackageNameFromSpecifier(specifier: string): string {
+  if (!specifier) return "";
+  if (specifier.startsWith("@")) {
+    const [scope, pkg] = specifier.split("/");
+    return scope && pkg ? `${scope}/${pkg}` : specifier;
+  }
+  if (specifier.startsWith("next/")) return "next";
+  if (specifier.startsWith("react-dom/")) return "react-dom";
+  return specifier.split("/")[0] || specifier;
+}
+
+function collectModuleResolutionIssues(
+  files: GeneratedFile[],
+  dependencies: Record<string, string>,
+): LintIssue[] {
+  const issues: LintIssue[] = [];
+  const allowedCorePackages = new Set([
+    "next",
+    "react",
+    "react-dom",
+    "typescript",
+    "tailwindcss",
+    "postcss",
+    "autoprefixer",
+  ]);
+
+  const sourceFiles = files.filter((f) =>
+    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
+  );
+
+  for (const file of sourceFiles) {
+    const specifiers = extractModuleSpecifiers(file.content);
+    for (const specifier of specifiers) {
+      if (
+        !specifier ||
+        specifier.startsWith(".") ||
+        specifier.startsWith("/") ||
+        specifier.startsWith("@/") ||
+        specifier.startsWith("node:")
+      ) {
+        continue;
+      }
+
+      const nextFixup = KNOWN_NEXT_IMPORT_FIXUPS[specifier];
+      if (nextFixup) {
+        const idx = file.content.indexOf(`"${specifier}"`);
+        const pos = lineColumnAt(file.content, idx >= 0 ? idx : 0);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/invalid-module-specifier",
+          message: `Invalid module "${specifier}". Use "${nextFixup}" instead.`,
+        });
+        continue;
+      }
+
+      const pkg = getPackageNameFromSpecifier(specifier);
+      if (!pkg) continue;
+      if (dependencies[pkg] || allowedCorePackages.has(pkg)) continue;
+
+      const idx = file.content.indexOf(`"${specifier}"`);
+      const pos = lineColumnAt(file.content, idx >= 0 ? idx : 0);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "module/unresolved-dependency",
+        message: `Module "${specifier}" is imported but missing from dependencies. Either add "${pkg}" to dependencies or replace the import with a supported module.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function collectNextJsValidationIssues(
+  files: GeneratedFile[],
+  dependencies: Record<string, string>,
+): LintIssue[] {
   const appAndComponentSourceFiles = files.filter((f) => {
     const normalizedPath = f.path.replace(/\\/g, "/");
     return (
@@ -2423,7 +2645,10 @@ function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
     );
   });
 
-  const issues: LintIssue[] = [...collectServerClientBoundaryIssues(files)];
+  const issues: LintIssue[] = [
+    ...collectServerClientBoundaryIssues(files),
+    ...collectModuleResolutionIssues(files, dependencies),
+  ];
 
   const nextClientHooks = [
     "useRouter",
@@ -2441,7 +2666,11 @@ function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
     const isClient = hasUseClientDirective(content);
 
     // next/navigation client hooks used in server components
-    if (!isClient && navigationImportRe.test(content) && hookCallRe.test(content)) {
+    if (
+      !isClient &&
+      navigationImportRe.test(content) &&
+      hookCallRe.test(content)
+    ) {
       const match = content.match(hookCallRe);
       const idx = match?.index ?? 0;
       const pos = lineColumnAt(content, idx);
@@ -2469,7 +2698,7 @@ function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
           column: pos.column,
           rule: "next/client-imports-server-only-module",
           message:
-            'Client Component imports a server-only module (next/headers, next/server, or server-only). Move that code to server files.',
+            "Client Component imports a server-only module (next/headers, next/server, or server-only). Move that code to server files.",
         });
       }
     }
@@ -2488,7 +2717,7 @@ function collectNextJsValidationIssues(files: GeneratedFile[]): LintIssue[] {
           column: pos.column,
           rule: "next/client-metadata-export",
           message:
-            'Client Component cannot export metadata/generateMetadata. Keep metadata exports in Server Components.',
+            "Client Component cannot export metadata/generateMetadata. Keep metadata exports in Server Components.",
         });
       }
     }
@@ -2607,9 +2836,10 @@ function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
     }
 
     const hasMenuOverlayPattern = navFiles.some((f) => {
-      const hasToggle = /\b(?:aria-expanded|isMenuOpen|menuOpen|mobileMenuOpen|openMenu|toggleMenu)\b/.test(
-        f.content,
-      );
+      const hasToggle =
+        /\b(?:aria-expanded|isMenuOpen|menuOpen|mobileMenuOpen|openMenu|toggleMenu)\b/.test(
+          f.content,
+        );
       if (!hasToggle) return false;
 
       const hasRawOverlayClasses =
@@ -2652,8 +2882,9 @@ function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
         );
 
       const usesOverlayComponent =
-        /<(?:SheetContent|DrawerContent|DialogContent|Modal)\b/.test(f.content) ||
-        /@radix-ui\/react-(?:dialog|popover|portal)/.test(f.content);
+        /<(?:SheetContent|DrawerContent|DialogContent|Modal)\b/.test(
+          f.content,
+        ) || /@radix-ui\/react-(?:dialog|popover|portal)/.test(f.content);
 
       return hasExplicitReadableBg || usesOverlayComponent;
     });
@@ -3042,9 +3273,12 @@ export const generateCodeFunction = inngest.createFunction(
     const needsManagedAuth = integrationRequirements.requiresAuth;
     let managedAuthConfig: ManagedSupabaseAuthConfig | null = null;
     if (needsManagedAuth) {
-      managedAuthConfig = await step.run("allocate-managed-supabase", async () => {
-        return await acquireAuthConfigForBindingKey(projectId);
-      });
+      managedAuthConfig = await step.run(
+        "allocate-managed-supabase",
+        async () => {
+          return await acquireAuthConfigForBindingKey(projectId);
+        },
+      );
     }
 
     // Check if cancelled before starting
@@ -3063,8 +3297,9 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 1. Study the user's request carefully. Identify the business domain, target audience, and brand personality.
 2. Choose a cohesive color palette that fits the domain (e.g., warm earth tones for a bakery, bold blues for fintech, muted greens for wellness).
 3. Select complementary Google Fonts via next/font/google — one for headings (display weight), one for body text.
-4. Build a clear page structure: Hero → Social Proof/Stats → Features/Services → Testimonials → CTA → Footer.
-5. Every section must have visual interest: alternating backgrounds, icon accents, card grids with hover effects, or image/text split layouts.
+4. Build a clear HOME page structure: Hero → Social Proof/Stats → Features/Services → Testimonials → CTA → Footer.
+5. MULTI-PAGE: Generate a separate page file (app/{route}/page.tsx) for EVERY navigation link in the navbar/header/footer. If the nav has "About", "Services", "Pricing", "Blog", "Contact" — create app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/blog/page.tsx, app/contact/page.tsx. Each sub-page must have real, meaningful content (hero + 1-2 content sections minimum), not just a placeholder. No dead links.
+6. Every section must have visual interest: alternating backgrounds, icon accents, card grids with hover effects, or image/text split layouts.
 6. Use generous whitespace (py-20 to py-32), large readable headings (text-4xl to text-6xl), and comfortable line heights.
 7. Add micro-interactions: hover:scale-105 on cards, transition-all duration-300, hover color shifts on buttons and links.
 8. Use Lucide React icons (from "lucide-react") for features, benefits, and UI elements.
@@ -3072,7 +3307,9 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
-- Return a complete runnable project with app/layout.tsx, app/page.tsx, app/loading.tsx, and app/globals.css.
+- Return a complete runnable project with app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
+- EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
+- Each sub-page must contain real, domain-relevant content — at minimum a hero/header + 1-2 meaningful content sections. Not just an empty placeholder.
 - If app/globals.css contains @layer base/components/utilities, include matching @tailwind directives.
 - Do not use @apply in generated CSS; use explicit utility classes in JSX.
 - If a provider guard is required, wrap {children} correctly in app/layout.tsx.
@@ -3114,19 +3351,30 @@ IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Each image MUST have unique visual intent — no two images should describe the same thing.
 - For card grids: each card's image must describe that specific item, not the category (e.g., for a menu card showing "Margherita Pizza", describe the actual pizza with toppings, not just "pizza photo").
 - Match the business domain precisely in every image description.
+- CRITICAL FOR TECH/BLOCKCHAIN/SAAS/AI SITES: Do NOT use photographs of people to illustrate abstract features. Instead use abstract conceptual visuals:
+  * "Security" → abstract glowing digital shield, encrypted vault, holographic lock — NOT a security guard
+  * "Performance" → abstract energy streams, lightning convergence, speed trails — NOT a person running
+  * "Scalability" → expanding geometric network, growing crystal structure — NOT people in a meeting
+  * "Analytics" → holographic floating charts, glowing data streams — NOT someone looking at a screen
+  * Always use dark backgrounds with neon accents (blue, purple, cyan) for blockchain/crypto sites
+  * Always use clean minimal backgrounds with soft gradients for SaaS sites
 
 NAV + MOBILE RULES:
 - Navbar must be fully functional with mobile menu toggle and accessibility attributes.
 - Prevent horizontal scrolling.
 - Keep header/navbar pinned at top with proper z-index.
 - Mobile menu must render above content with clear background contrast and full viewport height.
-- Avoid creating extra independent scrollbars inside nav/menu wrappers.`;
+- Avoid creating extra independent scrollbars inside nav/menu wrappers.
+- CRITICAL: Every nav link must use Next.js Link component with href pointing to a real route (e.g., href="/about"). Generate a matching app/{route}/page.tsx for each. No "#" or empty href values for primary navigation items.`;
     });
 
     // Step 1.5: Extract theme from prompt
-    const detectedTheme = await step.run("extract-theme-from-prompt", async () => {
-      return await extractThemeFromPrompt(prompt);
-    });
+    const detectedTheme = await step.run(
+      "extract-theme-from-prompt",
+      async () => {
+        return await extractThemeFromPrompt(prompt);
+      },
+    );
 
     // Check if cancelled after building prompt
     if (await checkIfCancelled(projectId)) {
@@ -3165,205 +3413,221 @@ NAV + MOBILE RULES:
 
     // Step 3: Parse and prepare files
     await sendProgress(projectId, "[3/8] Preparing project files...");
-    const parsedProject = await step.run(
-      "parse-generated-code",
-      async () => {
-        console.log("Parsing AI response, length:", generatedText.length);
+    const parsedProject = await step.run("parse-generated-code", async () => {
+      console.log("Parsing AI response, length:", generatedText.length);
 
-        let normalizedProject: {
-          files: GeneratedFile[];
-          dependencies: Record<string, string>;
-        } | null = null;
-        let workingText = generatedText;
-        let lastParseError: unknown;
+      let normalizedProject: {
+        files: GeneratedFile[];
+        dependencies: Record<string, string>;
+      } | null = null;
+      let workingText = generatedText;
+      let lastParseError: unknown;
 
-        for (let attempt = 1; attempt <= MAX_JSON_REPAIR_ATTEMPTS + 1; attempt++) {
-          try {
-            normalizedProject = parseAndNormalizeProjectFromTextOrThrow(workingText);
+      for (
+        let attempt = 1;
+        attempt <= MAX_JSON_REPAIR_ATTEMPTS + 1;
+        attempt++
+      ) {
+        try {
+          normalizedProject =
+            parseAndNormalizeProjectFromTextOrThrow(workingText);
+          break;
+        } catch (parseError) {
+          lastParseError = parseError;
+          console.error(
+            `[Parse] Attempt ${attempt} failed:`,
+            parseError instanceof Error ? parseError.message : parseError,
+          );
+
+          if (attempt > MAX_JSON_REPAIR_ATTEMPTS) {
             break;
-          } catch (parseError) {
-            lastParseError = parseError;
-            console.error(
-              `[Parse] Attempt ${attempt} failed:`,
-              parseError instanceof Error ? parseError.message : parseError,
-            );
-
-            if (attempt > MAX_JSON_REPAIR_ATTEMPTS) {
-              break;
-            }
-
-            console.warn(`[Parse] Attempting AI JSON repair pass ${attempt}...`);
-            workingText = await repairMalformedJSONWithGemini(workingText);
           }
-        }
 
-        if (!normalizedProject) {
-          console.log(
-            "Raw response first 1000 chars:",
-            generatedText.substring(0, 1000),
-          );
-          console.log(
-            "Raw response last 500 chars:",
-            generatedText.substring(Math.max(0, generatedText.length - 500)),
-          );
-          const reason =
-            lastParseError instanceof Error
-              ? lastParseError.message
-              : String(lastParseError ?? "unknown parse error");
-          throw new Error(`Unable to parse and normalize AI response: ${reason}`);
+          console.warn(`[Parse] Attempting AI JSON repair pass ${attempt}...`);
+          workingText = await repairMalformedJSONWithGemini(workingText);
         }
+      }
 
-        let files = ensureRequiredFiles(
-          normalizedProject.files,
-          normalizedProject.dependencies,
-          integrationRequirements,
-          managedAuthConfig,
+      if (!normalizedProject) {
+        console.log(
+          "Raw response first 1000 chars:",
+          generatedText.substring(0, 1000),
         );
-        let dependencies = normalizedProject.dependencies;
+        console.log(
+          "Raw response last 500 chars:",
+          generatedText.substring(Math.max(0, generatedText.length - 500)),
+        );
+        const reason =
+          lastParseError instanceof Error
+            ? lastParseError.message
+            : String(lastParseError ?? "unknown parse error");
+        throw new Error(`Unable to parse and normalize AI response: ${reason}`);
+      }
 
-        for (let attempt = 1; attempt <= MAX_STRUCTURE_REPAIR_ATTEMPTS + 1; attempt++) {
-          try {
-            validateProjectStructureOrThrow(files);
-            break;
-          } catch (shapeError) {
-            if (attempt > MAX_STRUCTURE_REPAIR_ATTEMPTS) {
-              throw shapeError;
-            }
+      let files = ensureRequiredFiles(
+        normalizedProject.files,
+        normalizedProject.dependencies,
+        integrationRequirements,
+        managedAuthConfig,
+      );
+      files = applyKnownImportSpecifierFixups(files);
+      let dependencies = normalizedProject.dependencies;
 
-            console.warn(
-              `[ShapeRepair] Attempt ${attempt} failed: ${
-                shapeError instanceof Error ? shapeError.message : String(shapeError)
-              }`,
-            );
-            const repairedShapeText = await repairProjectShapeWithGemini({
-              originalPrompt: prompt,
-              parseError:
-                shapeError instanceof Error ? shapeError.message : String(shapeError),
-              parsedResponse: {
-                files,
-                dependencies,
-                _checks: { shape_repair: true, attempt },
-              },
-            });
-
-            const repairedProject =
-              parseAndNormalizeProjectFromTextOrThrow(repairedShapeText);
-            files = ensureRequiredFiles(
-              repairedProject.files,
-              repairedProject.dependencies,
-              integrationRequirements,
-              managedAuthConfig,
-            );
-            dependencies = repairedProject.dependencies;
-          }
-        }
-
-        for (let attempt = 1; attempt <= MAX_SYNTAX_REPAIR_ATTEMPTS + 1; attempt++) {
-          const syntaxIssues = collectSyntaxIssues(files);
-          if (syntaxIssues.length === 0) {
-            break;
-          }
-
-          if (attempt > MAX_SYNTAX_REPAIR_ATTEMPTS) {
-            const first = syntaxIssues[0];
-            throw new Error(
-              `Syntax repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
-            );
+      for (
+        let attempt = 1;
+        attempt <= MAX_STRUCTURE_REPAIR_ATTEMPTS + 1;
+        attempt++
+      ) {
+        try {
+          validateProjectStructureOrThrow(files);
+          break;
+        } catch (shapeError) {
+          if (attempt > MAX_STRUCTURE_REPAIR_ATTEMPTS) {
+            throw shapeError;
           }
 
           console.warn(
-            `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
+            `[ShapeRepair] Attempt ${attempt} failed: ${
+              shapeError instanceof Error
+                ? shapeError.message
+                : String(shapeError)
+            }`,
           );
-          await sendProgress(projectId, "[4/8] Improving code reliability...");
-
-          const repaired = await repairProjectFromLintFeedback({
+          const repairedShapeText = await repairProjectShapeWithGemini({
             originalPrompt: prompt,
-            files,
-            dependencies,
-            lintIssues: syntaxIssues,
-            requirements: integrationRequirements,
-            managedAuthConfig,
+            parseError:
+              shapeError instanceof Error
+                ? shapeError.message
+                : String(shapeError),
+            parsedResponse: {
+              files,
+              dependencies,
+              _checks: { shape_repair: true, attempt },
+            },
           });
-          files = repaired.files;
-          dependencies = repaired.dependencies;
-        }
 
-        for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS + 1; attempt++) {
-          const uxIssues = collectResponsiveAndNavIssues(files);
-          if (uxIssues.length === 0) {
-            break;
-          }
-
-          if (attempt > MAX_UX_REPAIR_ATTEMPTS) {
-            const first = uxIssues[0];
-            console.warn(
-              `[UXRepair] Max attempts reached. Skipping remaining UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
-            );
-            break; // Skip UX errors instead of throwing
-          }
-
-          console.warn(
-            `[UXRepair] Attempt ${attempt} - ${uxIssues.length} responsive/navigation issue(s).`,
-          );
-          await sendProgress(
-            projectId,
-            "[4/8] Refining layout and responsiveness...",
-          );
-
-          const repaired = await repairProjectFromLintFeedback({
-            originalPrompt: prompt,
-            files,
-            dependencies,
-            lintIssues: uxIssues,
-            requirements: integrationRequirements,
-            managedAuthConfig,
-          });
-          files = repaired.files;
-          dependencies = repaired.dependencies;
-        }
-
-        for (
-          let attempt = 1;
-          attempt <= MAX_SCHEMA_REPAIR_ATTEMPTS + 1;
-          attempt++
-        ) {
-          const schemaIssues = collectSupabaseSchemaIssues(
-            files,
+          const repairedProject =
+            parseAndNormalizeProjectFromTextOrThrow(repairedShapeText);
+          files = ensureRequiredFiles(
+            repairedProject.files,
+            repairedProject.dependencies,
             integrationRequirements,
-          );
-          if (schemaIssues.length === 0) {
-            break;
-          }
-
-          if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
-            const first = schemaIssues[0];
-            throw new Error(
-              `Schema repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
-            );
-          }
-
-          console.warn(
-            `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
-          );
-          await sendProgress(projectId, "[4/8] Strengthening backend setup...");
-
-          const repaired = await repairProjectFromLintFeedback({
-            originalPrompt: prompt,
-            files,
-            dependencies,
-            lintIssues: schemaIssues,
-            requirements: integrationRequirements,
             managedAuthConfig,
-          });
-          files = repaired.files;
-          dependencies = repaired.dependencies;
+          );
+          files = applyKnownImportSpecifierFixups(files);
+          dependencies = repairedProject.dependencies;
+        }
+      }
+
+      for (
+        let attempt = 1;
+        attempt <= MAX_SYNTAX_REPAIR_ATTEMPTS + 1;
+        attempt++
+      ) {
+        const syntaxIssues = collectSyntaxIssues(files);
+        if (syntaxIssues.length === 0) {
+          break;
         }
 
-        validateSyntaxOrThrow(files);
-        console.log(`Parsed ${files.length} files successfully`);
-        return { files, dependencies };
-      },
-    );
+        if (attempt > MAX_SYNTAX_REPAIR_ATTEMPTS) {
+          const first = syntaxIssues[0];
+          throw new Error(
+            `Syntax repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+          );
+        }
+
+        console.warn(
+          `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
+        );
+        await sendProgress(projectId, "[4/8] Improving code reliability...");
+
+        const repaired = await repairProjectFromLintFeedback({
+          originalPrompt: prompt,
+          files,
+          dependencies,
+          lintIssues: syntaxIssues,
+          requirements: integrationRequirements,
+          managedAuthConfig,
+        });
+        files = applyKnownImportSpecifierFixups(repaired.files);
+        dependencies = repaired.dependencies;
+      }
+
+      for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS + 1; attempt++) {
+        const uxIssues = collectResponsiveAndNavIssues(files);
+        if (uxIssues.length === 0) {
+          break;
+        }
+
+        if (attempt > MAX_UX_REPAIR_ATTEMPTS) {
+          const first = uxIssues[0];
+          console.warn(
+            `[UXRepair] Max attempts reached. Skipping remaining UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
+          );
+          break; // Skip UX errors instead of throwing
+        }
+
+        console.warn(
+          `[UXRepair] Attempt ${attempt} - ${uxIssues.length} responsive/navigation issue(s).`,
+        );
+        await sendProgress(
+          projectId,
+          "[4/8] Refining layout and responsiveness...",
+        );
+
+        const repaired = await repairProjectFromLintFeedback({
+          originalPrompt: prompt,
+          files,
+          dependencies,
+          lintIssues: uxIssues,
+          requirements: integrationRequirements,
+          managedAuthConfig,
+        });
+        files = applyKnownImportSpecifierFixups(repaired.files);
+        dependencies = repaired.dependencies;
+      }
+
+      for (
+        let attempt = 1;
+        attempt <= MAX_SCHEMA_REPAIR_ATTEMPTS + 1;
+        attempt++
+      ) {
+        const schemaIssues = collectSupabaseSchemaIssues(
+          files,
+          integrationRequirements,
+        );
+        if (schemaIssues.length === 0) {
+          break;
+        }
+
+        if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
+          const first = schemaIssues[0];
+          throw new Error(
+            `Schema repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+          );
+        }
+
+        console.warn(
+          `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
+        );
+        await sendProgress(projectId, "[4/8] Strengthening backend setup...");
+
+        const repaired = await repairProjectFromLintFeedback({
+          originalPrompt: prompt,
+          files,
+          dependencies,
+          lintIssues: schemaIssues,
+          requirements: integrationRequirements,
+          managedAuthConfig,
+        });
+        files = applyKnownImportSpecifierFixups(repaired.files);
+        dependencies = repaired.dependencies;
+      }
+
+      validateSyntaxOrThrow(files);
+      console.log(`Parsed ${files.length} files successfully`);
+      return { files, dependencies };
+    });
     let files = parsedProject.files;
     let dependencies = parsedProject.dependencies;
 
@@ -3388,78 +3652,84 @@ NAV + MOBILE RULES:
 
     // Step 4: Lint and fix code (parallel linting for all files)
     await sendProgress(projectId, "[5/8] Running code quality checks...");
-    const { fixedFiles } = await step.run(
-      "lint-and-repair",
-      async () => {
-        console.log(`Starting linting for ${files.length} files...`);
-        let workingFiles = files;
-        let workingDependencies = dependencies;
-        let lintResult = await lintAllFiles(workingFiles);
-        let schemaIssues = collectSupabaseSchemaIssues(
+    const { fixedFiles } = await step.run("lint-and-repair", async () => {
+      console.log(`Starting linting for ${files.length} files...`);
+      let workingFiles = files;
+      let workingDependencies = dependencies;
+      let lintResult = await lintAllFiles(workingFiles);
+      let schemaIssues = collectSupabaseSchemaIssues(
+        workingFiles,
+        integrationRequirements,
+      );
+
+      for (
+        let attempt = 1;
+        (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
+        attempt <= MAX_LINT_REPAIR_ATTEMPTS;
+        attempt++
+      ) {
+        if (await checkIfCancelled(projectId)) {
+          throw new Error("Generation cancelled by user");
+        }
+
+        const issuesToFix =
+          lintResult.lintIssues.length > 0
+            ? [...lintResult.lintIssues, ...schemaIssues]
+            : [...schemaIssues];
+        const firstIssue = issuesToFix[0];
+        console.warn(
+          `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+        );
+        await sendProgress(projectId, "[5/8] Fixing code quality...");
+
+        const repaired = await repairProjectFromLintFeedback({
+          originalPrompt: prompt,
+          files: workingFiles,
+          dependencies: workingDependencies,
+          lintIssues: issuesToFix,
+          requirements: integrationRequirements,
+          managedAuthConfig,
+        });
+
+        workingFiles = applyKnownImportSpecifierFixups(repaired.files);
+        workingDependencies = repaired.dependencies;
+        lintResult = await lintAllFiles(workingFiles);
+        schemaIssues = collectSupabaseSchemaIssues(
           workingFiles,
           integrationRequirements,
         );
+      }
 
-        for (
-          let attempt = 1;
-          (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
-          attempt <= MAX_LINT_REPAIR_ATTEMPTS;
-          attempt++
-        ) {
-          if (await checkIfCancelled(projectId)) {
-            throw new Error("Generation cancelled by user");
-          }
+      if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
+        const firstIssue = [
+          ...(lintResult.lintIssues || []),
+          ...schemaIssues,
+        ][0];
+        throw new Error(
+          `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+        );
+      }
 
-          const issuesToFix =
-            lintResult.lintIssues.length > 0
-              ? [...lintResult.lintIssues, ...schemaIssues]
-              : [...schemaIssues];
-          const firstIssue = issuesToFix[0];
-          console.warn(
-            `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
-          );
-          await sendProgress(projectId, "[5/8] Fixing code quality...");
+      dependencies = workingDependencies;
+      return {
+        fixedFiles: workingFiles,
+        lintReport: lintResult.lintReport,
+      };
+    });
 
-          const repaired = await repairProjectFromLintFeedback({
-            originalPrompt: prompt,
-            files: workingFiles,
-            dependencies: workingDependencies,
-            lintIssues: issuesToFix,
-            requirements: integrationRequirements,
-            managedAuthConfig,
-          });
-
-          workingFiles = repaired.files;
-          workingDependencies = repaired.dependencies;
-          lintResult = await lintAllFiles(workingFiles);
-          schemaIssues = collectSupabaseSchemaIssues(
-            workingFiles,
-            integrationRequirements,
-          );
-        }
-
-        if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
-          const firstIssue = [...(lintResult.lintIssues || []), ...schemaIssues][0];
-          throw new Error(
-            `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
-          );
-        }
-
-        dependencies = workingDependencies;
-        return {
-          fixedFiles: workingFiles,
-          lintReport: lintResult.lintReport,
-        };
-      },
+    await sendProgress(
+      projectId,
+      "[6/8] Validating Next.js runtime constraints...",
     );
-
-    await sendProgress(projectId, "[6/8] Validating Next.js runtime constraints...");
     const { validatedFiles } = await step.run(
       "nextjs-validate-and-repair",
       async () => {
         let workingFiles = fixedFiles;
         let workingDependencies = dependencies;
-        let issues = collectNextJsValidationIssues(workingFiles);
+        let issues = collectNextJsValidationIssues(
+          workingFiles,
+          workingDependencies,
+        );
 
         for (
           let attempt = 1;
@@ -3470,7 +3740,10 @@ NAV + MOBILE RULES:
           console.warn(
             `[NextValidation] Attempt ${attempt} - ${issues.length} issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
-          await sendProgress(projectId, "[6/8] Fixing Next.js compatibility...");
+          await sendProgress(
+            projectId,
+            "[6/8] Fixing Next.js compatibility...",
+          );
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -3481,9 +3754,12 @@ NAV + MOBILE RULES:
             managedAuthConfig,
           });
 
-          workingFiles = repaired.files;
+          workingFiles = applyKnownImportSpecifierFixups(repaired.files);
           workingDependencies = repaired.dependencies;
-          issues = collectNextJsValidationIssues(workingFiles);
+          issues = collectNextJsValidationIssues(
+            workingFiles,
+            workingDependencies,
+          );
         }
 
         if (issues.length > 0) {
@@ -3533,7 +3809,8 @@ NAV + MOBILE RULES:
       }
 
       const schemaFile = finalFiles.find(
-        (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
+        (f) =>
+          f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
       );
       if (!schemaFile || !schemaFile.content.trim()) {
         throw new Error(
@@ -3544,7 +3821,10 @@ NAV + MOBILE RULES:
       await sendProgress(projectId, "[7/8] Setting up backend data...");
       await step.run("bootstrap-managed-supabase-schema", async () => {
         const tablePhaseSql = buildTableCreationPhaseSql(schemaFile.content);
-        await applySqlToManagedProject(managedAuthConfig.projectRef, tablePhaseSql);
+        await applySqlToManagedProject(
+          managedAuthConfig.projectRef,
+          tablePhaseSql,
+        );
 
         const sql = buildSchemaBootstrapSql(schemaFile.content);
         await applySqlToManagedProject(managedAuthConfig.projectRef, sql);

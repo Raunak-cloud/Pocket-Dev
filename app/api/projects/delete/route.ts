@@ -47,13 +47,26 @@ export async function DELETE(req: Request) {
     );
     await deleteGeneratedStorageUrls(generatedImageUrls);
 
-    // Soft delete project
-    await prisma.project.update({
-      where: { id: projectId },
-      data: {
-        deleted: true,
-        updatedAt: new Date(),
-      },
+    await prisma.$transaction(async (tx) => {
+      if (!existingProject.deleted) {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            projectCount: {
+              decrement: 1,
+            },
+          },
+        });
+      }
+
+      // Soft delete project
+      await tx.project.update({
+        where: { id: projectId },
+        data: {
+          deleted: true,
+          updatedAt: new Date(),
+        },
+      });
     });
 
     return NextResponse.json({ success: true });

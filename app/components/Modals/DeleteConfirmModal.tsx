@@ -2,6 +2,7 @@ interface DeleteConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  isLoading?: boolean;
   title?: string;
   message?: string;
 }
@@ -10,6 +11,7 @@ export function DeleteConfirmModal({
   isOpen,
   onClose,
   onConfirm,
+  isLoading = false,
   title = "Delete Project?",
   message = "This action cannot be undone. The project will be permanently deleted.",
 }: DeleteConfirmModalProps) {
@@ -22,6 +24,7 @@ export function DeleteConfirmModal({
         <div className="relative px-6 pt-8 pb-4 text-center">
           <button
             onClick={onClose}
+            disabled={isLoading}
             className="absolute top-4 right-4 p-1 text-text-tertiary hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
           >
             <svg
@@ -65,25 +68,55 @@ export function DeleteConfirmModal({
         <div className="px-6 pb-6 space-y-3">
           <button
             onClick={onConfirm}
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+            disabled={isLoading}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-red-500 hover:bg-red-600 disabled:bg-red-400 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all"
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-              />
-            </svg>
-            Delete Project
+            {isLoading ? (
+              <>
+                <svg
+                  className="w-5 h-5 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                  />
+                </svg>
+                Deleting...
+              </>
+            ) : (
+              <>
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                  />
+                </svg>
+                Delete Project
+              </>
+            )}
           </button>
           <button
             onClick={onClose}
+            disabled={isLoading}
             className="w-full px-5 py-2.5 text-text-tertiary hover:text-text-primary text-sm font-medium transition"
           >
             Cancel

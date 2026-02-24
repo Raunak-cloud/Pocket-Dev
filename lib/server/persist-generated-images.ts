@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import Replicate from "replicate";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SiteTheme } from "@/app/types";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface GeneratedFile {
   path: string;
@@ -20,18 +23,39 @@ type UrlOutput = {
   url: () => string | URL;
 };
 
-type ReplicateModelName = `${string}/${string}` | `${string}/${string}:${string}`;
-const DEFAULT_REPLICATE_MODEL: ReplicateModelName = "prunaai/z-image-turbo";
-const REPLICATE_MODEL = (
-  process.env.REPLICATE_IMAGE_MODEL || DEFAULT_REPLICATE_MODEL
-) as ReplicateModelName;
-// z-image-turbo supports multiple resolutions: 768, 1024, 1152, etc.
-// Using 1024x1024 for better quality while staying fast
-const DEFAULT_IMAGE_WIDTH = 1024;
-const DEFAULT_IMAGE_HEIGHT = 1024;
-const DEFAULT_PROMPT = "High-quality, professional, well-lit, clean composition";
-const RATE_LIMIT_RETRY_DELAY_MS = 10_000; // 10 seconds as requested
-const MAX_RATE_LIMIT_RETRIES = 5; // Increased retries to ensure images are generated
+type ReplicateModelName =
+  | `${string}/${string}`
+  | `${string}/${string}:${string}`;
+
+type AspectRatio = "square" | "landscape" | "portrait" | "wide";
+
+interface ImageReference {
+  source: string;
+  altText: string | null;
+  filePath: string;
+  surroundingContext: string;
+  sourceType: "img-tag" | "css-url" | "placeholder" | "remote-url";
+  index: number;
+}
+
+interface ImagePromptResult {
+  source: string;
+  prompt: string;
+  aspectRatio: AspectRatio;
+}
+
+interface ImageGenConfig {
+  replicateModel: ReplicateModelName;
+  defaultWidth: number;
+  defaultHeight: number;
+  concurrencyLimit: number;
+  enableLlmPromptEnhancement: boolean;
+  maxRetries: number;
+  retryDelayMs: number;
+}
+
+// ─── Regex Constants (kept for source detection) ─────────────────────────────
+
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|svg|avif)(?:$|\?)/i;
 const REMOTE_URL_RE = /^https?:\/\//i;
 const PLACEHOLDER_RE = /^REPLICATE_IMG_\d+$/i;
@@ -44,27 +68,44 @@ const KNOWN_IMAGE_HOSTS = new Set([
   "replicate.delivery",
   "pbxt.replicate.delivery",
 ]);
-const GENERIC_IMAGE_PROMPT_RE =
-  /\b(?:image|photo|picture|professional photograph|professional product photo|placeholder|stock|hero image)\b/i;
 
-function getThemeDefaultPrompt(theme: SiteTheme): string {
-  if (theme === "food") {
-    return "Beautifully plated dish, restaurant quality, appetizing, well-presented, natural lighting, culinary magazine style";
-  }
-  if (theme === "fashion") {
-    return "High-end fashion, editorial style, stylish, clean minimal background, commercial quality, elegant";
-  }
-  if (theme === "interior") {
-    return "Professionally designed interior space, natural daylight, modern aesthetic, spacious, clean design";
-  }
-  if (theme === "automotive") {
-    return "Luxury car, sleek design, dramatic lighting, showroom quality, modern, dynamic angle";
-  }
-  if (theme === "people") {
-    return "Natural portrait, authentic expression, well-lit, editorial style, clean background";
-  }
-  return DEFAULT_PROMPT;
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+function resolveImageGenConfig(): ImageGenConfig {
+  return {
+    replicateModel: (process.env.REPLICATE_IMAGE_MODEL ||
+      "prunaai/z-image-turbo") as ReplicateModelName,
+    defaultWidth: parseInt(process.env.IMAGE_WIDTH || "1024", 10),
+    defaultHeight: parseInt(process.env.IMAGE_HEIGHT || "1024", 10),
+    concurrencyLimit: parseInt(
+      process.env.IMAGE_CONCURRENCY_LIMIT || "4",
+      10,
+    ),
+    enableLlmPromptEnhancement:
+      process.env.DISABLE_LLM_PROMPT_ENHANCEMENT !== "true",
+    maxRetries: parseInt(process.env.IMAGE_MAX_RETRIES || "5", 10),
+    retryDelayMs: parseInt(process.env.IMAGE_RETRY_DELAY_MS || "10000", 10),
+  };
 }
+
+function getAspectRatioDimensions(
+  aspectRatio: AspectRatio,
+  config: ImageGenConfig,
+): { width: number; height: number } {
+  switch (aspectRatio) {
+    case "wide":
+      return { width: 1216, height: 832 };
+    case "landscape":
+      return { width: 1152, height: 896 };
+    case "portrait":
+      return { width: 896, height: 1152 };
+    case "square":
+    default:
+      return { width: config.defaultWidth, height: config.defaultHeight };
+  }
+}
+
+// ─── Supabase Helpers ────────────────────────────────────────────────────────
 
 function getSupabaseHost(): string | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -76,686 +117,10 @@ function getSupabaseHost(): string | null {
   }
 }
 
-function isUrlOutput(value: unknown): value is UrlOutput {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "url" in value &&
-    typeof (value as { url?: unknown }).url === "function"
-  );
-}
-
-function trimPrompt(text: string): string {
-  return text
-    .replace(/\s+/g, " ")
-    .replace(/[{}[\]<>`]/g, " ")
-    .trim()
-    .slice(0, 220);
-}
-
-function promptFromUrl(source: string): string {
-  try {
-    const url = new URL(source);
-    const queryKeys = [
-      "prompt",
-      "q",
-      "query",
-      "text",
-      "title",
-      "description",
-      "keyword",
-    ];
-
-    for (const key of queryKeys) {
-      const value = url.searchParams.get(key);
-      if (value) {
-        const trimmed = trimPrompt(decodeURIComponent(value));
-        if (trimmed) return trimmed;
-      }
-    }
-
-    const pathname = decodeURIComponent(url.pathname || "")
-      .replace(/\.[a-z0-9]+$/i, "")
-      .replace(/[-_]+/g, " ")
-      .replace(/[^\w\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (pathname.length > 4) {
-      return trimPrompt(pathname);
-    }
-  } catch {
-    // Ignore malformed URLs and fall back.
-  }
-  return DEFAULT_PROMPT;
-}
-
-/**
- * Enrich short/vague subject labels with concrete visual descriptions.
- * A context hint like "Dogs" or "For Cats" is too vague for an image model —
- * it needs specific visual details like breed, setting, lighting to produce
- * a relevant photograph instead of a random stock image.
- */
-function enrichShortSubjectPrompt(subject: string): string {
-  const text = subject.toLowerCase().trim();
-  const wordCount = text.split(/\s+/).length;
-
-  // If already detailed enough (4+ words), don't enrich
-  if (wordCount >= 4) return subject;
-
-  // Animal categories → describe a real photograph of that animal
-  if (/\bdog|dogs|puppy|puppies\b/.test(text)) {
-    return `a happy golden retriever dog sitting on a clean white background, professional pet photography, studio lighting, looking at camera`;
-  }
-  if (/\bcat|cats|kitten|kittens\b/.test(text)) {
-    return `a beautiful tabby cat with green eyes sitting elegantly, professional pet photography, soft studio lighting, clean white background`;
-  }
-  if (/\bbird|birds|parrot|parakeet\b/.test(text)) {
-    return `a colorful parrot perched on a natural branch, professional animal photography, bright studio lighting, clean background`;
-  }
-  if (/\bhamster|rabbit|bunny|guinea pig\b/.test(text)) {
-    return `an adorable fluffy rabbit on a soft white surface, professional pet photography, gentle studio lighting`;
-  }
-  if (/\bpet|pets\b/.test(text)) {
-    return `a cute golden retriever puppy and a tabby kitten together, professional pet photography, warm studio lighting, clean white background`;
-  }
-
-  // Food categories
-  if (/\bpizza\b/.test(text)) {
-    return `a freshly baked margherita pizza with melted mozzarella and fresh basil on a wooden board, warm restaurant lighting, overhead view`;
-  }
-  if (/\bburger|hamburger\b/.test(text)) {
-    return `a gourmet beef burger with melted cheese, lettuce, and tomato on a brioche bun, dramatic side lighting, dark background`;
-  }
-  if (/\bsushi\b/.test(text)) {
-    return `an elegant sushi platter with nigiri and maki rolls on a black slate plate, soft natural lighting, top-down view`;
-  }
-  if (/\bcoffee\b/.test(text)) {
-    return `a latte art coffee in a ceramic cup on a wooden table with coffee beans scattered around, warm morning light, cafe setting`;
-  }
-
-  // If the subject is very short (1-2 words) and doesn't match known categories,
-  // add basic photography qualifiers to help the model
-  if (wordCount <= 2) {
-    return `${subject}, professional photograph, studio lighting, clean background, high quality`;
-  }
-
-  return subject;
-}
-
-function resolvePrompt(
+function isSupabaseStorageUrl(
   source: string,
-  altText?: string,
-  contextHint?: string,
-  siteTheme: SiteTheme = "generic",
-  isUserProvided: boolean = false,
-  globalContextHint?: string,
-): string {
-  const trimmedAlt = trimPrompt(altText || "");
-  const trimmedContext = trimPrompt(contextHint || "");
-  const trimmedGlobalContext = trimPrompt(globalContextHint || "");
-  const themeDefault = getThemeDefaultPrompt(siteTheme);
-
-  // If this is a user-provided prompt, use it directly without length requirements
-  if (isUserProvided && trimmedAlt) {
-    console.log(`[resolvePrompt] Using user-provided prompt directly: "${trimmedAlt}"`);
-    return trimmedAlt;
-  }
-
-  // PRIORITY 1: Detailed alt text (10+ words) — best case, AI wrote a good description
-  if (trimmedAlt && trimmedAlt.split(/\s+/).length >= 10) {
-    console.log(`[resolvePrompt] P1 - detailed alt text (${trimmedAlt.split(/\s+/).length} words): "${trimmedAlt}"`);
-    return trimmedAlt;
-  }
-
-  // PRIORITY 2: Shorter but specific alt text (not generic filler words)
-  if (trimmedAlt && !GENERIC_IMAGE_PROMPT_RE.test(trimmedAlt) && trimmedAlt.length >= 10) {
-    console.log(`[resolvePrompt] P2 - specific alt text: "${trimmedAlt}"`);
-    // Combine alt text with context hint to make it more specific
-    // e.g., alt="orthopedic bed" + context="Cloud-9 Orthopedic Bed" → richer prompt
-    if (trimmedContext && !trimmedContext.toLowerCase().includes(trimmedAlt.toLowerCase())) {
-      const combined = `${trimmedAlt}, ${trimmedContext}`;
-      console.log(`[resolvePrompt]   → enriched with context: "${combined}"`);
-      return combined;
-    }
-    return trimmedAlt;
-  }
-
-  // PRIORITY 3: Context from nearby headings/labels (e.g., product name, section title)
-  // This is crucial for product cards where alt text may be generic but the card title is specific
-  if (trimmedContext && trimmedContext.length >= 4) {
-    console.log(`[resolvePrompt] P3 - context hint: "${trimmedContext}"`);
-
-    // Enrich short category labels with visual descriptions so the image model
-    // knows what to actually photograph. "Dogs" alone → the model might generate anything.
-    // "Dogs" + enrichment → "a happy golden retriever dog, professional pet photography"
-    const enriched = enrichShortSubjectPrompt(trimmedContext);
-
-    // If we also have some alt text (even generic), combine them
-    if (trimmedAlt && trimmedAlt.length >= 5) {
-      const combined = `${enriched}, ${trimmedAlt}`;
-      console.log(`[resolvePrompt]   → combined with alt: "${combined}"`);
-      return combined;
-    }
-
-    return enriched;
-  }
-
-  // PRIORITY 4: Any alt text at all (even generic ones get enhanced below)
-  if (trimmedAlt && trimmedAlt.length >= 5) {
-    console.log(`[resolvePrompt] P4 - fallback alt text: "${trimmedAlt}"`);
-    return trimmedAlt;
-  }
-
-  // PRIORITY 5: Theme defaults for placeholders
-  if (PLACEHOLDER_RE.test(source)) {
-    console.log(`[resolvePrompt] P5 - theme default for placeholder: "${themeDefault}"`);
-    return themeDefault;
-  }
-
-  // LAST RESORT
-  console.log(`[resolvePrompt] LAST RESORT - using theme default: "${themeDefault}"`);
-  return themeDefault;
-}
-
-function extractContextHint(content: string, startIndex: number): string {
-  // Search a tighter window — closer text is more likely to be the actual item name
-  const from = Math.max(0, startIndex - 800);
-  const to = Math.min(content.length, startIndex + 800);
-  const snippet = content.slice(from, to);
-
-  // Generic section labels that should be heavily penalized — these are NOT specific product names
-  const genericSectionLabelRe =
-    /\b(best sellers?|featured|trending|shop all|view all|new arrivals?|our products?|collections?|products?|services?|about us|learn more|read more|view details?|see all|explore)\b/i;
-
-  // Price-like patterns indicate we're near a product card — boost nearby text
-  const priceRe = /\$\d+|\d+\.\d{2}/;
-
-  type Candidate = { text: string; absIndex: number; kind: "heading" | "attr" | "text" };
-  const candidates: Candidate[] = [];
-
-  const pushCandidate = (
-    rawText: string | undefined,
-    localIndex: number | undefined,
-    kind: Candidate["kind"],
-  ) => {
-    if (!rawText || typeof localIndex !== "number") return;
-    const cleaned = sanitizeVisualSubjectPrompt(trimPrompt(rawText));
-    if (!cleaned || cleaned.length < 4) return;
-    if (/^[\d\W_]+$/.test(cleaned)) return;
-    // Skip prices, buttons, and very short generic text
-    if (/^\$?\d+(\.\d+)?$/.test(cleaned)) return;
-    candidates.push({ text: cleaned, absIndex: from + localIndex, kind });
-  };
-
-  // Extract headings — product names are often in <h3>, <h4> near product cards
-  const headingRe = /<h([1-6])[^>]*>([^<]{3,160})<\/h\1>/gi;
-  let headingMatch: RegExpExecArray | null = headingRe.exec(snippet);
-  while (headingMatch) {
-    pushCandidate(headingMatch[2], headingMatch.index, "heading");
-    headingMatch = headingRe.exec(snippet);
-  }
-
-  // Extract label attributes
-  const labelAttrRe =
-    /\b(?:title|name|aria-label|product|service|category|collection|theme)\s*[:=]\s*["'`]([^"'`]{4,140})["'`]/gi;
-  let labelMatch: RegExpExecArray | null = labelAttrRe.exec(snippet);
-  while (labelMatch) {
-    pushCandidate(labelMatch[1], labelMatch.index, "attr");
-    labelMatch = labelAttrRe.exec(snippet);
-  }
-
-  // Extract text nodes (but only reasonably sized ones — skip single words and long paragraphs)
-  const textNodeRe = />([^<]{4,80})</g;
-  let textMatch: RegExpExecArray | null = textNodeRe.exec(snippet);
-  while (textMatch) {
-    pushCandidate(textMatch[1], textMatch.index, "text");
-    textMatch = textNodeRe.exec(snippet);
-  }
-
-  if (candidates.length === 0) return "";
-
-  const scoreCandidate = (c: Candidate): number => {
-    const distance = Math.abs(c.absIndex - startIndex);
-    // PROXIMITY IS KING: Closest text to the image is most likely its label/title.
-    // Use a steep decay so nearby text dominates over distant headings.
-    const distanceScore = Math.max(0, 3000 - distance * 3);
-    const wordCount = c.text.split(/\s+/).length;
-    // Sweet spot: 2-6 words (typical product name like "Cloud-9 Orthopedic Bed")
-    const specificityScore = wordCount >= 2 && wordCount <= 8 ? 200 : Math.min(wordCount * 15, 100);
-    // Attributes (title=, name=) are most specific, then headings, then text nodes
-    const kindBonus = c.kind === "attr" ? 150 : c.kind === "heading" ? 100 : 30;
-    // Heavily penalize generic section labels
-    const genericPenalty = genericSectionLabelRe.test(c.text) ? 500 : 0;
-    const longPenalty = c.text.length > 80 ? 100 : 0;
-    // Bonus if nearby text contains a price (signals a product card context)
-    const nearbySnippet = snippet.slice(
-      Math.max(0, c.absIndex - from - 200),
-      Math.min(snippet.length, c.absIndex - from + 200),
-    );
-    const productCardBonus = priceRe.test(nearbySnippet) ? 150 : 0;
-
-    return distanceScore + specificityScore + kindBonus + productCardBonus - genericPenalty - longPenalty;
-  };
-
-  const best = candidates
-    .map((candidate) => ({ candidate, score: scoreCandidate(candidate) }))
-    .sort((a, b) => b.score - a.score)[0]?.candidate;
-
-  if (!best) return "";
-  console.log(`[extractContextHint] Best context (${best.kind}): "${best.text}"`);
-  return best.text;
-}
-
-function extractPlaceholderNumber(source: string): number | null {
-  const match = source.match(/REPLICATE_IMG_(\d+)/i);
-  if (!match) return null;
-  const value = Number.parseInt(match[1], 10);
-  return Number.isFinite(value) ? value : null;
-}
-
-function getSimpleStyleHint(base: string, siteTheme: SiteTheme): string {
-  const text = base.toLowerCase();
-
-  // Tech/digital content - NO photography terms
-  if (/\b(AI|artificial intelligence|machine learning|algorithm|data|code|programming|software|technology|digital|cyber|network)\b/i.test(text)) {
-    return "modern, clean design, minimalist, contemporary";
-  }
-
-  if (/\b(design|UI|UX|interface|workspace|productivity|creativity|minimal)\b/i.test(text)) {
-    return "clean, modern, minimalist, professional environment";
-  }
-
-  // Pets/ecommerce product cards
-  if (
-    /\b(pet|pets|dog|dogs|cat|cats|bird|birds|hamster|rabbit|guinea pig|leash|harness|pet bed|cat tree|pet toy|pet food)\b/.test(
-      text,
-    )
-  ) {
-    return "clean e-commerce product photography, bright neutral background, sharp details, no people";
-  }
-
-  // Product photography - focus on the product
-  if (/\b(shoe|sneaker|watch|bag|handbag|purse|bottle|perfume|cosmetic|jewelry|ring|necklace)\b/.test(text)) {
-    return "clean background, well-lit, centered, catalog style";
-  }
-
-  // Food - focus on the dish
-  if (/\b(food|dish|meal|cuisine|dessert|plate|bowl)\b/.test(text)) {
-    return "appetizing, well-presented, natural lighting, overhead view";
-  }
-
-  // People - focus on the person
-  if (/\b(person|people|man|woman|model|portrait)\b/.test(text)) {
-    return "natural, authentic expression, soft lighting";
-  }
-
-  // Theme-based hints (only if content matches)
-  if (siteTheme === "food" && /\b(food|dish|meal|cook|chef|restaurant|cuisine)\b/i.test(text)) {
-    return "appetizing, beautifully plated, warm tones";
-  }
-  if (siteTheme === "fashion" && /\b(fashion|clothing|apparel|style|outfit)\b/i.test(text)) {
-    return "stylish, elegant, modern fashion";
-  }
-  if (siteTheme === "interior" && /\b(interior|room|space|furniture|home)\b/i.test(text)) {
-    return "spacious, well-lit, modern design";
-  }
-  if (siteTheme === "automotive" && /\b(car|vehicle|automotive|motorcycle)\b/i.test(text)) {
-    return "sleek, modern, dynamic angle";
-  }
-  if (siteTheme === "people" && /\b(person|people|portrait|team|staff)\b/i.test(text)) {
-    return "natural, candid moment, authentic";
-  }
-
-  // Default - keep it simple and object-focused
-  return "clean, modern, natural lighting, subject-focused";
-}
-
-function deriveNegativePrompt(
-  basePrompt: string,
-  globalContextHint: string,
-  siteTheme: SiteTheme,
-): string {
-  // These are things the image model must NEVER generate.
-  // The collage/grid/text problem is the #1 issue, so always include these.
-  const alwaysExclude = [
-    "collage", "grid layout", "multiple images", "image grid", "mood board",
-    "text", "labels", "captions", "watermarks", "logos", "words", "letters", "typography",
-    "website screenshot", "app interface", "UI mockup", "wireframe",
-    "clipart", "cartoon", "illustration", "drawing", "sketch", "icon set",
-    "split screen", "side by side", "before and after", "comparison",
-  ];
-
-  const text = `${basePrompt} ${globalContextHint}`.toLowerCase();
-
-  // Add domain-specific exclusions
-  if (/\b(pet|dog|cat|bird|hamster|rabbit|leash|harness)\b/.test(text)) {
-    alwaysExclude.push("humans", "office workers", "business portraits", "laptops", "phones");
-  }
-
-  if (/\b(food|dish|meal|restaurant|cuisine|chef)\b/.test(text)) {
-    alwaysExclude.push("office workers", "business portraits", "laptops", "phones");
-  }
-
-  if (/\b(shop|store|e-?commerce|product|price|buy|cart)\b/.test(text)) {
-    alwaysExclude.push("website screenshots", "app interfaces", "product grids");
-  }
-
-  return alwaysExclude.join(", ");
-}
-
-function buildGenerationPrompt(
-  source: string,
-  prompt: string,
-  index: number,
-  siteTheme: SiteTheme = "generic",
-  isUserProvided: boolean = false,
-  globalContextHint?: string,
-  exclusionHint?: string,
-): string {
-  // If this is a user-provided prompt (from image regeneration), respect their intent
-  // but frame it as a single photographic subject to prevent collection/grid output.
-  if (isUserProvided) {
-    const userPrompt = trimPrompt(prompt);
-    if (!userPrompt) {
-      return `${getThemeDefaultPrompt(siteTheme)}, high quality, photorealistic`;
-    }
-
-    // Check if the user already wrote a complete descriptive prompt (5+ words)
-    // vs a short label like "german shepherd" or "pizza"
-    const wordCount = userPrompt.split(/\s+/).length;
-    let positivePrompt: string;
-
-    if (wordCount >= 5) {
-      // User wrote a detailed prompt — use it directly, just ensure singular framing
-      positivePrompt = `A professional photograph of ${userPrompt}, one single subject centered in frame, sharp focus, clean background`;
-    } else {
-      // Short prompt like "german shepherd" — the model needs more guidance to avoid
-      // generating a breed reference sheet / collection / collage
-      positivePrompt = `A close-up professional photograph of one single ${userPrompt}, centered in the frame, looking natural, soft studio lighting, clean blurred background, shallow depth of field, photorealistic, high detail`;
-    }
-
-    const negativePrompt = "collage, grid, multiple subjects, collection, reference sheet, side by side, split image, text, labels, captions, watermarks, clipart, cartoon, illustration, low quality, blurry";
-
-    const finalPrompt = `${positivePrompt}. NEVER generate: ${negativePrompt}`;
-    const truncatedPrompt = finalPrompt.slice(0, 500);
-
-    console.log(`\n========== IMAGE PROMPT (User-Provided) [${source}] ==========`);
-    console.log(`  Original input:  "${userPrompt}" (${wordCount} words)`);
-    console.log(`  Positive prompt: "${positivePrompt}"`);
-    console.log(`  Negative prompt: "${negativePrompt}"`);
-    console.log(`  FINAL PROMPT →   "${truncatedPrompt}"`);
-    console.log(`=============================================================\n`);
-    return truncatedPrompt;
-  }
-
-  // --- AUTO-GENERATED PROMPT CONSTRUCTION ---
-  // The #1 principle: the prompt must describe a SPECIFIC, CONCRETE visual subject.
-  // Never use abstract instructions like "matches the nearby context" — the image
-  // model cannot read HTML. It needs a direct description of what to photograph.
-
-  const base = sanitizeVisualSubjectPrompt(
-    trimPrompt(prompt) || getThemeDefaultPrompt(siteTheme),
-  );
-
-  const contextGuard = trimPrompt(globalContextHint || "");
-  const exclusionGuard = trimPrompt(exclusionHint || "");
-  const negativePrompt = deriveNegativePrompt(base, contextGuard, siteTheme);
-  const allExclusions = [negativePrompt, exclusionGuard].filter(Boolean).join(", ");
-
-  // Determine the style based on content
-  const simpleStyle = getSimpleStyleHint(base, siteTheme);
-
-  // Build the prompt with the SUBJECT first, style second, negatives last.
-  // This structure ensures the image model focuses on the actual subject.
-  const finalPrompt = [
-    // SUBJECT: The most important part — what to actually photograph
-    base,
-    // STYLE: How it should look
-    simpleStyle,
-    // QUALITY: Always enforce single-subject photorealism
-    "single object in frame, photorealistic, professional photograph, studio quality",
-    // HARD NEGATIVES: Prevent collage/grid/text — the most common failure mode
-    `NEVER generate: ${allExclusions}`,
-  ].join(". ");
-
-  // Allow up to 500 chars for better prompt quality
-  const truncatedPrompt = finalPrompt.slice(0, 500);
-
-  console.log(`\n========== IMAGE PROMPT [${source}] ==========`);
-  console.log(`  Base (subject):  "${base}"`);
-  console.log(`  Style hint:      "${simpleStyle}"`);
-  console.log(`  Negative prompt: "${allExclusions}"`);
-  console.log(`  FINAL PROMPT →   "${truncatedPrompt}"`);
-  console.log(`================================================\n`);
-
-  return truncatedPrompt;
-}
-
-function deriveImageDomainHints(
-  originalPrompt: string,
-  files: GeneratedFile[],
-  siteTheme: SiteTheme,
-): { context: string; avoid: string } {
-  const corpus = `${originalPrompt} ${files
-    .slice(0, 25)
-    .map((f) => f.content.slice(0, 1500))
-    .join(" ")}`
-    .toLowerCase();
-
-  const has = (re: RegExp) => re.test(corpus);
-
-  if (has(/\b(pet|pets|dog|dogs|cat|cats|puppy|kitten|leash|harness|vet|pet care)\b/)) {
-    return {
-      context:
-        "pet e-commerce visuals only: animals and pet products aligned to each section (dogs/cats/birds/small pets), no humans",
-      avoid:
-        "corporate headshots, office workers, business portraits, laptops, phones, app UI mockups, unrelated electronics",
-    };
-  }
-
-  if (has(/\b(food|restaurant|meal|dish|menu|chef|kitchen|recipe|cuisine)\b/)) {
-    return {
-      context:
-        "food and dining visuals with dishes, ingredients, chefs, kitchens, and restaurant environments",
-      avoid:
-        "corporate portraits, office scenes, unrelated consumer electronics",
-    };
-  }
-
-  if (has(/\b(fashion|clothing|apparel|outfit|style|boutique)\b/)) {
-    return {
-      context:
-        "fashion visuals with clothing, accessories, runway/editorial styling, and retail product photography",
-      avoid:
-        "food scenes, unrelated office setups, random electronics unless fashion-tech is explicit",
-    };
-  }
-
-  if (has(/\b(education|course|learning|student|teacher|academy|tutorial)\b/)) {
-    return {
-      context:
-        "education visuals with learning environments, students, teachers, course materials, and study spaces",
-      avoid:
-        "unrelated product catalog shots, generic corporate portraits, random luxury objects",
-    };
-  }
-
-  if (has(/\b(saas|software|startup|platform|dashboard|analytics|api|developer|code)\b/)) {
-    return {
-      context:
-        "modern software and product visuals aligned with technology platforms and digital products",
-      avoid:
-        "food plating, fashion runways, unrelated pet imagery, random office portraits",
-    };
-  }
-
-  if (siteTheme === "food") {
-    return {
-      context: "food-centric visuals aligned with culinary products and dining experiences",
-      avoid: "generic office portraits and unrelated electronics",
-    };
-  }
-
-  if (siteTheme === "fashion") {
-    return {
-      context: "fashion-centric visuals aligned with apparel and style products",
-      avoid: "food scenes and unrelated office portraiture",
-    };
-  }
-
-  return {
-    context:
-      "visuals strictly aligned with the website's stated business domain and section purpose",
-    avoid: "unrelated people portraits, unrelated electronics, and off-topic stock imagery",
-  };
-}
-
-function sanitizeVisualSubjectPrompt(input: string): string {
-  let text = input;
-
-  // ONLY remove very specific UI/tech terms that would create literal screenshots
-  // Keep domain-specific terms like "learning", "platform", "course", "student", etc.
-  const literalUITerms = [
-    /\b(?:screenshot|screen capture|screen grab)\b/gi,
-    /\b(?:mockup|wireframe|prototype)\b/gi,
-    /\b(?:hero section|banner section|header section)\b/gi,
-  ];
-
-  for (const re of literalUITerms) {
-    text = text.replace(re, "");
-  }
-
-  // Replace UI-specific words with more photographic equivalents
-  text = text.replace(/\bwebsite\b/gi, "professional setting");
-  text = text.replace(/\bwebpage\b/gi, "professional setting");
-  text = text.replace(/\b(?:dashboard|admin panel|control panel)\b/gi, "workspace");
-  text = text.replace(/\b(?:UI|UX|interface|user interface)\b/gi, "");
-  text = text.replace(/\b(?:app screen)\b/gi, "");
-  text = text.replace(/\b(?:landing page|homepage)\b/gi, "");
-  text = text.replace(
-    /\b(?:navbar|nav bar|footer|header|hero section|cta|button|menu|shop all|view all|add to cart|wishlist|checkout|card grid|product grid)\b/gi,
-    "",
-  );
-
-  // Clean up extra whitespace
-  text = text.replace(/\s+/g, " ").trim();
-
-  // If we removed too much and lost the meaning, return a sensible default
-  if (!text || text.length < 5) {
-    return DEFAULT_PROMPT;
-  }
-
-  // Only strip leading prepositions if they DON'T form a meaningful phrase.
-  // "For Dogs" → keep as-is (meaningful category label)
-  // "for the website" → strip "for the"
-  // Check: if after stripping "for", the rest is a concrete noun/subject, keep the whole thing.
-  const leadingPrepMatch = text.match(/^(?:a|an|the|of|with|in|on|at)\s+/i);
-  if (leadingPrepMatch) {
-    text = text.slice(leadingPrepMatch[0].length);
-  }
-  // Special handling for "for" — only strip if followed by generic words
-  const forMatch = text.match(/^for\s+/i);
-  if (forMatch) {
-    const rest = text.slice(forMatch[0].length);
-    // If what follows "for" is a concrete subject (animals, products, people), keep it
-    if (/\b(dog|cat|bird|pet|kid|baby|men|women|home|kitchen|garden|car|sport)/i.test(rest)) {
-      // Keep "For Dogs" as "Dogs", which is the actual subject
-      text = rest;
-    } else {
-      text = rest;
-    }
-  }
-
-  return text.trim();
-}
-
-function detectSiteTheme(files: GeneratedFile[]): SiteTheme {
-  const corpus = files
-    .slice(0, 40)
-    .map((f) => f.content.slice(0, 6000))
-    .join(" ")
-    .toLowerCase();
-
-  const score = (re: RegExp) => (corpus.match(re)?.length ?? 0);
-
-  // Check for tech/blog indicators first
-  const techBlogScore = score(
-    /\b(blog|article|post|engineering|technology|software|code|programming|development|design system|UI|UX|tech|tutorial|guide)\b/g,
-  );
-
-  // If it's clearly a blog/tech site, return generic to avoid misclassification
-  if (techBlogScore >= 5) return "generic";
-
-  const foodScore = score(
-    /\b(meal|meals|dish|dishes|food|cook|chef|kitchen|menu|restaurant|delivery|order|homemade|home cook|plating|recipe)\b/g,
-  );
-  const fashionScore = score(
-    /\b(fashion|apparel|clothing|wear|outfit|sneaker|jewelry|boutique)\b/g,
-  );
-  const interiorScore = score(
-    /\b(interior|furniture|living room|bedroom|kitchen design|home decor|architecture)\b/g,
-  );
-  const autoScore = score(
-    /\b(car|vehicle|automotive|motorcycle|garage|driving)\b/g,
-  );
-  const peopleScore = score(
-    /\b(team|staff|person|people|portrait|profile|professional)\b/g,
-  );
-
-  const ranked: Array<[SiteTheme, number]> = [
-    ["food", foodScore],
-    ["fashion", fashionScore],
-    ["interior", interiorScore],
-    ["automotive", autoScore],
-    ["people", peopleScore],
-  ];
-  ranked.sort((a, b) => b[1] - a[1]);
-
-  // Require at least 5 strong matches to classify as a specific theme
-  // This prevents misclassification from incidental keyword matches
-  if (ranked[0][1] < 5) return "generic";
-
-  // Also check that the top theme is significantly higher than others
-  if (ranked[1] && ranked[0][1] < ranked[1][1] * 2) return "generic";
-
-  return ranked[0][0];
-}
-
-function createFallbackImageDataUri(source: string, prompt: string, index: number): string {
-  const seed = `${source}:${index}:${prompt}`;
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  }
-
-  const hueA = Math.abs(hash) % 360;
-  const hueB = (hueA + 72) % 360;
-  const hueC = (hueA + 144) % 360;
-  const label = trimPrompt(prompt) || `Image ${index}`;
-  const safeLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
-<defs>
-<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-<stop offset="0%" stop-color="hsl(${hueA} 72% 46%)"/>
-<stop offset="50%" stop-color="hsl(${hueB} 74% 42%)"/>
-<stop offset="100%" stop-color="hsl(${hueC} 78% 38%)"/>
-</linearGradient>
-</defs>
-<rect width="1200" height="800" fill="url(#g)"/>
-<g opacity="0.22" fill="#fff">
-<circle cx="170" cy="160" r="90"/>
-<circle cx="1070" cy="220" r="130"/>
-<circle cx="900" cy="670" r="160"/>
-</g>
-<rect x="90" y="620" width="1020" height="110" rx="16" fill="rgba(0,0,0,0.28)"/>
-<text x="120" y="690" fill="white" font-size="36" font-family="Arial, Helvetica, sans-serif">${safeLabel}</text>
-</svg>`;
-
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-function isSupabaseStorageUrl(source: string, supabaseHost: string | null): boolean {
+  supabaseHost: string | null,
+): boolean {
   if (!supabaseHost || !REMOTE_URL_RE.test(source)) return false;
   try {
     const url = new URL(source);
@@ -764,6 +129,8 @@ function isSupabaseStorageUrl(source: string, supabaseHost: string | null): bool
     return false;
   }
 }
+
+// ─── Source Detection ────────────────────────────────────────────────────────
 
 function isLikelyImageUrl(source: string): boolean {
   try {
@@ -786,13 +153,24 @@ function isLikelyImageUrl(source: string): boolean {
   }
 }
 
-function shouldReplaceSource(source: string, supabaseHost: string | null): boolean {
+function shouldReplaceSource(
+  source: string,
+  supabaseHost: string | null,
+): boolean {
   if (!source) return false;
   if (PLACEHOLDER_RE.test(source)) return true;
-  if (source.startsWith("/") || source.startsWith("./") || source.startsWith("../")) {
+  if (
+    source.startsWith("/") ||
+    source.startsWith("./") ||
+    source.startsWith("../")
+  ) {
     return false;
   }
-  if (source.startsWith("data:") || source.startsWith("blob:") || source.startsWith("#")) {
+  if (
+    source.startsWith("data:") ||
+    source.startsWith("blob:") ||
+    source.startsWith("#")
+  ) {
     return false;
   }
   if (!REMOTE_URL_RE.test(source)) return false;
@@ -800,100 +178,123 @@ function shouldReplaceSource(source: string, supabaseHost: string | null): boole
   return isLikelyImageUrl(source);
 }
 
-function collectImageSources(
-  files: GeneratedFile[],
-  siteTheme: SiteTheme,
-  isUserProvided: boolean = false,
-  globalContextHint?: string,
-): Map<string, string> {
-  const refs = new Map<string, string>();
+// ─── Image Reference Collection (raw data, no prompt resolution) ─────────────
+
+function extractSurroundingContext(
+  content: string,
+  matchIndex: number,
+): string {
+  const from = Math.max(0, matchIndex - 500);
+  const to = Math.min(content.length, matchIndex + 500);
+  return content.slice(from, to);
+}
+
+function collectImageReferences(files: GeneratedFile[]): ImageReference[] {
+  const refs: ImageReference[] = [];
+  const seenSources = new Set<string>();
   const supabaseHost = getSupabaseHost();
+  let globalIndex = 0;
 
   for (const file of files) {
     const content = file.content;
 
+    // Scan <img> and <Image> tags
     const tagRe = /<(?:img|Image)\b[^>]*>/gim;
     let tagMatch: RegExpExecArray | null = tagRe.exec(content);
     while (tagMatch) {
       const tag = tagMatch[0];
-      const srcMatch = tag.match(/\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i);
+      const srcMatch = tag.match(
+        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
+      );
       if (srcMatch) {
         const source = srcMatch[1].trim();
-        if (shouldReplaceSource(source, supabaseHost) && !refs.has(source)) {
-          const altMatch = tag.match(/\balt\s*=\s*(?:\{)?["']([^"']*)["'](?:\})?/i);
-          const contextHint = extractContextHint(content, tagMatch.index);
-          refs.set(
-            source,
-            resolvePrompt(
-              source,
-              altMatch?.[1],
-              contextHint,
-              siteTheme,
-              isUserProvided,
-              globalContextHint,
-            ),
+        if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+          seenSources.add(source);
+          globalIndex++;
+          const altMatch = tag.match(
+            /\balt\s*=\s*(?:\{)?["']([^"']*)["'](?:\})?/i,
           );
+          refs.push({
+            source,
+            altText: altMatch?.[1] ?? null,
+            filePath: file.path,
+            surroundingContext: extractSurroundingContext(
+              content,
+              tagMatch.index,
+            ),
+            sourceType: "img-tag",
+            index: globalIndex,
+          });
         }
       }
       tagMatch = tagRe.exec(content);
     }
 
+    // Scan CSS url() references
     const cssUrlRe = /url\(\s*["']?(https?:\/\/[^"')\s]+)["']?\s*\)/gi;
     let cssMatch: RegExpExecArray | null = cssUrlRe.exec(content);
     while (cssMatch) {
       const source = cssMatch[1];
-      if (shouldReplaceSource(source, supabaseHost) && !refs.has(source)) {
-        refs.set(
-            source,
-            resolvePrompt(
-              source,
-              undefined,
-              extractContextHint(content, cssMatch.index),
-              siteTheme,
-              isUserProvided,
-              globalContextHint,
-            ),
-          );
+      if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+        seenSources.add(source);
+        globalIndex++;
+        refs.push({
+          source,
+          altText: null,
+          filePath: file.path,
+          surroundingContext: extractSurroundingContext(
+            content,
+            cssMatch.index,
+          ),
+          sourceType: "css-url",
+          index: globalIndex,
+        });
       }
       cssMatch = cssUrlRe.exec(content);
     }
 
+    // Scan REPLICATE_IMG_N placeholders
     const placeholderRe = /REPLICATE_IMG_\d+/gi;
     let placeholderMatch: RegExpExecArray | null = placeholderRe.exec(content);
     while (placeholderMatch) {
       const source = placeholderMatch[0];
-      if (!refs.has(source)) {
-        refs.set(
-            source,
-            resolvePrompt(
-              source,
-              undefined,
-              extractContextHint(content, placeholderMatch.index),
-              siteTheme,
-              isUserProvided,
-              globalContextHint,
-            ),
-          );
+      if (!seenSources.has(source)) {
+        seenSources.add(source);
+        globalIndex++;
+        refs.push({
+          source,
+          altText: null,
+          filePath: file.path,
+          surroundingContext: extractSurroundingContext(
+            content,
+            placeholderMatch.index,
+          ),
+          sourceType: "placeholder",
+          index: globalIndex,
+        });
       }
       placeholderMatch = placeholderRe.exec(content);
     }
 
-    const remoteUrlRe = /https?:\/\/[^\s"'`)<>\]}]+/g;
+    // Scan remaining remote URLs
+    const remoteUrlRe = /https?:\/\/[^\s"'`)<>\]{}]+/g;
     let urlMatch: RegExpExecArray | null = remoteUrlRe.exec(content);
     while (urlMatch) {
       const source = urlMatch[0].replace(/[),.;]+$/, "");
-      if (shouldReplaceSource(source, supabaseHost) && !refs.has(source)) {
-        refs.set(
-            source,
-            resolvePrompt(
-              source,
-              undefined,
-              extractContextHint(content, urlMatch.index),
-              siteTheme,
-              isUserProvided,
-              globalContextHint,
-            ),
-          );
+      if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+        seenSources.add(source);
+        globalIndex++;
+        refs.push({
+          source,
+          altText: null,
+          filePath: file.path,
+          surroundingContext: extractSurroundingContext(
+            content,
+            urlMatch.index,
+          ),
+          sourceType: "remote-url",
+          index: globalIndex,
+        });
       }
       urlMatch = remoteUrlRe.exec(content);
     }
@@ -902,81 +303,310 @@ function collectImageSources(
   return refs;
 }
 
-function collectOrderedImgSources(files: GeneratedFile[]): string[] {
-  const out: string[] = [];
-  for (const file of files) {
-    const tagRe = /<(?:img|Image)\b[^>]*>/gim;
-    let tagMatch: RegExpExecArray | null = tagRe.exec(file.content);
-    while (tagMatch) {
-      const tag = tagMatch[0];
-      const srcMatch = tag.match(/\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i);
-      if (srcMatch && srcMatch[1]) {
-        out.push(srcMatch[1].trim());
-      }
-      tagMatch = tagRe.exec(file.content);
-    }
-  }
-  return out;
+// ─── LLM-Powered Prompt Generation ──────────────────────────────────────────
+
+const IMAGE_PROMPT_SYSTEM = `You are an expert photography director and AI image prompt engineer. Your job is to create optimal prompts for an AI image generation model (SDXL-based) that will produce photorealistic images for a website.
+
+CONTEXT:
+You will receive information about a website being built, including:
+- The user's original request describing what website they want
+- A detected theme/category hint (may be "generic")
+- A collection of images needed for the website, each with:
+  - The image's alt text (written as a photographer's brief by another AI)
+  - The surrounding HTML/code context showing where the image appears
+  - The source type (img tag, CSS background, placeholder, etc.)
+
+YOUR TASK:
+For each image, generate a single, highly effective prompt for the SDXL image model. Also determine the best aspect ratio based on the image's role in the page.
+
+PROMPT WRITING RULES:
+1. Each prompt must be 30-80 words describing a single photorealistic image.
+2. Structure: [Specific Subject] + [Scene/Setting] + [Photography Style] + [Lighting] + [Composition Details]
+3. Be hyper-specific: materials, colors, textures, exact items, arrangement.
+4. Include photography technique: lens type, depth of field, camera angle.
+5. Include lighting direction: "warm golden hour", "soft diffused studio", etc.
+6. Every image prompt must be UNIQUE — no two images should produce similar results.
+7. The prompt must match the website's domain and the image's specific role on the page.
+8. NEVER include text, logos, watermarks, UI elements, screenshots, or collages in prompts.
+9. NEVER use generic terms like "professional photo" or "high quality image" as the main subject.
+10. If the alt text is already a detailed photographer's brief (20+ words with specific subjects), enhance it but preserve its core intent.
+11. If the alt text is generic or short, use the surrounding context and website purpose to infer what image would be most appropriate.
+12. For tech/blockchain/SaaS/AI sites: use abstract conceptual visuals (glowing shields, data streams, geometric networks) rather than photographs of people for feature illustrations.
+13. For food/restaurant sites: describe specific dishes with ingredients, plating style, and ambiance.
+14. For e-commerce: describe exact products with material, color, shape, and lifestyle usage context.
+
+ASPECT RATIO SELECTION:
+- "square" (1024x1024): Product shots, profile photos, card images, icons, grid items
+- "landscape" (1152x896): Standard sections, feature images, blog thumbnails
+- "wide" (1216x832): Hero sections, banners, full-width backgrounds, cover images
+- "portrait" (896x1152): Mobile-oriented content, tall cards, person-focused images
+
+OUTPUT FORMAT:
+Return a JSON array. Each element must have exactly these fields:
+{
+  "source": "<exact source string from input — copy it verbatim>",
+  "prompt": "<your optimized image generation prompt>",
+  "aspectRatio": "square" | "landscape" | "portrait" | "wide"
 }
 
-function extractStablePreviousImageSources(previousFiles: GeneratedFile[]): string[] {
-  const sources = collectOrderedImgSources(previousFiles);
-  const result: string[] = [];
-  for (const src of sources) {
-    if (!src) continue;
-    if (PLACEHOLDER_RE.test(src)) continue;
-    if (src.startsWith("data:") || src.startsWith("blob:")) continue;
-    if (src.startsWith("./") || src.startsWith("../") || src.startsWith("/")) continue;
-    result.push(src);
-  }
-  return result;
+Return ONLY the JSON array, no other text.`;
+
+function buildSiteContentSample(files: GeneratedFile[]): string {
+  const prioritized = [...files].sort((a, b) => {
+    const priority = (path: string) => {
+      if (path.includes("page.tsx") || path.includes("page.jsx")) return 0;
+      if (path.includes("layout.tsx") || path.includes("layout.jsx")) return 1;
+      if (path.includes("component")) return 2;
+      return 3;
+    };
+    return priority(a.path) - priority(b.path);
+  });
+
+  const textContent = prioritized
+    .slice(0, 10)
+    .map((f) => {
+      const textNodes: string[] = [];
+      const textRe = />([^<]{5,200})</g;
+      let m: RegExpExecArray | null;
+      while ((m = textRe.exec(f.content)) !== null) {
+        const text = m[1].trim();
+        if (text.length >= 5 && !/^[{}\[\]()=><]/.test(text)) {
+          textNodes.push(text);
+        }
+      }
+      return textNodes.length > 0
+        ? `[${f.path}]: ${textNodes.slice(0, 20).join(" | ")}`
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  return textContent.slice(0, 3000);
 }
 
-function lockExistingImageSourcesOnEdit(
-  nextFiles: GeneratedFile[],
-  previousFiles: GeneratedFile[],
-): GeneratedFile[] {
-  const previousSources = extractStablePreviousImageSources(previousFiles);
-  if (previousSources.length === 0) return nextFiles;
-  const supabaseHost = getSupabaseHost();
+function buildImagePromptUserMessage(
+  refs: ImageReference[],
+  options: {
+    originalPrompt: string;
+    detectedTheme?: string;
+    siteContentSample: string;
+    isUserProvidedPrompt: boolean;
+  },
+): string {
+  const imageDescriptions = refs
+    .map((ref, i) => {
+      const cleanContext = ref.surroundingContext
+        .replace(/className\s*=\s*["'][^"']*["']/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 400);
 
-  let rollingIndex = 0;
-  const replaceToken = (source: string): string => {
-    const placeholderMatch = source.match(/^REPLICATE_IMG_(\d+)$/i);
-    if (placeholderMatch) {
-      const idx = Number.parseInt(placeholderMatch[1], 10) - 1;
-      if (idx >= 0 && idx < previousSources.length) {
-        return previousSources[idx];
-      }
-      const fallback = previousSources[Math.min(rollingIndex, previousSources.length - 1)];
-      rollingIndex++;
-      return fallback;
+      return `IMAGE ${i + 1}:
+- Source: ${ref.source}
+- Alt text: ${ref.altText || "(none)"}
+- Found in: ${ref.filePath}
+- Source type: ${ref.sourceType}
+- Surrounding context: ${cleanContext}`;
+    })
+    .join("\n\n");
+
+  return `WEBSITE PURPOSE:
+${options.originalPrompt || "(not specified)"}
+
+DETECTED THEME: ${options.detectedTheme || "generic"}
+
+${options.isUserProvidedPrompt ? "NOTE: The user explicitly provided image descriptions. Preserve their intent closely while enhancing for image generation quality.\n" : ""}SITE CONTENT SAMPLE (for understanding overall design):
+${options.siteContentSample}
+
+IMAGES TO GENERATE (${refs.length} total):
+
+${imageDescriptions}
+
+Generate optimized prompts for each image. Return JSON array only.`;
+}
+
+function fallbackPromptGeneration(
+  refs: ImageReference[],
+): ImagePromptResult[] {
+  return refs.map((ref) => ({
+    source: ref.source,
+    prompt:
+      ref.altText && ref.altText.length >= 10
+        ? `${ref.altText}, photorealistic, professional photography, natural lighting`
+        : "High-quality professional photograph, clean composition, natural lighting, well-lit scene",
+    aspectRatio: "square" as const,
+  }));
+}
+
+async function generateImagePrompts(
+  refs: ImageReference[],
+  options: {
+    originalPrompt: string;
+    detectedTheme?: string;
+    isUserProvidedPrompt: boolean;
+    siteContentSample: string;
+  },
+): Promise<ImagePromptResult[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn(
+      "[Image Pipeline] GEMINI_API_KEY not configured, using fallback prompts",
+    );
+    return fallbackPromptGeneration(refs);
+  }
+
+  // Batch large sets to avoid overwhelming the LLM context
+  const BATCH_SIZE = 12;
+  if (refs.length > BATCH_SIZE) {
+    const allResults: ImagePromptResult[] = [];
+    for (let i = 0; i < refs.length; i += BATCH_SIZE) {
+      const batch = refs.slice(i, i + BATCH_SIZE);
+      const batchResults = await generateImagePromptsBatch(
+        batch,
+        options,
+        apiKey,
+      );
+      allResults.push(...batchResults);
     }
+    return allResults;
+  }
 
-    // If the model swapped in volatile generated/placeholder hosts during edit,
-    // preserve prior visual continuity by reusing the previous stable source.
-    if (shouldReplaceSource(source, supabaseHost)) {
-      const fallback = previousSources[Math.min(rollingIndex, previousSources.length - 1)];
-      rollingIndex++;
-      return fallback;
-    }
+  return generateImagePromptsBatch(refs, options, apiKey);
+}
 
-    return source;
-  };
-
-  return nextFiles.map((file) => {
-    const nextContent = file.content.replace(
-      /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/gi,
-      (match, source: string) => {
-        const replacement = replaceToken(source.trim());
-        if (!replacement || replacement === source.trim()) return match;
-        return match.replace(source, replacement);
+async function generateImagePromptsBatch(
+  refs: ImageReference[],
+  options: {
+    originalPrompt: string;
+    detectedTheme?: string;
+    isUserProvidedPrompt: boolean;
+    siteContentSample: string;
+  },
+  apiKey: string,
+): Promise<ImagePromptResult[]> {
+  try {
+    const gemini = new GoogleGenerativeAI(apiKey);
+    const model = gemini.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      generationConfig: {
+        maxOutputTokens: 4096,
+        temperature: 0.7,
+        responseMimeType: "application/json",
       },
+    });
+
+    const userMessage = buildImagePromptUserMessage(refs, options);
+
+    console.log(
+      `[Image Pipeline] Generating prompts for ${refs.length} images via Gemini...`,
     );
 
-    if (nextContent === file.content) return file;
-    return { ...file, content: nextContent };
-  });
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `${IMAGE_PROMPT_SYSTEM}\n\n${userMessage}` }],
+        },
+      ],
+    });
+
+    const responseText = result.response.text().trim();
+    const parsed = JSON.parse(responseText) as Array<{
+      source?: string;
+      prompt?: string;
+      aspectRatio?: string;
+    }>;
+
+    if (!Array.isArray(parsed)) {
+      throw new Error("LLM response is not a JSON array");
+    }
+
+    // Validate and map results
+    const validAspectRatios = new Set<string>([
+      "square",
+      "landscape",
+      "portrait",
+      "wide",
+    ]);
+    const resultMap = new Map<string, ImagePromptResult>();
+
+    for (const item of parsed) {
+      if (!item.source || !item.prompt) continue;
+      resultMap.set(item.source, {
+        source: item.source,
+        prompt: item.prompt.slice(0, 500),
+        aspectRatio: validAspectRatios.has(item.aspectRatio || "")
+          ? (item.aspectRatio as AspectRatio)
+          : "square",
+      });
+    }
+
+    // Fill in any missing images with fallback
+    const results: ImagePromptResult[] = [];
+    for (const ref of refs) {
+      const llmResult = resultMap.get(ref.source);
+      if (llmResult) {
+        results.push(llmResult);
+      } else {
+        console.warn(
+          `[Image Pipeline] LLM missed source "${ref.source}", using fallback`,
+        );
+        results.push(fallbackPromptGeneration([ref])[0]);
+      }
+    }
+
+    console.log(
+      `[Image Pipeline] LLM generated ${resultMap.size}/${refs.length} prompts successfully`,
+    );
+    return results;
+  } catch (error) {
+    console.error("[Image Pipeline] LLM prompt generation failed:", error);
+    console.warn("[Image Pipeline] Falling back to raw alt text prompts");
+    return fallbackPromptGeneration(refs);
+  }
+}
+
+// ─── Concurrency Limiter ─────────────────────────────────────────────────────
+
+function createConcurrencyLimiter(limit: number) {
+  let activeCount = 0;
+  const queue: Array<() => void> = [];
+
+  return function <T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const execute = async () => {
+        try {
+          resolve(await fn());
+        } catch (e) {
+          reject(e);
+        } finally {
+          activeCount--;
+          if (queue.length > 0) {
+            activeCount++;
+            queue.shift()!();
+          }
+        }
+      };
+
+      if (activeCount < limit) {
+        activeCount++;
+        execute();
+      } else {
+        queue.push(execute);
+      }
+    });
+  };
+}
+
+// ─── Replicate Image Generation ──────────────────────────────────────────────
+
+function isUrlOutput(value: unknown): value is UrlOutput {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "url" in value &&
+    typeof (value as { url?: unknown }).url === "function"
+  );
 }
 
 function getReplicateOutputUrl(output: unknown): string {
@@ -1053,30 +683,22 @@ function isRateLimitError(error: unknown): boolean {
 async function generateReplicateImage(
   replicate: Replicate,
   prompt: string,
+  options: {
+    width: number;
+    height: number;
+    model: ReplicateModelName;
+  },
 ): Promise<string> {
-  // Split on "NEVER generate:" to extract negative constraints
-  const neverSplit = prompt.split("NEVER generate:");
-  const positivePrompt = neverSplit[0].trim();
-  const negativeContent = neverSplit.length > 1 ? neverSplit[1].trim() : "";
-
   const input: Record<string, unknown> = {
-    width: DEFAULT_IMAGE_WIDTH,
-    height: DEFAULT_IMAGE_HEIGHT,
-    prompt: positivePrompt,
+    width: options.width,
+    height: options.height,
+    prompt,
   };
 
-  // Some models support negative_prompt as a separate field
-  if (negativeContent) {
-    input.negative_prompt = negativeContent;
-  }
+  console.log(`[Replicate API] Model: "${options.model}" (${options.width}x${options.height})`);
+  console.log(`[Replicate API] Prompt: "${prompt.slice(0, 150)}..."`);
 
-  console.log(`[Replicate API] Model: "${REPLICATE_MODEL}"`);
-  console.log(`[Replicate API] Positive prompt: "${positivePrompt}"`);
-  if (negativeContent) {
-    console.log(`[Replicate API] Negative prompt: "${negativeContent}"`);
-  }
-
-  const output = await replicate.run(REPLICATE_MODEL, { input });
+  const output = await replicate.run(options.model, { input });
   return getReplicateOutputUrl(output);
 }
 
@@ -1084,26 +706,110 @@ async function generateReplicateImageWithRetry(args: {
   replicate: Replicate;
   prompt: string;
   source: string;
+  width: number;
+  height: number;
+  model: ReplicateModelName;
+  maxRetries: number;
+  retryDelayMs: number;
 }): Promise<string> {
-  const { replicate, prompt, source } = args;
+  const { replicate, prompt, source, width, height, model, maxRetries, retryDelayMs } = args;
 
   let attempt = 0;
   while (true) {
     try {
-      return await generateReplicateImage(replicate, prompt);
+      return await generateReplicateImage(replicate, prompt, {
+        width,
+        height,
+        model,
+      });
     } catch (error) {
-      if (!isRateLimitError(error) || attempt >= MAX_RATE_LIMIT_RETRIES) {
+      if (!isRateLimitError(error) || attempt >= maxRetries) {
         throw error;
       }
 
       attempt++;
       console.warn(
-        `[persistGeneratedImagesToStorage] Rate limited for "${source}" (retry ${attempt}/${MAX_RATE_LIMIT_RETRIES}) - waiting ${RATE_LIMIT_RETRY_DELAY_MS / 1000}s...`,
+        `[Image Pipeline] Rate limited for "${source}" (retry ${attempt}/${maxRetries}) - waiting ${retryDelayMs / 1000}s...`,
       );
-      await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+      await sleep(retryDelayMs);
     }
   }
 }
+
+// ─── Parallel Image Generation ───────────────────────────────────────────────
+
+async function generateImagesInParallel(
+  prompts: ImagePromptResult[],
+  config: ImageGenConfig,
+  userId: string,
+  bucket: string,
+): Promise<Map<string, string>> {
+  const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN! });
+  const replacements = new Map<string, string>();
+  const limiter = createConcurrencyLimiter(config.concurrencyLimit);
+
+  const results = await Promise.allSettled(
+    prompts.map((item, i) =>
+      limiter(async () => {
+        const dimensions = getAspectRatioDimensions(
+          item.aspectRatio,
+          config,
+        );
+
+        console.log(
+          `[Image Pipeline] Generating ${i + 1}/${prompts.length}: ${item.source} (${item.aspectRatio})`,
+        );
+
+        const replicateUrl = await generateReplicateImageWithRetry({
+          replicate,
+          prompt: item.prompt,
+          source: item.source,
+          width: dimensions.width,
+          height: dimensions.height,
+          model: config.replicateModel,
+          maxRetries: config.maxRetries,
+          retryDelayMs: config.retryDelayMs,
+        });
+
+        const storedUrl = await uploadImageFromUrl({
+          imageUrl: replicateUrl,
+          userId,
+          bucket,
+          index: i + 1,
+        });
+
+        return { source: item.source, url: storedUrl };
+      }),
+    ),
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === "fulfilled") {
+      replacements.set(result.value.source, result.value.url);
+      console.log(
+        `[Image Pipeline] Generated ${i + 1}/${prompts.length}`,
+      );
+    } else {
+      console.error(
+        `[Image Pipeline] Failed ${i + 1}/${prompts.length} for "${prompts[i].source}":`,
+        result.reason,
+      );
+      replacements.set(
+        prompts[i].source,
+        createFallbackImageDataUri(
+          prompts[i].source,
+          prompts[i].prompt,
+          i + 1,
+        ),
+      );
+    }
+  }
+
+  return replacements;
+}
+
+// ─── Storage ─────────────────────────────────────────────────────────────────
 
 function extensionFromContentType(contentType: string): string {
   const lower = contentType.toLowerCase();
@@ -1129,7 +835,9 @@ async function ensureBucketExists(bucket: string) {
     public: true,
   });
   if (createError) {
-    throw new Error(`Failed to create bucket "${bucket}": ${createError.message}`);
+    throw new Error(
+      `Failed to create bucket "${bucket}": ${createError.message}`,
+    );
   }
 }
 
@@ -1142,7 +850,9 @@ async function uploadImageFromUrl(args: {
   const { imageUrl, userId, bucket, index } = args;
   const res = await fetch(imageUrl);
   if (!res.ok) {
-    throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
+    throw new Error(
+      `Failed to download image: ${res.status} ${res.statusText}`,
+    );
   }
 
   const contentType = res.headers.get("content-type") || "image/jpeg";
@@ -1151,11 +861,13 @@ async function uploadImageFromUrl(args: {
   const objectPath = `${userId}/generated/${Date.now()}-${index}-${crypto.randomUUID()}.${ext}`;
 
   const supabase = createAdminClient();
-  const { error } = await supabase.storage.from(bucket).upload(objectPath, bytes, {
-    upsert: false,
-    contentType,
-    cacheControl: "31536000",
-  });
+  const { error } = await supabase.storage
+    .from(bucket)
+    .upload(objectPath, bytes, {
+      upsert: false,
+      contentType,
+      cacheControl: "31536000",
+    });
   if (error) {
     throw new Error(`Failed to upload image to storage: ${error.message}`);
   }
@@ -1163,6 +875,135 @@ async function uploadImageFromUrl(args: {
   const { data } = supabase.storage.from(bucket).getPublicUrl(objectPath);
   return data.publicUrl;
 }
+
+// ─── Fallback SVG ────────────────────────────────────────────────────────────
+
+function createFallbackImageDataUri(
+  source: string,
+  prompt: string,
+  index: number,
+): string {
+  const seed = `${source}:${index}:${prompt}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  }
+
+  const hueA = Math.abs(hash) % 360;
+  const hueB = (hueA + 72) % 360;
+  const hueC = (hueA + 144) % 360;
+  const label = (prompt || `Image ${index}`).replace(/\s+/g, " ").trim().slice(0, 220);
+  const safeLabel = label
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+<defs>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="hsl(${hueA} 72% 46%)"/>
+<stop offset="50%" stop-color="hsl(${hueB} 74% 42%)"/>
+<stop offset="100%" stop-color="hsl(${hueC} 78% 38%)"/>
+</linearGradient>
+</defs>
+<rect width="1200" height="800" fill="url(#g)"/>
+<g opacity="0.22" fill="#fff">
+<circle cx="170" cy="160" r="90"/>
+<circle cx="1070" cy="220" r="130"/>
+<circle cx="900" cy="670" r="160"/>
+</g>
+<rect x="90" y="620" width="1020" height="110" rx="16" fill="rgba(0,0,0,0.28)"/>
+<text x="120" y="690" fill="white" font-size="36" font-family="Arial, Helvetica, sans-serif">${safeLabel}</text>
+</svg>`;
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+// ─── Edit Preservation ───────────────────────────────────────────────────────
+
+function collectOrderedImgSources(files: GeneratedFile[]): string[] {
+  const out: string[] = [];
+  for (const file of files) {
+    const tagRe = /<(?:img|Image)\b[^>]*>/gim;
+    let tagMatch: RegExpExecArray | null = tagRe.exec(file.content);
+    while (tagMatch) {
+      const tag = tagMatch[0];
+      const srcMatch = tag.match(
+        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
+      );
+      if (srcMatch && srcMatch[1]) {
+        out.push(srcMatch[1].trim());
+      }
+      tagMatch = tagRe.exec(file.content);
+    }
+  }
+  return out;
+}
+
+function extractStablePreviousImageSources(
+  previousFiles: GeneratedFile[],
+): string[] {
+  const sources = collectOrderedImgSources(previousFiles);
+  const result: string[] = [];
+  for (const src of sources) {
+    if (!src) continue;
+    if (PLACEHOLDER_RE.test(src)) continue;
+    if (src.startsWith("data:") || src.startsWith("blob:")) continue;
+    if (src.startsWith("./") || src.startsWith("../") || src.startsWith("/"))
+      continue;
+    result.push(src);
+  }
+  return result;
+}
+
+function lockExistingImageSourcesOnEdit(
+  nextFiles: GeneratedFile[],
+  previousFiles: GeneratedFile[],
+): GeneratedFile[] {
+  const previousSources = extractStablePreviousImageSources(previousFiles);
+  if (previousSources.length === 0) return nextFiles;
+  const supabaseHost = getSupabaseHost();
+
+  let rollingIndex = 0;
+  const replaceToken = (source: string): string => {
+    const placeholderMatch = source.match(/^REPLICATE_IMG_(\d+)$/i);
+    if (placeholderMatch) {
+      const idx = Number.parseInt(placeholderMatch[1], 10) - 1;
+      if (idx >= 0 && idx < previousSources.length) {
+        return previousSources[idx];
+      }
+      const fallback =
+        previousSources[Math.min(rollingIndex, previousSources.length - 1)];
+      rollingIndex++;
+      return fallback;
+    }
+
+    if (shouldReplaceSource(source, supabaseHost)) {
+      const fallback =
+        previousSources[Math.min(rollingIndex, previousSources.length - 1)];
+      rollingIndex++;
+      return fallback;
+    }
+
+    return source;
+  };
+
+  return nextFiles.map((file) => {
+    const nextContent = file.content.replace(
+      /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/gi,
+      (match, source: string) => {
+        const replacement = replaceToken(source.trim());
+        if (!replacement || replacement === source.trim()) return match;
+        return match.replace(source, replacement);
+      },
+    );
+
+    if (nextContent === file.content) return file;
+    return { ...file, content: nextContent };
+  });
+}
+
+// ─── File Replacement ────────────────────────────────────────────────────────
 
 function applyReplacements(
   files: GeneratedFile[],
@@ -1181,6 +1022,8 @@ function applyReplacements(
   });
 }
 
+// ─── Main Orchestrator ───────────────────────────────────────────────────────
+
 export async function persistGeneratedImagesToStorage(
   files: GeneratedFile[],
   userId: string,
@@ -1188,176 +1031,82 @@ export async function persistGeneratedImagesToStorage(
 ): Promise<GeneratedFile[]> {
   if (files.length === 0) return files;
 
+  // 1. Edit preservation — lock existing image sources
   let nextFiles = files;
   if (options?.preserveExistingImages && options.previousFiles?.length) {
-    nextFiles = lockExistingImageSourcesOnEdit(nextFiles, options.previousFiles);
+    nextFiles = lockExistingImageSourcesOnEdit(
+      nextFiles,
+      options.previousFiles,
+    );
   }
 
-  // Prioritize AI-detected theme from prompt, fall back to code analysis
-  const siteTheme = (options?.detectedTheme as SiteTheme) || detectSiteTheme(nextFiles);
-  const isUserProvided = options?.isUserProvidedPrompt ?? false;
-  const promptContext = options?.originalPrompt || "";
-  const domainHints = deriveImageDomainHints(promptContext, nextFiles, siteTheme);
+  // 2. Collect raw image references (no prompt resolution)
+  const refs = collectImageReferences(nextFiles);
+  if (refs.length === 0) return nextFiles;
+  console.log(`[Image Pipeline] Found ${refs.length} images to generate`);
 
-  console.log(`[Image Generation] Theme: "${siteTheme}" (${options?.detectedTheme ? 'from prompt' : 'from code'}), isUserProvided: ${isUserProvided}`);
-  console.log(
-    `[Image Generation] Domain context: "${domainHints.context}" | Avoid: "${domainHints.avoid}"`,
-  );
-  const refs = collectImageSources(
-    nextFiles,
-    siteTheme,
-    isUserProvided,
-    domainHints.context,
-  );
-  if (refs.size === 0) return nextFiles;
-  console.log(`[persistGeneratedImagesToStorage] Found ${refs.size} images to generate`);
-
+  // 3. Check for Replicate API key
   const apiKey = process.env.REPLICATE_API_TOKEN;
   if (!apiKey) {
     console.warn(
-      "[persistGeneratedImagesToStorage] REPLICATE_API_TOKEN is not configured. Falling back to SVG placeholders.",
+      "[Image Pipeline] REPLICATE_API_TOKEN not configured. Using SVG fallbacks.",
     );
     const fallbackReplacements = new Map<string, string>();
-    let fallbackIndex = 0;
-    for (const [source, prompt] of refs) {
-      fallbackIndex++;
+    refs.forEach((ref, i) => {
       fallbackReplacements.set(
-        source,
-        createFallbackImageDataUri(source, prompt, fallbackIndex),
+        ref.source,
+        createFallbackImageDataUri(ref.source, ref.altText || "", i + 1),
       );
-    }
+    });
     return applyReplacements(nextFiles, fallbackReplacements);
   }
 
+  // 4. Resolve configuration from environment
+  const config = resolveImageGenConfig();
+
+  // 5. Generate prompts via LLM or fallback
+  let prompts: ImagePromptResult[];
+  if (config.enableLlmPromptEnhancement) {
+    const siteContentSample = buildSiteContentSample(nextFiles);
+    prompts = await generateImagePrompts(refs, {
+      originalPrompt: options?.originalPrompt || "",
+      detectedTheme: options?.detectedTheme,
+      isUserProvidedPrompt: options?.isUserProvidedPrompt ?? false,
+      siteContentSample,
+    });
+  } else {
+    prompts = fallbackPromptGeneration(refs);
+  }
+
+  console.log(`[Image Pipeline] Generated ${prompts.length} prompts`);
+  for (const p of prompts) {
+    console.log(
+      `[Image Pipeline]   ${p.source} -> "${p.prompt.slice(0, 100)}..." (${p.aspectRatio})`,
+    );
+  }
+
+  // 6. Ensure storage bucket exists
   const bucket =
     process.env.SUPABASE_GENERATED_IMAGES_BUCKET ||
     process.env.SUPABASE_STORAGE_BUCKET ||
     "generated-images";
-
   await ensureBucketExists(bucket);
 
-  const replicate = new Replicate({ auth: apiKey });
-  const replacements = new Map<string, string>();
-  const failedImages: Array<{ source: string; prompt: string; index: number; error: unknown }> = [];
+  // 7. Generate and upload images in parallel
+  const replacements = await generateImagesInParallel(
+    prompts,
+    config,
+    userId,
+    bucket,
+  );
 
-  // First pass: Try to generate all images
-  let index = 0;
-  for (const [source, prompt] of refs) {
-    index++;
-    try {
-      const generationPrompt = buildGenerationPrompt(
-        source,
-        prompt,
-        index,
-        siteTheme,
-        isUserProvided,
-        domainHints.context,
-        domainHints.avoid,
-      );
-
-      console.log(`[persistGeneratedImagesToStorage] Generating image ${index}/${refs.size}: ${source}`);
-
-      const replicateUrl = await generateReplicateImageWithRetry({
-        replicate,
-        prompt: generationPrompt,
-        source,
-      });
-      const storedUrl = await uploadImageFromUrl({
-        imageUrl: replicateUrl,
-        userId,
-        bucket,
-        index,
-      });
-      replacements.set(source, storedUrl);
-      console.log(`[persistGeneratedImagesToStorage] ✓ Successfully generated image ${index}/${refs.size}`);
-    } catch (error) {
-      console.error(
-        `[persistGeneratedImagesToStorage] Failed image ${index}/${refs.size} for "${source}":`,
-        error,
-      );
-
-      // If rate limited, add to retry queue instead of giving up
-      if (isRateLimitError(error)) {
-        console.warn(`[persistGeneratedImagesToStorage] Rate limited for "${source}", will retry later`);
-        failedImages.push({ source, prompt, index, error });
-      } else {
-        // For non-rate-limit errors, use fallback
-        console.warn(`[persistGeneratedImagesToStorage] Non-recoverable error for "${source}", using fallback`);
-        replacements.set(source, createFallbackImageDataUri(source, prompt, index));
-      }
-    }
-  }
-
-  // Second pass: Retry rate-limited images with extended retries
-  if (failedImages.length > 0) {
-    console.log(
-      `[persistGeneratedImagesToStorage] Retrying ${failedImages.length} rate-limited image(s) with extended delays...`,
-    );
-
-    for (const { source, prompt, index: imgIndex } of failedImages) {
-      let retryCount = 0;
-      const maxExtendedRetries = 10; // More aggressive retries for rate limits
-      let success = false;
-
-      while (retryCount < maxExtendedRetries && !success) {
-        try {
-          retryCount++;
-          console.log(
-            `[persistGeneratedImagesToStorage] Retry attempt ${retryCount}/${maxExtendedRetries} for "${source}"`,
-          );
-
-          // Wait 10 seconds before retry
-          await sleep(RATE_LIMIT_RETRY_DELAY_MS);
-
-          const generationPrompt = buildGenerationPrompt(
-            source,
-            prompt,
-            imgIndex,
-            siteTheme,
-            isUserProvided,
-            domainHints.context,
-            domainHints.avoid,
-          );
-
-          const replicateUrl = await generateReplicateImageWithRetry({
-            replicate,
-            prompt: generationPrompt,
-            source,
-          });
-          const storedUrl = await uploadImageFromUrl({
-            imageUrl: replicateUrl,
-            userId,
-            bucket,
-            index: imgIndex,
-          });
-          replacements.set(source, storedUrl);
-          success = true;
-          console.log(`[persistGeneratedImagesToStorage] ✓ Successfully generated "${source}" after ${retryCount} retries`);
-        } catch (error) {
-          console.error(
-            `[persistGeneratedImagesToStorage] Retry ${retryCount} failed for "${source}":`,
-            error,
-          );
-
-          if (!isRateLimitError(error) || retryCount >= maxExtendedRetries) {
-            // Give up and use fallback
-            console.warn(
-              `[persistGeneratedImagesToStorage] Giving up on "${source}" after ${retryCount} retries, using fallback`,
-            );
-            replacements.set(source, createFallbackImageDataUri(source, prompt, imgIndex));
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  const totalImages = refs.size;
-  const successfulImages = replacements.size;
-  const fallbackImages = Array.from(replacements.values()).filter(url => url.startsWith("data:image/svg")).length;
-
+  // 8. Report results
+  const totalImages = refs.length;
+  const fallbackCount = Array.from(replacements.values()).filter((u) =>
+    u.startsWith("data:image/svg"),
+  ).length;
   console.log(
-    `[persistGeneratedImagesToStorage] Image generation complete: ${successfulImages}/${totalImages} generated (${fallbackImages} fallbacks)`,
+    `[Image Pipeline] Complete: ${replacements.size}/${totalImages} generated (${fallbackCount} fallbacks)`,
   );
 
   return applyReplacements(nextFiles, replacements);

@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 import { getUserByAuthId, createUser, updateUserLastLogin } from '@/lib/db-utils';
 import type { UserData } from '@/app/contexts/AuthContext';
-import { withPrismaRetry } from '@/lib/prisma';
+import { prisma, withPrismaRetry } from '@/lib/prisma';
 
 export async function GET() {
   try {
@@ -29,6 +29,20 @@ export async function GET() {
         await updateUserLastLogin(authUserId);
       }
 
+      const activeProjectCount = await prisma.project.count({
+        where: {
+          userId: user.id,
+          deleted: false,
+        },
+      });
+
+      if (user.projectCount !== activeProjectCount) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { projectCount: activeProjectCount },
+        });
+      }
+
       // Transform to UserData interface for compatibility with existing code
       const result: UserData = {
         uid: user.id, // Use Prisma user ID as uid
@@ -37,7 +51,7 @@ export async function GET() {
         photoURL: user.photoURL,
         createdAt: user.createdAt,
         lastLoginAt: user.lastLoginAt,
-        projectCount: user.projectCount,
+        projectCount: activeProjectCount,
         appTokens: user.appTokens,
       };
       return result;
@@ -52,5 +66,4 @@ export async function GET() {
     );
   }
 }
-
 

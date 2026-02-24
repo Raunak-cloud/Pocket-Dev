@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/lib/supabase-auth/server";
 import { persistGeneratedImagesToStorage } from "@/lib/server/persist-generated-images";
+import type { SiteTheme } from "@/app/types";
 
 interface GeneratedFile {
   path: string;
@@ -50,8 +51,10 @@ export async function POST(req: Request) {
     const originalPrompt = typeof payload.originalPrompt === "string"
       ? payload.originalPrompt
       : undefined;
-    const detectedTheme = typeof payload.detectedTheme === "string"
-      ? payload.detectedTheme
+    const VALID_THEMES: SiteTheme[] = ["food", "fashion", "interior", "automotive", "people", "generic"];
+    const rawTheme = typeof payload.detectedTheme === "string" ? payload.detectedTheme : undefined;
+    const detectedTheme: SiteTheme | undefined = rawTheme && VALID_THEMES.includes(rawTheme as SiteTheme)
+      ? (rawTheme as SiteTheme)
       : undefined;
 
     const persistedFiles = await persistGeneratedImagesToStorage(files, userId, {
