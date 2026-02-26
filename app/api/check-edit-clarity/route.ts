@@ -19,7 +19,8 @@ function fallbackResult(): ClarityResult {
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, filePaths, clarificationHistory } = await req.json();
+    const { prompt, filePaths, clarificationHistory, schemaContext } =
+      await req.json();
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json(fallbackResult());
@@ -63,9 +64,14 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const schemaInfo =
+      typeof schemaContext === "string" && schemaContext.length > 0
+        ? `\nCurrent database schema:\n${schemaContext.slice(0, 1500)}`
+        : "";
+
     const result = await model.generateContent(`
 You are checking if a user edit request is clear enough to implement immediately.
-Given the prompt and project file list, return JSON only:
+Given the prompt, project file list, and database schema (if any), return JSON only:
 {
   "needsClarification": boolean,
   "question": string,
@@ -75,12 +81,13 @@ Given the prompt and project file list, return JSON only:
 Rules:
 - needsClarification=true only when required details are missing or ambiguous enough to risk wrong edits.
 - Ask only one concise question when clarification is needed.
+- For database/schema changes, ask about missing table names, column types, or relationships only if truly ambiguous.
 - When needsClarification=true, provide a concrete "did you mean" style suggestion in suggestedInterpretation.
 - If the prompt is clear enough, set needsClarification=false and question="" and suggestedInterpretation="".
-- Do not ask for unnecessary details.
+- Do not ask for unnecessary details. Most requests are clear enough to proceed.
 
 Prompt: "${safePrompt}"
-Project files: "${filesSummary}"
+Project files: "${filesSummary}"${schemaInfo}
 Previous clarification history:
 ${safeHistory || "(none)"}
 `);

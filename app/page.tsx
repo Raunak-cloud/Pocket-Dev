@@ -172,8 +172,13 @@ const inferProjectIntegrations = (
     return { auth: [], hasDatabase: false, hasBackend: false };
   }
 
-  const allCode = projectData.files.map((f) => f.content).join("\n").toLowerCase();
-  const deps = Object.keys(projectData.dependencies || {}).map((d) => d.toLowerCase());
+  const allCode = projectData.files
+    .map((f) => f.content)
+    .join("\n")
+    .toLowerCase();
+  const deps = Object.keys(projectData.dependencies || {}).map((d) =>
+    d.toLowerCase(),
+  );
 
   const storedIntegrations = readStoredIntegrations(projectData);
   const storedBackendEnabled = storedIntegrations.backendEnabled === true;
@@ -225,7 +230,8 @@ const inferProjectIntegrations = (
     auth,
     hasDatabase: storedBackendEnabled || hasDatabaseDep || hasDatabaseCode,
     hasBackend:
-      storedBackendEnabled || (auth.length > 0 && (hasDatabaseDep || hasDatabaseCode)),
+      storedBackendEnabled ||
+      (auth.length > 0 && (hasDatabaseDep || hasDatabaseCode)),
   };
 };
 
@@ -275,7 +281,8 @@ function ReactGeneratorContent() {
   const [textEditMode, setTextEditMode] = useState(false);
   const [imageSelectMode, setImageSelectMode] = useState(false);
   const [linkSelectMode, setLinkSelectMode] = useState(false);
-  const [selectedButton, setSelectedButton] = useState<SelectedLinkTarget | null>(null);
+  const [selectedButton, setSelectedButton] =
+    useState<SelectedLinkTarget | null>(null);
   const [buttonLinks, setButtonLinks] = useState<Record<string, string>>({});
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<{
     src: string;
@@ -616,6 +623,7 @@ function ReactGeneratorContent() {
     text: string,
     filePaths: string[],
     clarificationHistory?: Array<{ question: string; answer: string }>,
+    schemaContext?: string | null,
   ): Promise<{
     needsClarification: boolean;
     question: string;
@@ -625,7 +633,12 @@ function ReactGeneratorContent() {
       const res = await fetch("/api/check-edit-clarity", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text, filePaths, clarificationHistory }),
+        body: JSON.stringify({
+          prompt: text,
+          filePaths,
+          clarificationHistory,
+          schemaContext: schemaContext || undefined,
+        }),
       });
       if (!res.ok) {
         return {
@@ -856,7 +869,8 @@ function ReactGeneratorContent() {
         config: projectData.config,
         authIntegrationCost,
         generationRunId:
-          (projectData as ReactProject & { projectId?: string }).projectId || null,
+          (projectData as ReactProject & { projectId?: string }).projectId ||
+          null,
       }),
     });
 
@@ -1565,7 +1579,9 @@ function ReactGeneratorContent() {
     const appTokenBalance = userData?.appTokens || 0;
 
     // Reflect deduction immediately in the UI on confirm click.
-    applyAppTokenBalance(roundToken(Math.max(0, appTokenBalance - generationCost)));
+    applyAppTokenBalance(
+      roundToken(Math.max(0, appTokenBalance - generationCost)),
+    );
     setShowTokenConfirmModal(null);
 
     try {
@@ -1590,19 +1606,113 @@ function ReactGeneratorContent() {
     startGeneration();
   };
 
-  const buildBackendRequirementPrompt = (mode: "new" | "existing") => {
+  const extractSchemaContext = (
+    files: { path: string; content: string }[],
+  ): string | null => {
+    const schemaFile = files.find(
+      (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
+    );
+    if (!schemaFile || !schemaFile.content.trim()) return null;
+
+    const sql = schemaFile.content;
+    const tables: Array<{
+      name: string;
+      columns: string[];
+      hasRls: boolean;
+      policies: string[];
+    }> = [];
+
+    const tableRegex =
+      /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+    for (const match of sql.matchAll(tableRegex)) {
+      const tableName = match[1];
+      const body = match[2];
+      const columns: string[] = [];
+      for (const line of body.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^(constraint|primary|foreign|unique|check)\b/i.test(trimmed))
+          continue;
+        const colMatch = trimmed.match(/^"?(\w+)"?\s+([\w()]+)/);
+        if (colMatch) {
+          columns.push(`${colMatch[1]} (${colMatch[2]})`);
+        }
+      }
+      tables.push({ name: tableName, columns, hasRls: false, policies: [] });
+    }
+
+    const rlsRegex =
+      /alter\s+table\s+(?:public\.)?"?(\w+)"?\s+enable\s+row\s+level\s+security/gi;
+    for (const match of sql.matchAll(rlsRegex)) {
+      const table = tables.find(
+        (t) => t.name.toLowerCase() === match[1].toLowerCase(),
+      );
+      if (table) table.hasRls = true;
+    }
+
+    const policyRegex = /create\s+policy\s+"?([^"]+)"?\s+on\s+"?(\w+)"?/gi;
+    for (const match of sql.matchAll(policyRegex)) {
+      const table = tables.find(
+        (t) => t.name.toLowerCase() === match[2].toLowerCase(),
+      );
+      if (table) table.policies.push(match[1]);
+    }
+
+    if (tables.length === 0) return null;
+
+    let context = "";
+    for (const table of tables) {
+      context += `Table "${table.name}": columns=[${table.columns.join(", ")}], RLS=${table.hasRls ? "enabled" : "disabled"}`;
+      if (table.policies.length > 0) {
+        context += `, policies=[${table.policies.join(", ")}]`;
+      }
+      context += "\n";
+    }
+
+    const codeRefs = new Set<string>();
+    for (const f of files) {
+      if (!f.path.match(/\.(tsx?|jsx?)$/)) continue;
+      const fromRegex = /\.from\(\s*["'`](\w+)["'`]\s*\)/g;
+      for (const m of f.content.matchAll(fromRegex)) {
+        codeRefs.add(m[1]);
+      }
+    }
+    if (codeRefs.size > 0) {
+      context += `Tables referenced in code via .from(): ${Array.from(codeRefs).join(", ")}\n`;
+    }
+
+    return context;
+  };
+
+  const buildBackendRequirementPrompt = (
+    mode: "new" | "existing",
+    schemaContext?: string | null,
+  ) => {
     const integrationScope =
       mode === "new"
         ? "for this new app"
         : "and integrate it into this existing app";
 
-    return `\n\n⚙️ BACKEND REQUIREMENT:
+    let prompt = `\n\n⚙️ BACKEND REQUIREMENT:
 1. Implement a complete backend system ${integrationScope} using Supabase only.
 2. Include authentication flows: sign up, sign in, sign out, session handling, and protected routes.
 3. Include data persistence: schema setup, typed data access, and practical relational tables.
 4. Include secure data operations: CRUD endpoints/actions and row-level access control where required.
 5. Use production-safe validation and error handling for auth and database operations.
-6. Ensure backend wiring is fully integrated with existing UI actions (buttons/forms), not left as placeholder code.`;
+6. Ensure backend wiring is fully integrated with existing UI actions (buttons/forms), not left as placeholder code.
+7. Every supabase.from("table_name") call in code MUST have a matching CREATE TABLE in supabase/schema.sql.
+8. Add RLS policies for user-scoped data (enable RLS + at least one policy per table with user data).
+9. Use CREATE TABLE IF NOT EXISTS for new tables. Use ALTER TABLE ADD COLUMN for adding columns to existing tables.
+10. Include "id uuid default gen_random_uuid() primary key" for new tables unless a different primary key is specified.`;
+
+    if (mode === "existing" && schemaContext) {
+      prompt += `\n\n📊 CURRENT DATABASE SCHEMA (extend this, do NOT recreate from scratch):
+${schemaContext}
+- Add new tables/columns to the existing schema. Do NOT drop or rename existing tables or columns.
+- Return the COMPLETE updated supabase/schema.sql with both old and new definitions.`;
+    }
+
+    return prompt;
   };
 
   const isExplicitImageChangeRequest = (request: string): boolean => {
@@ -1701,10 +1811,12 @@ function ReactGeneratorContent() {
       }
 
       setCheckingEditClarity(true);
+      const schemaCtx = project ? extractSchemaContext(project.files) : null;
       const clarity = await detectEditClarification(
         editPrompt.trim(),
         project.files.map((f) => f.path),
         candidateHistory,
+        schemaCtx,
       );
       setCheckingEditClarity(false);
 
@@ -1806,28 +1918,6 @@ function ReactGeneratorContent() {
     // List all existing file paths
     const existingFilePaths = project.files.map((f) => f.path).join(", ");
 
-    // Extract currently-used npm packages from existing code
-    const existingPackages = new Set<string>();
-    for (const f of project.files) {
-      if (!f.path.match(/\.(tsx?|jsx?)$/)) continue;
-      const importRegex =
-        /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'".\/][^'"]*)['"]/g;
-      let m;
-      while ((m = importRegex.exec(f.content)) !== null) {
-        let pkg = m[1];
-        if (pkg.startsWith("@")) {
-          const parts = pkg.split("/");
-          pkg = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : pkg;
-        } else {
-          pkg = pkg.split("/")[0];
-        }
-        if (!pkg.startsWith("@/") && !pkg.startsWith("~")) {
-          existingPackages.add(pkg);
-        }
-      }
-    }
-    const allowedPackagesList = Array.from(existingPackages).join(", ");
-
     // Build the user request text, including backend if selected
     const backendSelectedForEdit = isEditBackendSelected;
     const baseUserRequest = editPrompt.trim()
@@ -1840,38 +1930,34 @@ function ReactGeneratorContent() {
       clarificationHistoryOverride ?? editClarificationHistory,
     );
 
-    let editFullPrompt = `I have an existing React app with the following files:
+    let editFullPrompt = `You are a senior full-stack developer. A user has an existing React/Next.js app and is asking you to make a SPECIFIC change. Your job is to make the MINIMUM changes needed to achieve their goal — nothing more.
+
+Here are the current project files:
 
 ${currentFiles}
 
-USER'S EDIT REQUEST:
+USER'S REQUEST:
 ${userRequest}
 
-ðŸŽ¯ CRITICAL INSTRUCTIONS:
-1. Do EXACTLY what the user requested - nothing more, nothing less
-2. DO NOT add features, components, or changes the user did not ask for
-3. DO NOT refactor, reorganize, or "improve" code unless specifically asked
-4. DO NOT change styling, colors, or layout unless specifically asked
-5. DO NOT add comments, documentation, or explanations unless asked
-6. DO NOT remove or modify content/features the user didn't mention
-7. Only modify the specific parts needed to fulfill the user's exact request
-8. Keep everything else EXACTLY as it was before
-9. Keep all existing image src URLs unchanged unless the user explicitly requests image changes
+CRITICAL — MINIMAL CHANGES ONLY:
+- ONLY modify files that are directly needed to fulfill the user's request. Do NOT refactor, restyle, or "improve" unrelated code.
+- Do NOT add features the user did not ask for. Do NOT reorganize or restructure code beyond what the request requires.
+- Do NOT change existing styling, layout, colors, fonts, or design unless the user explicitly asked for those changes.
+- Do NOT rename variables, refactor components, or clean up code that is not part of the request.
+- Keep existing image src URLs unchanged unless the user explicitly requests image changes.
 
-ðŸ“¦ PACKAGE CONSTRAINT (CRITICAL - DO NOT VIOLATE):
-The app currently uses ONLY these packages: ${allowedPackagesList}
-- DO NOT import any npm package that is not in the list above
-- DO NOT add framer-motion, gsap, three, @react-three/fiber, or any other new package
-- Use Tailwind CSS classes for animations (animate-*, transition, hover:, etc.)
-- Use inline SVGs or existing lucide-react icons for icons
-- If the user's request absolutely requires a new package, use ONLY packages from this list: lucide-react, react, react-dom, next, @supabase/supabase-js, @supabase/ssr, @prisma/client
-- Any import of a package NOT listed above will cause a build error
+HOW TO APPROACH THIS:
+1. Read the user's request. Identify the EXACT files that need to change — and change ONLY those.
+2. If the request involves backend/database work: create or update ONLY the tables/columns needed. Do NOT assume tables like "profiles" exist unless they are in the current schema. Only reference tables that exist in supabase/schema.sql.
+3. If the request involves UI changes: update only the relevant components. Do not touch unrelated pages or sections.
+4. For database queries with joins (e.g. .select('*, other_table(*)')), ONLY join tables that have a real foreign key relationship defined in supabase/schema.sql. Never assume a "profiles" table exists — use auth.users() or the actual table names from the schema.
+5. Install npm packages ONLY if they are required for the specific change.
 
-ðŸŽ¨ TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
-- NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent â€” these WILL crash the build
+ TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
+- NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent — these WILL crash the build
 - ONLY use @apply with built-in Tailwind utilities: @apply px-4 py-2 bg-blue-600 text-white rounded-lg
 - Use standard Tailwind color classes (blue-600, gray-900, emerald-500, etc.) instead of custom names
-- Keep globals.css simple â€” just @tailwind base/components/utilities. Put styles in className attributes.`;
+- Keep globals.css simple — just @tailwind base/components/utilities. Put styles in className attributes.`;
 
     // Add reference to uploaded files if any
     if (editFiles.length > 0) {
@@ -1889,7 +1975,7 @@ The app currently uses ONLY these packages: ${allowedPackagesList}
 
 ${imageUrlList}
 
-ðŸš¨ YOU MUST:
+ YOU MUST:
 1. Use these EXACT image URLs in your img src attributes
 2. Example: <img src="${imageFiles[0]?.downloadUrl || ""}" alt="User uploaded image" className="..." />
 3. Replace existing placeholder images with these actual images
@@ -1917,8 +2003,31 @@ ${pdfUrlList}
       }
     }
 
+    // Inject database schema context so AI knows the current DB state
+    const schemaContext = extractSchemaContext(project.files);
+    const hasExistingBackend = inferProjectIntegrations(project).hasBackend;
+    if (schemaContext) {
+      editFullPrompt += `\n\n📊 CURRENT DATABASE SCHEMA (this is the ONLY source of truth for what tables exist):
+${schemaContext}
+STRICT DATABASE RULES:
+- ONLY use tables that are defined above or that you explicitly CREATE in supabase/schema.sql.
+- Do NOT assume a "profiles" table exists unless it is listed above. If you need user info, use auth.users via supabase.auth.getUser() — do NOT invent a profiles table.
+- For .select() joins like .select('*, other_table(*)'), the other_table MUST exist in the schema AND have a foreign key relationship. Never join to a table that doesn't exist.
+- CRITICAL PostgREST FK rule: PostgREST resolves joins ONLY via direct foreign keys. If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). If a profiles table exists and other tables join to it, their user_id must reference profiles(id).
+- Extend the existing schema — do NOT drop or recreate existing tables.
+- Use CREATE TABLE IF NOT EXISTS for new tables.
+- Every supabase.from("table_name") in code must have a matching CREATE TABLE in supabase/schema.sql.
+- Preserve existing RLS policies. Add new ones for new tables.
+- Column types must match what the code inserts/selects.`;
+    }
+
     if (backendSelectedForEdit) {
-      editFullPrompt += buildBackendRequirementPrompt("existing");
+      editFullPrompt += buildBackendRequirementPrompt(
+        "existing",
+        schemaContext,
+      );
+    } else if (hasExistingBackend && schemaContext) {
+      editFullPrompt += `\n\n⚙️ NOTE: This app has an existing backend. If your changes involve data operations, update supabase/schema.sql accordingly and ensure all .from() references match the schema.`;
     }
 
     editFullPrompt += `\n\nðŸš¨ CRITICAL REQUIREMENT:
@@ -1984,8 +2093,8 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         },
         currentProjectId || undefined,
         {
-          requiresAuth: backendSelectedForEdit,
-          requiresDatabase: backendSelectedForEdit,
+          requiresAuth: backendSelectedForEdit || hasExistingBackend,
+          requiresDatabase: backendSelectedForEdit || hasExistingBackend,
           requiresGoogleOAuth: false,
           requiresPasswordAuth: backendSelectedForEdit,
         },
@@ -2009,7 +2118,8 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
       );
       const mergedProject = withStoredIntegrations(mergedProjectBase, {
         backendEnabled:
-          backendSelectedForEdit || inferProjectIntegrations(project).hasBackend,
+          backendSelectedForEdit ||
+          inferProjectIntegrations(project).hasBackend,
       });
 
       setProject(mergedProject);
@@ -3461,116 +3571,116 @@ ${pdfUrlList}
               {/* Device + Preview Controls */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="inline-flex items-center gap-1 bg-bg-tertiary/50 rounded-lg p-1">
-                <button
-                  onClick={() => setPreviewMode("mobile")}
-                  className={`p-1.5 rounded-md transition ${
-                    previewMode === "mobile"
-                      ? "bg-blue-600 text-white"
-                      : "text-text-tertiary hover:text-text-secondary"
-                  }`}
-                  title="Mobile view (375px)"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+                  <button
+                    onClick={() => setPreviewMode("mobile")}
+                    className={`p-1.5 rounded-md transition ${
+                      previewMode === "mobile"
+                        ? "bg-blue-600 text-white"
+                        : "text-text-tertiary hover:text-text-secondary"
+                    }`}
+                    title="Mobile view (375px)"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setPreviewMode("tablet")}
-                  className={`p-1.5 rounded-md transition ${
-                    previewMode === "tablet"
-                      ? "bg-blue-600 text-white"
-                      : "text-text-tertiary hover:text-text-secondary"
-                  }`}
-                  title="Tablet view (768px)"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setPreviewMode("tablet")}
+                    className={`p-1.5 rounded-md transition ${
+                      previewMode === "tablet"
+                        ? "bg-blue-600 text-white"
+                        : "text-text-tertiary hover:text-text-secondary"
+                    }`}
+                    title="Tablet view (768px)"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                    />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setPreviewMode("desktop")}
-                  className={`p-1.5 rounded-md transition ${
-                    previewMode === "desktop"
-                      ? "bg-blue-600 text-white"
-                      : "text-text-tertiary hover:text-text-secondary"
-                  }`}
-                  title="Desktop view (full width)"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setPreviewMode("desktop")}
+                    className={`p-1.5 rounded-md transition ${
+                      previewMode === "desktop"
+                        ? "bg-blue-600 text-white"
+                        : "text-text-tertiary hover:text-text-secondary"
+                    }`}
+                    title="Desktop view (full width)"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                    />
-                  </svg>
-                </button>
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsFullPreview((prev) => !prev)}
-                  className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
-                    isFullPreview
-                      ? "text-blue-300 bg-blue-600/20 border border-blue-500/30"
-                      : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
-                  }`}
-                  title={
-                    isFullPreview
-                      ? "Show edit panel"
-                      : "Hide edit panel for full preview"
-                  }
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+                  <button
+                    onClick={() => setIsFullPreview((prev) => !prev)}
+                    className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                      isFullPreview
+                        ? "text-blue-300 bg-blue-600/20 border border-blue-500/30"
+                        : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                    }`}
+                    title={
+                      isFullPreview
+                        ? "Show edit panel"
+                        : "Hide edit panel for full preview"
+                    }
                   >
-                    {isFullPreview ? (
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
-                      />
-                    ) : (
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"
-                      />
-                    )}
-                  </svg>
-                  <span className="hidden sm:inline">
-                    {isFullPreview ? "Exit Full Preview" : "Full Preview"}
-                  </span>
-                </button>
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      {isFullPreview ? (
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
+                        />
+                      ) : (
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"
+                        />
+                      )}
+                    </svg>
+                    <span className="hidden sm:inline">
+                      {isFullPreview ? "Exit Full Preview" : "Full Preview"}
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -3931,103 +4041,6 @@ ${pdfUrlList}
                   </div>
                 )}
 
-                {/* Edit History */}
-                {editHistory.length > 0 && (
-                  <div className="border-b border-border-primary">
-                    <button
-                      onClick={() => setShowEditHistory(!showEditHistory)}
-                      className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-200/60 dark:hover:bg-bg-tertiary/50 transition"
-                    >
-                      <div className="flex items-center gap-2">
-                        <svg
-                          className="w-3.5 h-3.5 text-slate-700 dark:text-text-tertiary"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={1.5}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <span className="text-xs font-semibold text-slate-800 dark:text-text-secondary">
-                          Edit History ({editHistory.length})
-                        </span>
-                      </div>
-                      <svg
-                        className={`w-3.5 h-3.5 text-slate-700 dark:text-text-muted transition-transform ${showEditHistory ? "rotate-180" : ""}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
-                    </button>
-                    {showEditHistory && (
-                      <div className="max-h-48 overflow-y-auto">
-                        {[...editHistory].reverse().map((entry, idx) => (
-                          <div
-                            key={entry.id}
-                            className="px-4 py-2 border-t border-border-primary/50 hover:bg-bg-tertiary/30 group"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1 min-w-0">
-                                <p
-                                  className="text-xs text-slate-800 dark:text-text-secondary truncate"
-                                  title={entry.prompt}
-                                >
-                                  {entry.prompt}
-                                </p>
-                                <p className="text-[10px] text-slate-600 dark:text-text-muted mt-0.5">
-                                  {entry.timestamp.toLocaleString(undefined, {
-                                    month: "short",
-                                    day: "numeric",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
-                                  {idx === 0 && (
-                                    <span className="ml-1.5 text-blue-400">
-                                      (latest)
-                                    </span>
-                                  )}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => rollbackToVersion(entry)}
-                                disabled={isRollingBack || isEditing}
-                                className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/10 hover:bg-amber-200 dark:hover:bg-amber-500/20 border border-amber-300 dark:border-amber-500/20 rounded-md transition disabled:opacity-50"
-                                title="Rollback to this version"
-                              >
-                                <svg
-                                  className="w-3 h-3"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={2}
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"
-                                  />
-                                </svg>
-                                Rollback
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* Edit Error */}
                 {error && (
                   <div className="px-4 py-2 bg-red-50 border-b border-red-300 dark:bg-red-500/10 dark:border-red-500/20">
@@ -4240,22 +4253,28 @@ ${pdfUrlList}
                           </h3>
                         </div>
                       </div>
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 text-xs font-medium text-blue-400 border border-blue-500/20">
-                        <svg
-                          className="w-3.5 h-3.5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
+                      {editHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowEditHistory(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-bg-tertiary/60 dark:hover:bg-bg-tertiary text-xs font-medium text-slate-700 dark:text-text-secondary border border-slate-300 dark:border-border-secondary transition"
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M13 10V3L4 14h7v7l9-11h-7z"
-                          />
-                        </svg>
-                        0.10 tokens
-                      </span>
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.5}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                            />
+                          </svg>
+                          History ({editHistory.length})
+                        </button>
+                      )}
                     </div>
 
                     {/* Prompt area with auth tags */}
@@ -4280,7 +4299,7 @@ ${pdfUrlList}
                           </span>
                         </div>
                         <span className="text-xs text-text-muted">
-                          {editPromptCount} / 250 chars
+                          {editPromptCount} / 2000 chars
                         </span>
                       </div>
                       {isEditBackendSelected && (
@@ -4317,7 +4336,7 @@ ${pdfUrlList}
                               handleEdit(e);
                           }
                         }}
-                        maxLength={250}
+                        maxLength={2000}
                         placeholder={
                           isEditBackendSelected
                             ? "Add instructions (optional)..."
@@ -4327,18 +4346,13 @@ ${pdfUrlList}
                         className="flex-1 min-h-[140px] px-4 py-4 bg-transparent text-text-primary placeholder-text-muted/80 focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
                       />
                       <div className="flex items-center justify-between px-4 py-2.5 bg-bg-tertiary/20 border-t border-border-primary">
-                        <p className="text-xs text-text-muted flex items-center gap-1.5">
-                          <kbd className="px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary bg-bg-tertiary border border-border-secondary rounded">
-                            Shift
-                          </kbd>
-                          <span>+</span>
-                          <kbd className="px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary bg-bg-tertiary border border-border-secondary rounded">
-                            Enter
-                          </kbd>
-                          <span className="ml-0.5">for new line</span>
+                        <p className="text-xs text-text-muted">
+                          0.10 token cost per edit
                         </p>
                       </div>
                     </div>
+                    {/* Token cost */}
+
                     {/* Add Integrations Button */}
                     <button
                       type="button"
@@ -4587,28 +4601,6 @@ ${pdfUrlList}
                         )}
                       </button>
                     </div>
-                    <div className="flex items-center justify-center gap-2 text-xs text-text-muted lg:pb-1">
-                      <svg
-                        className="w-3.5 h-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                      <span>
-                        Press{" "}
-                        <kbd className="px-1.5 py-0.5 text-[10px] font-semibold bg-bg-tertiary border border-border-secondary rounded">
-                          Enter
-                        </kbd>{" "}
-                        to apply changes quickly
-                      </span>
-                    </div>
                   </div>
 
                   {/* Mobile/Tablet: Layout */}
@@ -4689,7 +4681,7 @@ ${pdfUrlList}
                                 handleEdit(e);
                             }
                           }}
-                          maxLength={60}
+                          maxLength={2000}
                           placeholder={
                             isEditBackendSelected
                               ? "Instructions (optional)..."
@@ -4742,10 +4734,10 @@ ${pdfUrlList}
                     </div>
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[11px] text-text-muted">
-                        Shift+Enter for new line
+                        0.10 token cost per edit
                       </p>
                       <p className="text-[11px] text-text-muted">
-                        {editPromptCount} / 60
+                        {editPromptCount} / 2000
                       </p>
                     </div>
                   </div>
@@ -4958,6 +4950,119 @@ ${pdfUrlList}
             onBackendChange={setBackendSelection}
             onPaymentClick={showPaymentsComingSoon}
           />
+        )}
+
+        {/* Edit History Modal */}
+        {showEditHistory && editHistory.length > 0 && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-bg-secondary border border-slate-200 dark:border-border-secondary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-border-primary">
+                <div className="flex items-center gap-2.5">
+                  <svg
+                    className="w-5 h-5 text-slate-500 dark:text-text-tertiary"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-text-primary">
+                    Edit History
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setShowEditHistory(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:text-text-muted dark:hover:text-text-secondary dark:hover:bg-bg-tertiary transition"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-border-primary max-h-80 overflow-y-auto">
+                {[...editHistory]
+                  .reverse()
+                  .slice(0, 3)
+                  .map((entry, idx) => (
+                    <div
+                      key={entry.id}
+                      className="px-5 py-3.5 hover:bg-slate-50 dark:hover:bg-bg-tertiary/30 transition"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <p
+                            className="text-sm text-slate-800 dark:text-text-secondary line-clamp-2"
+                            title={entry.prompt}
+                          >
+                            {entry.prompt}
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-text-muted mt-1">
+                            {entry.timestamp.toLocaleString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            {idx === 0 && (
+                              <span className="ml-1.5 text-blue-500 dark:text-blue-400 font-medium">
+                                (latest)
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            rollbackToVersion(entry);
+                            setShowEditHistory(false);
+                          }}
+                          disabled={isRollingBack || isEditing}
+                          className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 dark:hover:bg-amber-500/20 border border-amber-200 dark:border-amber-500/20 rounded-lg transition disabled:opacity-50"
+                          title="Rollback to this version"
+                        >
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"
+                            />
+                          </svg>
+                          Rollback
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              <div className="px-5 py-3 border-t border-slate-200 dark:border-border-primary bg-slate-50 dark:bg-bg-tertiary/20">
+                <button
+                  onClick={() => setShowEditHistory(false)}
+                  className="w-full px-4 py-2 text-xs font-medium text-slate-600 dark:text-text-secondary bg-white dark:bg-bg-tertiary border border-slate-200 dark:border-border-secondary rounded-lg hover:bg-slate-50 dark:hover:bg-bg-tertiary/80 transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Cancel Confirmation Modal (success view) */}
@@ -5765,6 +5870,119 @@ ${pdfUrlList}
           onBackendChange={setBackendSelection}
           onPaymentClick={showPaymentsComingSoon}
         />
+      )}
+
+      {/* Edit History Modal */}
+      {showEditHistory && editHistory.length > 0 && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-bg-secondary border border-slate-200 dark:border-border-secondary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-border-primary">
+              <div className="flex items-center gap-2.5">
+                <svg
+                  className="w-5 h-5 text-slate-500 dark:text-text-tertiary"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-text-primary">
+                  Edit History
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowEditHistory(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:text-text-muted dark:hover:text-text-secondary dark:hover:bg-bg-tertiary transition"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-border-primary max-h-80 overflow-y-auto">
+              {[...editHistory]
+                .reverse()
+                .slice(0, 3)
+                .map((entry, idx) => (
+                  <div
+                    key={entry.id}
+                    className="px-5 py-3.5 hover:bg-slate-50 dark:hover:bg-bg-tertiary/30 transition"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className="text-sm text-slate-800 dark:text-text-secondary line-clamp-2"
+                          title={entry.prompt}
+                        >
+                          {entry.prompt}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-text-muted mt-1">
+                          {entry.timestamp.toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                          {idx === 0 && (
+                            <span className="ml-1.5 text-blue-500 dark:text-blue-400 font-medium">
+                              (latest)
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          rollbackToVersion(entry);
+                          setShowEditHistory(false);
+                        }}
+                        disabled={isRollingBack || isEditing}
+                        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 dark:hover:bg-amber-500/20 border border-amber-200 dark:border-amber-500/20 rounded-lg transition disabled:opacity-50"
+                        title="Rollback to this version"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"
+                          />
+                        </svg>
+                        Rollback
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-border-primary bg-slate-50 dark:bg-bg-tertiary/20">
+              <button
+                onClick={() => setShowEditHistory(false)}
+                className="w-full px-4 py-2 text-xs font-medium text-slate-600 dark:text-text-secondary bg-white dark:bg-bg-tertiary border border-slate-200 dark:border-border-secondary rounded-lg hover:bg-slate-50 dark:hover:bg-bg-tertiary/80 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Floating generation progress indicator (when on other sections or minimized) */}

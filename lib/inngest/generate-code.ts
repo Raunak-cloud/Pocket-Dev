@@ -149,42 +149,25 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - CRITICAL: Every navigation link must point to a real route with a generated page. If the nav has "About", "Services", "Pricing", "Contact" — generate app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/contact/page.tsx. No dead links or anchor-only fallbacks for top-level nav items.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-AUTHENTICATION & BACKEND-DEPENDENT UI (KEEP INTACT)
+AUTHENTICATION & BACKEND-DEPENDENT UI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  * CRITICAL: NEVER generate login, sign up, sign in, get started, or authentication-related buttons/links/CTAs UNLESS the user explicitly requests authentication features
-  * NEVER add "Login", "Sign In", "Sign Up", "Get Started", "Create Account", "Register", or similar CTAs by default
-  * NEVER add shopping cart icons/buttons, wishlist/favorites (heart icons), user profile avatars, or any UI element that implies a user session or backend data storage UNLESS the user explicitly requests these features
-  * NEVER add search bars or search icons that imply server-side search functionality UNLESS the user explicitly requests search
-  * If the user asks for an "e-commerce site" or "online store" WITHOUT explicitly mentioning backend/database/authentication, generate a STATIC showcase/catalog website — product cards with prices and descriptions, but NO functional cart, NO "Add to Cart" buttons, NO wishlist, NO checkout flow, NO user accounts
-  * The ONLY interactive elements allowed without explicit backend request are: navigation links, anchor scroll, external links, and purely client-side UI (accordions, tabs, modals, image galleries)
-  * Authentication CTAs should ONLY appear when the user's request explicitly mentions: "login", "user accounts", "sign in", "authentication", "user management", "dashboard", "user profiles", or similar auth-related functionality
+  * NEVER generate login, sign up, sign in, or authentication-related buttons/links/CTAs UNLESS the user explicitly requests authentication features
+  * NEVER add shopping cart, wishlist, user profile avatars, or any UI that implies a backend UNLESS explicitly requested
   * If the user does NOT mention authentication, build a fully functional public website WITHOUT any auth CTAs
-  * Only implement auth if the user explicitly requests it (login, user accounts, dashboards, etc.)
-  * IMPORTANT: Auth infra is scaffolded by the platform; AI must NOT invent custom auth internals
-  * Only wire UI CTAs/links to these routes:
-    - "/sign-in"
-    - "/signup"
-    - POST "/api/auth/signout" for logout buttons/forms
-    - GET "/api/auth/me" for client-side auth-state feedback (signed-in CTA/avatar/name)
-  * When auth UI is requested, auth CTAs must be session-aware:
-    - Signed out: show sign-in CTA/link
-    - Signed in: show user identity (email/name) and a logout action wired to POST "/api/auth/signout"
-    - Do not keep static "Sign In" CTA after successful auth
-  * For protected pages, rely on session-aware middleware/server checks; do not show login modal to authenticated users
-  * If using client-side auth state, wait for auth to load before deciding to show login prompts
-  * Never mount a global auth modal in app/layout or all pages; auth UI should appear only on sign-in/sign-up pages or user-triggered actions
-  * Auth page UX quality bar:
-    - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
-    - Drive auth page styling/copy from a shared config file (for example: lib/auth-form-theme.ts) so both pages stay consistent
-    - Update the config values to match the website purpose (brand name, tone, accent colors, helper copy)
-    - Include password visibility toggle(s)
-    - Include password confirmation on /signup
-    - Include inline validation and clear error messaging
-    - Include loading and disabled states for submit buttons
-    - Keep form visuals aligned with website purpose and theme (color, typography, spacing)
-  * Do NOT generate custom Supabase auth clients, middleware, callback handlers, or custom auth API routes
-  * Do NOT hardcode secrets or service-role keys
+  * When auth IS requested, YOU must generate the complete auth system:
+    - Generate sign-in and sign-up pages (e.g. app/sign-in/page.tsx, app/signup/page.tsx) with professional, brand-aligned design
+    - Generate API routes for auth operations (signin, signup, signout, session check) using @supabase/ssr createServerClient
+    - Generate middleware.ts for session handling and protected route redirects
+    - Use environment variables: process.env.NEXT_PUBLIC_SUPABASE_URL and process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as fallback)
+    - Use supabase.auth.signInWithPassword(), supabase.auth.signUp(), supabase.auth.signOut(), supabase.auth.getUser()
+    - Auth pages must include: password visibility toggle, password confirmation on signup, inline validation, loading states, error messaging
+    - Auth CTAs must be session-aware: show sign-in when logged out, show user identity + logout when signed in
+    - Do NOT hardcode secrets or service-role keys
+    - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import { createClient } from "@/lib/supabase/server" or "@/lib/supabase/client" if needed, or create your own Supabase client using createServerClient from @supabase/ssr
   * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
+  * Do NOT assume a "profiles" table exists. For user data, use supabase.auth.getUser(). Only reference tables you explicitly CREATE in schema.sql.
+  * For .select() relation joins like .select('*, other_table(col1, col2)'), the joined table MUST exist in schema.sql with a proper foreign key. Never join to non-existent tables.
+  * CRITICAL PostgREST FK rule: If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). PostgREST resolves joins via direct foreign keys only. If you have a profiles table and other tables need to join to it, their user_id column must reference profiles(id) (not auth.users(id)).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMAGE + ALT-TEXT CONTRACT — CRITICAL FOR IMAGE ACCURACY
@@ -1464,72 +1447,11 @@ html, body {
     upsertFile("lib/supabase/server.ts", buildServerSupabaseClientContent());
   }
 
-  if (hasAuthIntegration) {
-    upsertFile(
-      "middleware.ts",
-      `import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
+  // Auth middleware, sign-in/signup pages, and API auth routes are now
+  // generated by the AI model so they match the app's design and requirements.
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-export async function middleware(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.next();
-  }
-
-  const pathname = request.nextUrl.pathname;
-  const isAuthPage =
-    pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/signup") ||
-    pathname.startsWith("/auth");
-  const protectedPrefixes = ["/dashboard", "/account", "/settings", "/app", "/protected"];
-  const requiresAuth = protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
-  const isPublicAsset =
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/api") ||
-    pathname.includes(".");
-  if (isPublicAsset || !requiresAuth || isAuthPage) {
-    return NextResponse.next();
-  }
-
-  const response = NextResponse.next();
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          response.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    const signInUrl = new URL("/sign-in", request.url);
-    signInUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(signInUrl);
-  }
-
-  return response;
-}
-
-export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
-};
-`,
-    );
-  }
-
+  // Keep only the auth callback route (infra-level OAuth redirect handler).
+  // All other auth routes/pages are AI-generated to match the app's design.
   if (hasAuthIntegration) {
     upsertFile(
       "app/auth/callback/route.ts",
@@ -1574,708 +1496,30 @@ export async function GET(request: NextRequest) {
 `,
     );
 
-    upsertFile(
-      "app/api/auth/signin/route.ts",
-      `import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
-
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-function applyAuthCookies(from: NextResponse, to: NextResponse) {
-  for (const cookie of from.cookies.getAll()) {
-    to.cookies.set(cookie);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { success: false, error: "Missing Supabase environment variables" },
-      { status: 500 },
-    );
+    // signin/signup/signout/me/oauth API routes, middleware, auth-form-theme,
+    // and sign-in/signup pages are intentionally NOT scaffolded here — the AI
+    // model generates them as part of the project so they match the app's
+    // design and requirements.
   }
 
-  try {
-    const { email, password, next } = await request.json();
-    const cookieCarrier = NextResponse.next();
-    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieCarrier.cookies.set(name, value, options);
-          });
-        },
-      },
-    });
+  // --- REMOVED: hardcoded auth scaffolding ---
+  // The following were removed so the AI generates them instead:
+  // - app/api/auth/signin/route.ts
+  // - app/api/auth/signup/route.ts
+  // - app/api/auth/signout/route.ts
+  // - app/api/auth/me/route.ts
+  // - app/api/auth/oauth/route.ts
+  // - lib/auth-form-theme.ts
+  // - app/sign-in/page.tsx
+  // - app/signup/page.tsx
+  // - middleware.ts
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: String(email || ""),
-      password: String(password || ""),
-    });
-
-    if (error) {
-      const res = NextResponse.json(
-        { success: false, error: error.message },
-        { status: 400 },
-      );
-      applyAuthCookies(cookieCarrier, res);
-      return res;
-    }
-
-    const res = NextResponse.json({
-      success: true,
-      next: typeof next === "string" ? next : "/",
-      user: data.user ? { id: data.user.id, email: data.user.email ?? null } : null,
-    });
-    applyAuthCookies(cookieCarrier, res);
-    return res;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected server error";
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
-  }
-}
-`,
-    );
-
-    upsertFile(
-      "app/api/auth/signup/route.ts",
-      `import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
-
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-function applyAuthCookies(from: NextResponse, to: NextResponse) {
-  for (const cookie of from.cookies.getAll()) {
-    to.cookies.set(cookie);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { success: false, error: "Missing Supabase environment variables" },
-      { status: 500 },
-    );
-  }
-
-  try {
-    const { email, password, next } = await request.json();
-    const cookieCarrier = NextResponse.next();
-    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieCarrier.cookies.set(name, value, options);
-          });
-        },
-      },
-    });
-
-    const { data, error } = await supabase.auth.signUp({
-      email: String(email || ""),
-      password: String(password || ""),
-    });
-
-    if (error) {
-      const res = NextResponse.json(
-        { success: false, error: error.message },
-        { status: 400 },
-      );
-      applyAuthCookies(cookieCarrier, res);
-      return res;
-    }
-
-    const res = NextResponse.json({
-      success: true,
-      next: typeof next === "string" ? next : "/sign-in",
-      user: data.user ? { id: data.user.id, email: data.user.email ?? null } : null,
-    });
-    applyAuthCookies(cookieCarrier, res);
-    return res;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected server error";
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
-  }
-}
-`,
-    );
-
-    upsertFile(
-      "app/api/auth/signout/route.ts",
-      `import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
-
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-function applyAuthCookies(from: NextResponse, to: NextResponse) {
-  for (const cookie of from.cookies.getAll()) {
-    to.cookies.set(cookie);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { success: false, error: "Missing Supabase environment variables" },
-      { status: 500 },
-    );
-  }
-
-  const cookieCarrier = NextResponse.next();
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          cookieCarrier.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
-
-  const { error } = await supabase.auth.signOut();
-  if (error) {
-    const res = NextResponse.json({ success: false, error: error.message }, { status: 400 });
-    applyAuthCookies(cookieCarrier, res);
-    return res;
-  }
-
-  const res = NextResponse.json({ success: true, next: "/sign-in" });
-  applyAuthCookies(cookieCarrier, res);
-  return res;
-}
-`,
-    );
-
-    upsertFile(
-      "app/api/auth/me/route.ts",
-      `import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
-
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-export async function GET(request: NextRequest) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      { success: false, signedIn: false, error: "Missing Supabase environment variables" },
-      { status: 500 },
-    );
-  }
-
-  const cookieCarrier = NextResponse.next();
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          cookieCarrier.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const res = NextResponse.json({
-    success: true,
-    signedIn: Boolean(user),
-    user: user ? { id: user.id, email: user.email ?? null } : null,
-  });
-  for (const cookie of cookieCarrier.cookies.getAll()) {
-    res.cookies.set(cookie);
-  }
-  return res;
-}
-`,
-    );
-
-    upsertFile(
-      "app/api/auth/oauth/route.ts",
-      `import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-
-export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
-  const provider = searchParams.get("provider") || "google";
-  const next = searchParams.get("next") || "/";
-  const supabase = await createClient();
-
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: provider as "google",
-    options: {
-      redirectTo: \`\${origin}/auth/callback?next=\${encodeURIComponent(next)}\`,
-    },
-  });
-
-  if (error || !data?.url) {
-    return NextResponse.redirect(new URL("/sign-in?error=oauth_failed", origin));
-  }
-
-  return NextResponse.redirect(data.url);
-}
-`,
-    );
-
-    upsertFile(
-      "lib/auth-form-theme.ts",
-      `export const AUTH_FORM_THEME = {
-  pageShell:
-    "min-h-screen bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_40%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.16),_transparent_45%)] bg-slate-950 text-white flex items-center justify-center p-6",
-  card:
-    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/80 backdrop-blur-xl p-7 space-y-6 shadow-[0_25px_80px_rgba(2,6,23,0.65)]",
-  sessionCheckCard:
-    "w-full max-w-md rounded-3xl border border-slate-700/60 bg-slate-900/80 backdrop-blur-xl p-7 shadow-[0_25px_80px_rgba(2,6,23,0.65)]",
-  heading: "text-3xl font-semibold tracking-tight",
-  subtitle: "text-sm text-slate-300",
-  label: "text-xs font-medium text-slate-300",
-  input:
-    "w-full rounded-xl border border-slate-600 bg-slate-800/80 px-3.5 py-2.5 text-slate-100 placeholder:text-slate-400 focus:outline-none",
-  eyeButton:
-    "absolute inset-y-0 right-2 my-1 rounded-lg px-2.5 text-xs font-medium text-slate-300 hover:bg-slate-700",
-  helperText: "text-xs text-slate-400",
-  errorText: "text-sm text-red-400",
-  footerText: "text-sm text-slate-300",
-  oauthButton:
-    "block w-full rounded-xl border border-slate-600 bg-slate-800/50 px-3 py-2.5 text-center text-sm font-medium text-slate-100 hover:bg-slate-800",
-  checkbox:
-    "h-4 w-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500/50",
-  brand: {
-    name: "Pocket App",
-    tagline: "Secure, fast, and professional access for your customers.",
-    signInTitle: "Welcome back",
-    signInSubtitle: "Sign in to continue to your dashboard.",
-    signUpTitle: "Create account",
-    signUpSubtitle: "Create your account and start in under a minute.",
-    passwordHint: "Use at least 8 characters with a mix of letters, numbers, and symbols.",
-  },
-  variants: {
-    signIn: {
-      badgeClass:
-        "inline-flex items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold tracking-wide text-sky-300",
-      badgeText: "Secure Access",
-      focusRingClass: "focus:ring-2 focus:ring-sky-500/40",
-      primaryButton:
-        "w-full rounded-xl bg-sky-500 hover:bg-sky-400 px-3 py-2.5 font-semibold text-slate-950 disabled:opacity-50",
-      linkClass: "text-sky-300 hover:text-sky-200",
-    },
-    signUp: {
-      badgeClass:
-        "inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold tracking-wide text-emerald-300",
-      badgeText: "New Account",
-      focusRingClass: "focus:ring-2 focus:ring-emerald-500/40",
-      primaryButton:
-        "w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 px-3 py-2.5 font-semibold text-slate-950 disabled:opacity-50",
-      linkClass: "text-emerald-300 hover:text-emerald-200",
-    },
-  },
-} as const;
-`,
-    );
-
-    upsertFile(
-      "app/sign-in/page.tsx",
-      `"use client";
-
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { AUTH_FORM_THEME } from "@/lib/auth-form-theme";
-
-export default function SignInPage() {
-  const variant = AUTH_FORM_THEME.variants.signIn;
-  const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/";
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const verify = async () => {
-      try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data?.signedIn) {
-          window.location.replace(nextPath);
-          return;
-        }
-      } catch {
-        // If auth check fails, allow manual sign-in flow.
-      }
-      setCheckingSession(false);
-    };
-
-    void verify();
-  }, [nextPath]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-
-    const res = await fetch("/api/auth/signin", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        password,
-        next: nextPath,
-        rememberMe,
-      }),
-    });
-    const raw = await res.text();
-    let data: {
-      success?: boolean;
-      error?: string;
-      next?: string;
-      user?: { id?: string; email?: string | null } | null;
-    } = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      data = {};
-    }
-
-    setLoading(false);
-    if (!res.ok || !data?.success) {
-      const fallback =
-        raw && raw.length < 600 ? raw : \`Sign-in failed (\${res.status})\`;
-      setError(data?.error || fallback);
-      return;
-    }
-
-    window.location.href = data?.next || "/";
-  };
-
-  if (checkingSession) {
-    return (
-      <main className={AUTH_FORM_THEME.pageShell}>
-        <div className={AUTH_FORM_THEME.sessionCheckCard}>
-          <p className="text-sm text-slate-300">Checking your session...</p>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className={AUTH_FORM_THEME.pageShell}>
-      <div className={AUTH_FORM_THEME.card}>
-        <div className="space-y-2">
-          <p className="text-[11px] font-semibold tracking-[0.16em] text-slate-400 uppercase">
-            {AUTH_FORM_THEME.brand.name}
-          </p>
-          <p className={variant.badgeClass}>{variant.badgeText}</p>
-          <h1 className={AUTH_FORM_THEME.heading}>{AUTH_FORM_THEME.brand.signInTitle}</h1>
-          <p className={AUTH_FORM_THEME.subtitle}>{AUTH_FORM_THEME.brand.signInSubtitle}</p>
-        </div>
-
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className={AUTH_FORM_THEME.label}>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
-              autoComplete="email"
-              className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass}\`}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className={AUTH_FORM_THEME.label}>Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className={AUTH_FORM_THEME.eyeButton}
-              >
-                {showPassword ? "Hide" : "Show"}
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <label className="inline-flex items-center gap-2 text-slate-300">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className={AUTH_FORM_THEME.checkbox}
-              />
-              Remember me
-            </label>
-            <Link href="/sign-in" className={variant.linkClass}>
-              Forgot password?
-            </Link>
-          </div>
-
-          {error ? <p className={AUTH_FORM_THEME.errorText}>{error}</p> : null}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className={variant.primaryButton}
-          >
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
-
-        <a
-          href={\`/api/auth/oauth?provider=google&next=\${encodeURIComponent(nextPath)}\`}
-          className={AUTH_FORM_THEME.oauthButton}
-        >
-          Continue with Google
-        </a>
-
-        <p className={AUTH_FORM_THEME.footerText}>
-          No account?{" "}
-          <Link href="/signup" className={variant.linkClass}>
-            Create one
-          </Link>
-        </p>
-      </div>
-    </main>
-  );
-}
-`,
-    );
-
-    upsertFile(
-      "app/signup/page.tsx",
-      `"use client";
-
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { AUTH_FORM_THEME } from "@/lib/auth-form-theme";
-
-export default function SignupPage() {
-  const variant = AUTH_FORM_THEME.variants.signUp;
-  const searchParams = useSearchParams();
-  const nextPath = searchParams.get("next") || "/sign-in";
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const verify = async () => {
-      try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data?.signedIn) {
-          window.location.replace("/");
-          return;
-        }
-      } catch {
-        // If auth check fails, allow manual sign-up flow.
-      }
-      setCheckingSession(false);
-    };
-
-    void verify();
-  }, [nextPath]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim()) {
-      setError("Please enter your email.");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("Password confirmation does not match.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-
-    const res = await fetch("/api/auth/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, next: nextPath }),
-    });
-    const raw = await res.text();
-    let data: {
-      success?: boolean;
-      error?: string;
-      next?: string;
-      user?: { id?: string; email?: string | null } | null;
-    } = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      data = {};
-    }
-
-    setLoading(false);
-    if (!res.ok || !data?.success) {
-      const fallback =
-        raw && raw.length < 600 ? raw : \`Sign-up failed (\${res.status})\`;
-      setError(data?.error || fallback);
-      return;
-    }
-
-    window.location.href = data?.next || "/sign-in";
-  };
-
-  if (checkingSession) {
-    return (
-      <main className={AUTH_FORM_THEME.pageShell}>
-        <div className={AUTH_FORM_THEME.sessionCheckCard}>
-          <p className="text-sm text-slate-300">Checking your session...</p>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className={AUTH_FORM_THEME.pageShell}>
-      <div className={AUTH_FORM_THEME.card}>
-        <div className="space-y-2">
-          <p className="text-[11px] font-semibold tracking-[0.16em] text-slate-400 uppercase">
-            {AUTH_FORM_THEME.brand.name}
-          </p>
-          <p className={variant.badgeClass}>{variant.badgeText}</p>
-          <h1 className={AUTH_FORM_THEME.heading}>{AUTH_FORM_THEME.brand.signUpTitle}</h1>
-          <p className={AUTH_FORM_THEME.subtitle}>{AUTH_FORM_THEME.brand.signUpSubtitle}</p>
-        </div>
-
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className={AUTH_FORM_THEME.label}>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
-              autoComplete="email"
-              className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass}\`}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className={AUTH_FORM_THEME.label}>Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
-                autoComplete="new-password"
-                minLength={8}
-                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className={AUTH_FORM_THEME.eyeButton}
-              >
-                {showPassword ? "Hide" : "Show"}
-              </button>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className={AUTH_FORM_THEME.label}>Confirm Password</label>
-            <div className="relative">
-              <input
-                type={showConfirmPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter password"
-                autoComplete="new-password"
-                minLength={8}
-                className={\`\${AUTH_FORM_THEME.input} \${variant.focusRingClass} pr-20\`}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirmPassword((v) => !v)}
-                className={AUTH_FORM_THEME.eyeButton}
-              >
-                {showConfirmPassword ? "Hide" : "Show"}
-              </button>
-            </div>
-          </div>
-          <p className={AUTH_FORM_THEME.helperText}>{AUTH_FORM_THEME.brand.passwordHint}</p>
-
-          {error ? <p className={AUTH_FORM_THEME.errorText}>{error}</p> : null}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className={variant.primaryButton}
-          >
-            {loading ? "Creating..." : "Create account"}
-          </button>
-        </form>
-
-        <p className={AUTH_FORM_THEME.footerText}>
-          Already have an account?{" "}
-          <Link href="/sign-in" className={variant.linkClass}>
-            Sign in
-          </Link>
-        </p>
-      </div>
-    </main>
-  );
-}
-`,
-    );
-  }
+  /* REMOVED: ~700 lines of hardcoded auth route scaffolding (signin, signup,
+     signout, me, oauth API routes + sign-in/signup pages + auth-form-theme +
+     middleware). The AI model now generates these files as part of the project
+     so they match the app's design and brand. Only lib/supabase/client.ts,
+     lib/supabase/server.ts, and app/auth/callback/route.ts are still
+     scaffolded above since they are infrastructure-level plumbing. */
 
   if (
     (hasAuthIntegration || hasDatabaseIntegration) &&
@@ -3044,6 +2288,134 @@ function extractCreatedTablesFromSql(sql: string): Set<string> {
   return tables;
 }
 
+function extractColumnReferencesFromCode(
+  files: GeneratedFile[],
+): Map<string, Set<string>> {
+  const tableColumns = new Map<string, Set<string>>();
+  const codeFiles = files.filter(
+    (f) =>
+      f.path.endsWith(".ts") ||
+      f.path.endsWith(".tsx") ||
+      f.path.endsWith(".js") ||
+      f.path.endsWith(".jsx"),
+  );
+
+  for (const file of codeFiles) {
+    // Match .from("table").select("col1, col2") patterns
+    const selectRegex =
+      /\.from\(\s*["'`](\w+)["'`]\s*\)\s*\.select\(\s*["'`]([^"'`]+)["'`]/g;
+    for (const m of file.content.matchAll(selectRegex)) {
+      const table = m[1].toLowerCase();
+      const cols = m[2]
+        .split(",")
+        .map((c) => c.trim().split(":")[0].trim())
+        // Skip relation joins like "profiles(username, avatar_url)" — these
+        // reference another table, not columns of the current table.
+        .filter((c) => !c.includes("(") && !c.includes(")"))
+        .map((c) => c.trim());
+      if (!tableColumns.has(table)) tableColumns.set(table, new Set());
+      for (const col of cols) {
+        if (col && col !== "*" && !col.includes("!")) {
+          tableColumns.get(table)!.add(col);
+        }
+      }
+    }
+
+    // Match .from("table").insert({ col1: val, col2: val }) patterns
+    const insertRegex =
+      /\.from\(\s*["'`](\w+)["'`]\s*\)\s*\.(?:insert|upsert)\(\s*(?:\[?\s*)\{([^}]+)\}/g;
+    for (const m of file.content.matchAll(insertRegex)) {
+      const table = m[1].toLowerCase();
+      const body = m[2];
+      const colRegex = /(\w+)\s*:/g;
+      if (!tableColumns.has(table)) tableColumns.set(table, new Set());
+      for (const colMatch of body.matchAll(colRegex)) {
+        tableColumns.get(table)!.add(colMatch[1]);
+      }
+    }
+
+    // Match .from("table").update({ col1: val }) patterns
+    const updateRegex =
+      /\.from\(\s*["'`](\w+)["'`]\s*\)\s*\.update\(\s*\{([^}]+)\}/g;
+    for (const m of file.content.matchAll(updateRegex)) {
+      const table = m[1].toLowerCase();
+      const body = m[2];
+      const colRegex = /(\w+)\s*:/g;
+      if (!tableColumns.has(table)) tableColumns.set(table, new Set());
+      for (const colMatch of body.matchAll(colRegex)) {
+        tableColumns.get(table)!.add(colMatch[1]);
+      }
+    }
+  }
+
+  return tableColumns;
+}
+
+function extractColumnsFromSchemaTable(
+  schemaSql: string,
+): Map<string, Set<string>> {
+  const tableColumns = new Map<string, Set<string>>();
+  const tableRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+
+  for (const m of schemaSql.matchAll(tableRegex)) {
+    const tableName = m[1].toLowerCase();
+    const body = m[2];
+    const columns = new Set<string>();
+
+    for (const line of body.split("\n")) {
+      const trimmed = line.trim().toLowerCase();
+      if (!trimmed) continue;
+      if (
+        /^(constraint|primary|foreign|unique|check)\b/.test(trimmed)
+      )
+        continue;
+      const colMatch = trimmed.match(/^"?(\w+)"?\s+/);
+      if (colMatch) columns.add(colMatch[1]);
+    }
+
+    tableColumns.set(tableName, columns);
+  }
+
+  return tableColumns;
+}
+
+function extractForeignKeysFromSql(
+  schemaSql: string,
+): Array<{ fromTable: string; fromColumn: string; toTable: string; toColumn: string }> {
+  const fks: Array<{ fromTable: string; fromColumn: string; toTable: string; toColumn: string }> = [];
+  const tableRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+
+  for (const m of schemaSql.matchAll(tableRegex)) {
+    const tableName = m[1].toLowerCase();
+    const body = m[2];
+
+    for (const line of body.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // Match inline FK: column_name type REFERENCES table(column)
+      const inlineFk = trimmed.match(
+        /^"?(\w+)"?\s+\w+.*?\bREFERENCES\s+(?:(?:public|auth)\.)?"?(\w+)"?\s*\(\s*"?(\w+)"?\s*\)/i,
+      );
+      if (inlineFk) {
+        const toTable = inlineFk[2].toLowerCase();
+        // Skip auth.users references — they don't create PostgREST-joinable relationships to public tables
+        if (toTable !== "users") {
+          fks.push({
+            fromTable: tableName,
+            fromColumn: inlineFk[1].toLowerCase(),
+            toTable,
+            toColumn: inlineFk[3].toLowerCase(),
+          });
+        }
+      }
+    }
+  }
+
+  return fks;
+}
+
 function collectSupabaseSchemaIssues(
   files: GeneratedFile[],
   requirements: IntegrationRequirements,
@@ -3091,6 +2463,83 @@ function collectSupabaseSchemaIssues(
         rule: "schema/missing-table",
         message: `Table "${table}" is used in code via supabase.from(...) but not created in supabase/schema.sql.`,
       });
+    }
+  }
+
+  // Relation join validation: check that .select('*, other_table(...)') references real tables
+  // AND that a direct foreign key exists between the source table and joined table.
+  // PostgREST only resolves joins via direct FK relationships.
+  const foreignKeys = extractForeignKeysFromSql(schemaContent);
+  const codeFiles = files.filter(
+    (f) =>
+      f.path.endsWith(".ts") ||
+      f.path.endsWith(".tsx") ||
+      f.path.endsWith(".js") ||
+      f.path.endsWith(".jsx"),
+  );
+  for (const file of codeFiles) {
+    const joinRegex =
+      /\.from\(\s*["'`](\w+)["'`]\s*\)\s*\.select\(\s*["'`]([^"'`]+)["'`]/g;
+    for (const m of file.content.matchAll(joinRegex)) {
+      const sourceTable = m[1].toLowerCase();
+      const selectStr = m[2];
+      // Extract relation join table names like "profiles(username, avatar_url)"
+      const relationRegex = /(\w+)\s*\(/g;
+      for (const rel of selectStr.matchAll(relationRegex)) {
+        const joinedTable = rel[1].toLowerCase();
+        // Skip non-table tokens like "count" or "*"
+        if (joinedTable === "count" || joinedTable === "inner" || joinedTable === "left" || joinedTable === "exact") continue;
+        if (!createdTables.has(joinedTable)) {
+          issues.push({
+            path: file.path,
+            line: 1,
+            column: 1,
+            rule: "schema/invalid-relation-join",
+            message: `Code joins to table "${joinedTable}" in a .select() call, but "${joinedTable}" does not exist in supabase/schema.sql. Either create the table or remove the join. Do NOT assume a "profiles" table exists — use auth.users via supabase.auth.getUser() for user data.`,
+          });
+        } else {
+          // Table exists — check that there's a direct FK between source and joined table
+          const hasDirectFk = foreignKeys.some(
+            (fk) =>
+              (fk.fromTable === sourceTable && fk.toTable === joinedTable) ||
+              (fk.fromTable === joinedTable && fk.toTable === sourceTable),
+          );
+          if (!hasDirectFk) {
+            issues.push({
+              path: file.path,
+              line: 1,
+              column: 1,
+              rule: "schema/missing-fk-for-join",
+              message: `Code does .from("${sourceTable}").select("*, ${joinedTable}(...)") but there is no direct foreign key between "${sourceTable}" and "${joinedTable}" in supabase/schema.sql. PostgREST requires a direct FK to resolve joins. If "${sourceTable}" has a user_id column and you want to join "${joinedTable}", add: user_id uuid REFERENCES ${joinedTable}(id). Do NOT reference auth.users(id) if you need to join to "${joinedTable}".`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Column-level validation: check that columns used in code exist in schema
+  const codeColumnRefs = extractColumnReferencesFromCode(files);
+  const schemaColumns = extractColumnsFromSchemaTable(schemaContent);
+
+  for (const [table, cols] of codeColumnRefs) {
+    const schemaCols = schemaColumns.get(table);
+    if (!schemaCols) continue; // Table-level miss already reported above
+    for (const col of cols) {
+      if (
+        !schemaCols.has(col) &&
+        col !== "id" &&
+        col !== "created_at" &&
+        col !== "updated_at"
+      ) {
+        issues.push({
+          path: "supabase/schema.sql",
+          line: 1,
+          column: 1,
+          rule: "schema/missing-column",
+          message: `Column "${col}" is used in code for table "${table}" but not defined in supabase/schema.sql. Add it to the CREATE TABLE statement.`,
+        });
+      }
     }
   }
 
@@ -3174,7 +2623,95 @@ end $$;`;
     },
   );
 
-  return `${prelude}\n\n${policyPrelude}${withGuardedPolicies}`;
+  // Generate ALTER TABLE ADD COLUMN IF NOT EXISTS for every column to handle
+  // schema drift between repeated edits (CREATE TABLE IF NOT EXISTS won't add
+  // new columns to an existing table).
+  // We extract only the column name and base type (e.g. "text", "uuid",
+  // "integer", "timestamptz", "varchar(255)"). Constraints like NOT NULL,
+  // DEFAULT, REFERENCES are intentionally omitted — ALTER ADD COLUMN with a
+  // bare DEFAULT (no value) causes a syntax error, and NOT NULL on a
+  // populated table would fail anyway.
+  const alterColumnStatements: string[] = [];
+  const colTableRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+  for (const colMatch of withGuardedPolicies.matchAll(colTableRegex)) {
+    const tblName = colMatch[1];
+    const body = colMatch[2];
+    for (const line of body.split("\n")) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      if (
+        /^(constraint|primary|foreign|unique|check)\b/i.test(trimmedLine)
+      )
+        continue;
+      // Match column name and base SQL type only (e.g. "text", "uuid",
+      // "integer", "varchar(255)", "timestamp with time zone").
+      // Stop before NOT NULL / DEFAULT / REFERENCES / CHECK / UNIQUE / ,.
+      const colDef = trimmedLine.match(
+        /^"?(\w+)"?\s+((?:character\s+varying|timestamp\s+with(?:out)?\s+time\s+zone|double\s+precision|[\w]+)(?:\(\d+(?:,\s*\d+)?\))?)/i,
+      );
+      if (!colDef) continue;
+      const colName = colDef[1];
+      // Skip the primary key column — it's created with the table
+      if (colName.toLowerCase() === "id") continue;
+      const colType = colDef[2].trim();
+      alterColumnStatements.push(
+        `do $$ begin\n  if to_regclass('${escapeSqlLiteral(tblName)}') is not null then\n    alter table "${tblName}" add column if not exists "${colName}" ${colType};\n  end if;\nend $$;`,
+      );
+    }
+  }
+
+  const alterPhase =
+    alterColumnStatements.length > 0
+      ? `\n-- phase 2: ensure all columns exist (handles schema drift between edits)\n${alterColumnStatements.join("\n")}\n`
+      : "";
+
+  // Phase 3: Ensure foreign key constraints match the schema.
+  // If a column exists but its FK points to the wrong table (e.g. auth.users
+  // instead of profiles), DROP the old constraint and ADD the correct one.
+  // This fixes PostgREST join errors like PGRST200.
+  const fkRepairStatements: string[] = [];
+  const fkTableRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+  for (const fkMatch of schemaSql.matchAll(fkTableRegex)) {
+    const tblName = fkMatch[1];
+    const body = fkMatch[2];
+    for (const line of body.split("\n")) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      // Match column with REFERENCES to a public table (not auth.users)
+      const fkDef = trimmedLine.match(
+        /^"?(\w+)"?\s+\w+.*?\bREFERENCES\s+(?:public\.)?"?(\w+)"?\s*\(\s*"?(\w+)"?\s*\)(?:\s+ON\s+DELETE\s+(CASCADE|SET\s+NULL|RESTRICT|NO\s+ACTION))?/i,
+      );
+      if (!fkDef) continue;
+      const colName = fkDef[1];
+      const refTable = fkDef[2];
+      const refCol = fkDef[3];
+      const onDelete = fkDef[4] ? ` on delete ${fkDef[4]}` : "";
+      // Skip auth.users references — those are handled by Supabase itself
+      if (refTable.toLowerCase() === "users") continue;
+      // Skip self-references or id columns
+      if (colName.toLowerCase() === "id") continue;
+
+      const constraintName = `${tblName}_${colName}_fkey`;
+      // If the FK references "profiles", backfill missing profiles from
+      // auth.users first so existing rows don't violate the new constraint.
+      const backfillBlock =
+        refTable.toLowerCase() === "profiles" && refCol.toLowerCase() === "id"
+          ? `\n    -- backfill missing profiles so existing rows don't violate the FK\n    insert into "profiles" (id, email)\n    select distinct "${tblName}"."${colName}", u.email\n    from "${tblName}"\n    join auth.users u on u.id = "${tblName}"."${colName}"\n    where "${tblName}"."${colName}" not in (select id from "profiles")\n    on conflict (id) do nothing;`
+          : "";
+      fkRepairStatements.push(
+        `do $$ begin\n  if to_regclass('${escapeSqlLiteral(tblName)}') is not null then\n    alter table "${tblName}" drop constraint if exists "${constraintName}";${backfillBlock}\n    begin\n      alter table "${tblName}" add constraint "${constraintName}" foreign key ("${colName}") references "${refTable}"("${refCol}")${onDelete};\n    exception when others then\n      raise notice 'FK ${constraintName} could not be added: %', SQLERRM;\n    end;\n  end if;\nend $$;`,
+      );
+    }
+  }
+
+  const fkPhase =
+    fkRepairStatements.length > 0
+      ? `\n-- phase 3: ensure foreign key constraints match schema (fixes PostgREST join errors)\n${fkRepairStatements.join("\n")}\n`
+      : "";
+
+  return `${prelude}\n\n${policyPrelude}${withGuardedPolicies}\n${alterPhase}${fkPhase}`;
 }
 
 function buildTableCreationPhaseSql(schemaSql: string): string {
@@ -3353,30 +2890,20 @@ CORE IMPLEMENTATION RULES:
 - Do not output lockfiles or unsafe file paths.
 - All returned files must parse without TS/JS syntax errors.
 
-AUTHENTICATION & BACKEND RULES (KEEP INTACT):
-  * CRITICAL: NEVER generate "Login", "Sign In", "Sign Up", "Get Started", "Register", or similar authentication CTAs UNLESS the user explicitly requests authentication
-  * NEVER add shopping cart icons/buttons, wishlist/favorites (heart icons), user profile avatars, or any UI that implies a backend or user session UNLESS explicitly requested
-  * NEVER add search bars or search icons that imply server-side search UNLESS explicitly requested
-  * For e-commerce/store requests WITHOUT explicit backend: build a STATIC showcase — product cards with prices, but NO cart, NO "Add to Cart", NO wishlist, NO checkout, NO user accounts
-  * Do NOT add authentication buttons, forms, or CTAs by default - only add them when the user specifically mentions: "login", "authentication", "user accounts", "sign in", "user management", "dashboard", "user profiles"
-  * If the user does NOT mention authentication, create a fully functional public website WITHOUT any auth-related UI elements or backend-dependent features
-  * Only add auth if the user's request implies user accounts (e.g., "dashboard", "user profile", "login")
-  * Auth internals are prebuilt by platform scaffolding; do not generate custom auth internals
-  * If auth UI is needed, only link CTAs/buttons to: "/sign-in", "/signup"
-  * For logout buttons, submit POST to "/api/auth/signout"
-  * For client-side signed-in feedback (CTA/avatar/name), read GET "/api/auth/me"
-  * Auth CTAs must be state-aware (signed-out vs signed-in). Show user identity + logout when signed in.
-  * Never show login modal for already authenticated users; wait for auth state before prompting login.
-  * Do not place always-visible auth modals globally; auth surfaces only during sign-in/sign-up operations
-  * Auth page UX quality bar:
-    - /sign-in and /signup should be professional, brand-aligned pages (not plain default forms)
-    - Drive auth page styling/copy from a shared config file (for example: lib/auth-form-theme.ts) so both pages stay consistent
-    - Update the config values to match the website purpose (brand name, tone, accent colors, helper copy)
-    - Include password visibility toggle(s)
-    - Include password confirmation on /signup
-    - Include inline validation and clear error messaging
-    - Include loading and disabled states for submit buttons
-    - Keep form visuals aligned with website purpose and theme (color, typography, spacing)
+AUTHENTICATION & BACKEND RULES:
+  * NEVER generate auth CTAs UNLESS the user explicitly requests authentication
+  * NEVER add shopping cart, wishlist, user profile avatars, or backend-dependent UI UNLESS explicitly requested
+  * If the user does NOT mention authentication, create a fully functional public website WITHOUT any auth-related UI
+  * When auth IS requested, generate the COMPLETE auth system yourself:
+    - Sign-in and sign-up pages (e.g. app/sign-in/page.tsx, app/signup/page.tsx) with professional, brand-aligned design
+    - API routes for auth operations (signin, signup, signout, session check) using @supabase/ssr createServerClient
+    - middleware.ts for session handling and protected route redirects
+    - Use env vars: process.env.NEXT_PUBLIC_SUPABASE_URL and process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as fallback)
+    - Use supabase.auth.signInWithPassword(), supabase.auth.signUp(), supabase.auth.signOut(), supabase.auth.getUser()
+    - Include: password visibility toggle, password confirmation on signup, inline validation, loading states, error messages
+    - Auth CTAs must be session-aware (signed-out vs signed-in). Show user identity + logout when signed in.
+    - Do NOT hardcode secrets or service-role keys
+    - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import from those or create your own client using @supabase/ssr
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).
