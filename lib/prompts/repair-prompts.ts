@@ -77,7 +77,12 @@ export function buildLintRepairPrompt(args: {
     )
     .join("\n");
 
-  const filePayload = files.map((f) => ({ path: f.path, content: f.content }));
+  // Only send files that have lint issues — reduces input tokens and prevents
+  // Gemini from rewriting unrelated files.
+  const affectedPaths = new Set(lintIssues.map((i) => i.path));
+  const affectedFiles = files
+    .filter((f) => affectedPaths.has(f.path))
+    .map((f) => ({ path: f.path, content: f.content }));
 
   return `You produced a project that failed lint/parse checks.
 
@@ -87,8 +92,8 @@ ${originalPrompt}
 Fix these exact issues:
 ${issueList}
 
-Current project files (JSON):
-${JSON.stringify(filePayload)}
+Affected project files (JSON):
+${JSON.stringify(affectedFiles)}
 
 Current dependencies:
 ${JSON.stringify(dependencies)}
@@ -96,7 +101,10 @@ ${JSON.stringify(dependencies)}
 Requirements:
 - Fix only what is needed to resolve the reported errors.
 - Keep app behavior/design unchanged unless required by the fix.
-- Return COMPLETE valid JSON in the required shape with full files + dependencies.
+- Return ONLY the files you modified (not the entire project).
+- JSON shape: { "files": [{ "path": "...", "content": "..." }], "dependencies": { ... } }
+- Do NOT include unchanged files — the system will merge your changes automatically.
+- dependencies should include the FULL dependency map (not a diff).
 - Do not include markdown or explanations.
 ${
   hasNavigationUxIssue
@@ -110,4 +118,27 @@ ${
   - Prevent horizontal overflow on small screens.`
     : ""
 }`;
+}
+
+export function buildSchemaBootstrapRepairPrompt(args: {
+  schemaSql: string;
+  sqlError: string;
+}): string {
+  const { schemaSql, sqlError } = args;
+
+  return `The following PostgreSQL schema failed to apply to a Supabase project.
+
+POSTGRES ERROR:
+${sqlError}
+
+CURRENT SCHEMA SQL:
+${schemaSql}
+
+Fix requirements:
+- Fix ONLY the SQL error described above.
+- Preserve ALL tables, columns, indexes, RLS policies, and triggers — do not remove anything unless it directly causes the error.
+- Output must be valid PostgreSQL that can run on Supabase (PostgreSQL 15+).
+- Do not add markdown, explanations, or comments outside the SQL.
+- Return strict JSON only with this shape: { "schema": "CREATE TABLE ..." }
+- The "schema" value must contain the entire corrected schema SQL as a single string.`;
 }

@@ -29,17 +29,11 @@ export async function POST(req: Request) {
       config,
       imageCache,
       generationRunId,
-      linkedBackendProjectId,
     } = body;
 
     const generationRunBindingKey =
       typeof generationRunId === "string" && generationRunId.trim().length > 0
         ? generationRunId.trim()
-        : null;
-
-    const resolvedLinkedBackendId =
-      typeof linkedBackendProjectId === "string" && linkedBackendProjectId.trim().length > 0
-        ? linkedBackendProjectId.trim()
         : null;
 
     // Use Prisma transaction to create project and update user atomically
@@ -54,7 +48,6 @@ export async function POST(req: Request) {
           lintReport,
           config,
           imageCache,
-          linkedBackendProjectId: resolvedLinkedBackendId,
         },
       });
 
@@ -67,9 +60,7 @@ export async function POST(req: Request) {
       return project;
     });
 
-    // Only rebind the pool entry if this project has its OWN backend.
-    // Linked projects borrow the source project's credentials — no new pool slot.
-    if (generationRunBindingKey && !resolvedLinkedBackendId) {
+    if (generationRunBindingKey) {
       await rebindAuthConfigBindingKey(generationRunBindingKey, result.id);
     }
 

@@ -7,6 +7,7 @@ export {
   buildJsonRepairPrompt,
   buildShapeRepairPrompt,
   buildLintRepairPrompt,
+  buildSchemaBootstrapRepairPrompt,
 } from "./repair-prompts";
 export { CONFIG_GENERATOR_SYSTEM_PROMPT } from "./config-generator-prompt";
 export {

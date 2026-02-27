@@ -46,9 +46,6 @@ model Project {
   updatedAt       DateTime  @updatedAt
   deleted         Boolean   @default(false)
 
-  // Shared backend — when set, this project reuses another project's Supabase backend
-  linkedBackendProjectId String?   // ID of the project whose Supabase credentials to share
-
   // Publishing fields
   isPublished     Boolean   @default(false)
   publishedUrl    String?

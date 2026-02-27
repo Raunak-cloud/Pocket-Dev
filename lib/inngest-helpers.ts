@@ -116,7 +116,6 @@ export async function generateCodeWithInngest(
     requiresGoogleOAuth?: boolean;
     requiresPasswordAuth?: boolean;
   },
-  linkedProjectId?: string,
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -144,7 +143,6 @@ export async function generateCodeWithInngest(
     userId,
     projectId,
     integrationRequirements,
-    linkedProjectId,
   );
 
   onProgress?.("[0/7] Generation started. Waiting for first update...");

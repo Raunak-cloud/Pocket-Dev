@@ -24,10 +24,11 @@ import {
   buildJsonRepairPrompt,
   buildShapeRepairPrompt,
   buildLintRepairPrompt,
+  buildSchemaBootstrapRepairPrompt,
 } from "@/lib/prompts";
 
 const MODEL = "gemini-3-flash-preview";
-const MAX_TOKENS = 32768;
+const MAX_TOKENS = 65536;
 const MAX_LINT_REPAIR_ATTEMPTS = 2;
 const MAX_SYNTAX_REPAIR_ATTEMPTS = 2;
 const MAX_JSON_REPAIR_ATTEMPTS = 2;
@@ -35,6 +36,7 @@ const MAX_STRUCTURE_REPAIR_ATTEMPTS = 2;
 const MAX_UX_REPAIR_ATTEMPTS = 3;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 2;
 const MAX_NEXTJS_REPAIR_ATTEMPTS = 2;
+const MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS = 2;
 const MAX_FILE_COUNT = 300;
 const MAX_FILE_CONTENT_LENGTH = 300_000;
 
@@ -762,7 +764,17 @@ async function repairProjectFromLintFeedback(args: {
   const text = await generateWithGemini(systemPrompt, repairPrompt);
   const { dependencies: repairedDependencies, files: parsedFiles } =
     parseAndNormalizeProjectFromTextOrThrow(text);
-  let repairedFiles = parsedFiles;
+
+  // Merge: Gemini now returns only changed files. Overlay them on top of the
+  // original file set so unchanged files (layout, page, globals, etc.) are
+  // never lost — even when the model's output is truncated.
+  const repairedPathSet = new Set(parsedFiles.map((f) => f.path));
+  const mergedFiles = [
+    ...files.filter((f) => !repairedPathSet.has(f.path)),
+    ...parsedFiles,
+  ];
+
+  let repairedFiles = mergedFiles;
   repairedFiles = ensureRequiredFiles(
     repairedFiles,
     repairedDependencies,
@@ -773,6 +785,34 @@ async function repairProjectFromLintFeedback(args: {
   validateSyntaxOrThrow(repairedFiles);
 
   return { files: repairedFiles, dependencies: repairedDependencies };
+}
+
+async function repairSchemaFromBootstrapError(args: {
+  schemaSql: string;
+  sqlError: string;
+}): Promise<string> {
+  const repairPrompt = buildSchemaBootstrapRepairPrompt({
+    schemaSql: args.schemaSql,
+    sqlError: args.sqlError,
+  });
+
+  const text = await generateWithGemini(REPAIR_SYSTEM_PROMPT, repairPrompt);
+  let parsed: { schema?: string };
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Schema bootstrap repair returned invalid JSON: ${text.slice(0, 500)}`,
+    );
+  }
+
+  if (!parsed.schema || typeof parsed.schema !== "string") {
+    throw new Error(
+      "Schema bootstrap repair response missing 'schema' field.",
+    );
+  }
+
+  return parsed.schema;
 }
 
 function ensureRequiredFiles(
@@ -853,7 +893,14 @@ function ensureRequiredFiles(
       /^middleware\.(ts|js)$/i,
       /^lib\/supabase\/.+/i,
       /^app\/auth\/callback\/route\.(ts|js)$/i,
+      /^app\/auth\/verify\/page\.(tsx|ts|jsx|js)$/i,
       /^app\/api\/auth\/.+/i,
+      /^app\/sign-in\/page\.(tsx|ts|jsx|js)$/i,
+      /^app\/sign-up\/page\.(tsx|ts|jsx|js)$/i,
+      /^app\/signin\/page\.(tsx|ts|jsx|js)$/i,
+      /^app\/signup\/page\.(tsx|ts|jsx|js)$/i,
+      /^app\/login\/page\.(tsx|ts|jsx|js)$/i,
+      /^app\/register\/page\.(tsx|ts|jsx|js)$/i,
       /^src\/lib\/supabase\/.+/i,
       /^src\/app\/auth\/callback\/route\.(ts|js)$/i,
       /^src\/app\/api\/auth\/.+/i,
@@ -870,6 +917,15 @@ function ensureRequiredFiles(
       if (
         /(?:^|\/)middleware\.(ts|js)$/i.test(normalized) &&
         /@supabase\/ssr|createServerClient|NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY/i.test(
+          file.content,
+        )
+      ) {
+        return false;
+      }
+
+      // Remove any file that imports from stripped Supabase modules.
+      if (
+        /@\/lib\/supabase\/|@supabase\/ssr|@supabase\/supabase-js/i.test(
           file.content,
         )
       ) {
@@ -2593,14 +2649,24 @@ end $$;`;
       if (colName.toLowerCase() === "id") continue;
 
       const constraintName = `${tblName}_${colName}_fkey`;
-      // If the FK references "profiles", backfill missing profiles from
-      // auth.users first so existing rows don't violate the new constraint.
-      const backfillBlock =
-        refTable.toLowerCase() === "profiles" && refCol.toLowerCase() === "id"
-          ? `\n    -- backfill missing profiles so existing rows don't violate the FK\n    insert into "profiles" (id, email)\n    select distinct "${tblName}"."${colName}", u.email\n    from "${tblName}"\n    join auth.users u on u.id = "${tblName}"."${colName}"\n    where "${tblName}"."${colName}" not in (select id from "profiles")\n    on conflict (id) do nothing;`
-          : "";
+
+      // Safely reconcile orphan rows before adding the FK constraint.
+      // We can't predict the referenced table's columns (AI-generated schema),
+      // so we: (1) try to backfill with just the PK, (2) if that fails due to
+      // NOT NULL / check constraints, delete orphan rows as a fallback.
+      // Both paths are wrapped in exception handlers so nothing can crash the block.
+      const refTableLower = refTable.toLowerCase();
+      const refColLower = refCol.toLowerCase();
+      const needsOrphanFix =
+        refTableLower !== tblName.toLowerCase() && // skip self-references
+        refColLower === "id"; // only when referencing a PK
+
+      const orphanFixBlock = needsOrphanFix
+        ? `\n    -- attempt 1: backfill missing rows in referenced table (PK only)\n    begin\n      insert into "${refTable}" ("${refCol}")\n      select distinct "${tblName}"."${colName}"\n      from "${tblName}"\n      where "${tblName}"."${colName}" is not null\n        and "${tblName}"."${colName}" not in (select "${refCol}" from "${refTable}")\n      on conflict ("${refCol}") do nothing;\n    exception when others then\n      raise notice 'Backfill into ${refTable} failed (%): deleting orphan rows from ${tblName} instead', SQLERRM;\n      -- attempt 2: delete orphan rows that would violate the FK\n      begin\n        delete from "${tblName}"\n        where "${colName}" is not null\n          and "${colName}" not in (select "${refCol}" from "${refTable}");\n      exception when others then\n        raise notice 'Orphan cleanup in ${tblName} also failed: %', SQLERRM;\n      end;\n    end;`
+        : "";
+
       fkRepairStatements.push(
-        `do $$ begin\n  if to_regclass('${escapeSqlLiteral(tblName)}') is not null then\n    alter table "${tblName}" drop constraint if exists "${constraintName}";${backfillBlock}\n    begin\n      alter table "${tblName}" add constraint "${constraintName}" foreign key ("${colName}") references "${refTable}"("${refCol}")${onDelete};\n    exception when others then\n      raise notice 'FK ${constraintName} could not be added: %', SQLERRM;\n    end;\n  end if;\nend $$;`,
+        `do $$ begin\n  if to_regclass('${escapeSqlLiteral(tblName)}') is not null then\n    alter table "${tblName}" drop constraint if exists "${constraintName}";${orphanFixBlock}\n    begin\n      alter table "${tblName}" add constraint "${constraintName}" foreign key ("${colName}") references "${refTable}"("${refCol}")${onDelete};\n    exception when others then\n      raise notice 'FK ${constraintName} could not be added: %', SQLERRM;\n    end;\n  end if;\nend $$;`,
       );
     }
   }
@@ -2745,8 +2811,6 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
-    // When set, reuse the linked project's Supabase backend instead of allocating a new one.
-    const linkedProjectId = (event.data as Record<string, unknown>)?.linkedProjectId as string | undefined;
 
     // Detect edit requests so repair loops can use a focused system prompt
     // instead of the new-generation design-agency prompt.
@@ -2761,22 +2825,7 @@ export const generateCodeFunction = inngest.createFunction(
       explicitIntegrationRequirements || detectIntegrationRequirements(prompt);
     const needsManagedAuth = integrationRequirements.requiresAuth;
     let managedAuthConfig: ManagedSupabaseAuthConfig | null = null;
-    // Linked-backend flow: borrow credentials from the source project without
-    // consuming a pool slot. The source project's binding key remains unchanged.
-    if (linkedProjectId) {
-      managedAuthConfig = await step.run(
-        "resolve-linked-backend",
-        async () => {
-          const config = await getAuthConfigForBindingKey(linkedProjectId);
-          if (!config) {
-            throw new Error(
-              `Linked project "${linkedProjectId}" does not have a managed backend. Make sure the source project was generated with backend enabled.`,
-            );
-          }
-          return config;
-        },
-      );
-    } else if (needsManagedAuth) {
+    if (needsManagedAuth) {
       managedAuthConfig = await step.run(
         "allocate-managed-supabase",
         async () => {
@@ -2792,7 +2841,7 @@ export const generateCodeFunction = inngest.createFunction(
     }
 
     // Step 1: Detect project type + build user prompt
-    await sendProgress(projectId, "[1/8] Understanding your request...");
+    await sendProgress(projectId, "[1/7] Understanding your request...");
 
     // Detect project type in a dedicated step so edit requests skip it cheaply.
     const detectedProjectType = await step.run(
@@ -2813,39 +2862,6 @@ export const generateCodeFunction = inngest.createFunction(
       const isEditRequest = prompt.trimStart().startsWith("You are a senior full-stack developer");
       if (isEditRequest) {
         return prompt;
-      }
-
-      // Fetch the linked project's existing schema SQL so the AI can extend
-      // (rather than recreate) the backend tables.
-      let linkedSchemaContext = "";
-      if (linkedProjectId) {
-        const linkedProject = await prisma.project.findFirst({
-          where: { id: linkedProjectId },
-          select: { files: true, prompt: true },
-        });
-        if (linkedProject) {
-          const files = linkedProject.files as Array<{ path: string; content: string }>;
-          const schemaFile = files.find(
-            (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
-          );
-          if (schemaFile) {
-            linkedSchemaContext = `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SHARED BACKEND — EXISTING DATABASE SCHEMA
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-This project SHARES the Supabase backend of an existing project. The database already has these tables and policies — do NOT recreate or drop them:
-
-${schemaFile.content}
-
-CRITICAL RULES FOR SHARED BACKENDS:
-- Your supabase/schema.sql MUST use CREATE TABLE IF NOT EXISTS for all tables.
-- You MAY add new tables for features specific to this project, but include them alongside the existing schema.
-- Do NOT remove or modify existing table columns or RLS policies.
-- All .from("<table>") calls in your code must reference tables that exist in the schema above or that you explicitly CREATE.
-- The frontend should read/write the same Supabase project — env vars NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are already configured.`;
-          }
-        }
       }
 
       // ── Dashboard / App prompt ────────────────────────────────────────────
@@ -2876,10 +2892,11 @@ CORE IMPLEMENTATION RULES:
 - Do not output lockfiles.
 
 AUTHENTICATION & BACKEND RULES:
-  * NEVER generate auth CTAs UNLESS explicitly requested
-  * When auth IS requested, generate: app/sign-in/page.tsx, middleware.ts, Supabase SSR auth
+  * If auth/backend is NOT requested: do NOT generate sign-in/sign-up/login pages, middleware.ts, auth API routes, or any Supabase imports. Do NOT add "Sign In"/"Login" buttons, cart, wishlist, or favorites UI. Build with zero backend dependencies.
+  * When auth IS requested, generate: BOTH app/sign-in/page.tsx AND app/sign-up/page.tsx (always both, linked to each other), a verification email page (app/auth/verify/page.tsx) shown after sign-up with "Check your email" message + "Back to sign in" link (redirect to /auth/verify?email=... after signUp()), middleware.ts, Supabase SSR auth
   * Use env vars: process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY
-  * DATABASE CONTRACT: include supabase/schema.sql with CREATE TABLE IF NOT EXISTS + RLS for every .from() table${linkedSchemaContext}`;
+  * DATABASE CONTRACT: include supabase/schema.sql with CREATE TABLE IF NOT EXISTS + RLS for every .from() table
+  * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes.`;
       }
 
       // ── Website / Marketing prompt ────────────────────────────────────────
@@ -2912,11 +2929,16 @@ CORE IMPLEMENTATION RULES:
 - All returned files must parse without TS/JS syntax errors.
 
 AUTHENTICATION & BACKEND RULES:
-  * NEVER generate auth CTAs UNLESS the user explicitly requests authentication
-  * NEVER add shopping cart, wishlist, user profile avatars, or backend-dependent UI UNLESS explicitly requested
-  * If the user does NOT mention authentication, create a fully functional public website WITHOUT any auth-related UI
+  * If auth/backend is NOT explicitly requested by the user:
+    - Do NOT generate sign-in, sign-up, login, or register pages (no app/sign-in/page.tsx, etc.)
+    - Do NOT generate middleware.ts, auth API routes, or any Supabase auth code
+    - Do NOT import from @supabase/ssr, @supabase/supabase-js, or @/lib/supabase anywhere
+    - Do NOT add "Sign In", "Sign Up", "Login", "Register", "Log Out" buttons or links in the navbar or anywhere
+    - Do NOT add shopping cart, wishlist, favorites, user profile avatars, "Add to Cart" buttons, or any backend-dependent UI
+    - Build a fully functional static/public website with NO auth and NO backend dependencies
   * When auth IS requested, generate the COMPLETE auth system yourself:
-    - Sign-in and sign-up pages (e.g. app/sign-in/page.tsx, app/signup/page.tsx) with professional, brand-aligned design
+    - BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them, professional brand-aligned design
+    - A verification email page (app/auth/verify/page.tsx) — shown after sign-up. Displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>.
     - API routes for auth operations (signin, signup, signout, session check) using @supabase/ssr createServerClient
     - middleware.ts for session handling and protected route redirects
     - Use env vars: process.env.NEXT_PUBLIC_SUPABASE_URL and process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as fallback)
@@ -2925,6 +2947,14 @@ AUTHENTICATION & BACKEND RULES:
     - Auth CTAs must be session-aware (signed-out vs signed-in). Show user identity + logout when signed in.
     - Do NOT hardcode secrets or service-role keys
     - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import from those or create your own client using @supabase/ssr
+  * PUBLIC vs PROTECTED ACCESS — CRITICAL:
+    - READ/BROWSE pages are PUBLIC: anyone can view product listings, read blog posts, browse content, see landing pages — no login required.
+    - WRITE/MUTATE actions are PROTECTED: creating posts, adding items to cart, submitting reviews, commenting, editing profiles, checkout, placing orders — MUST require authentication.
+    - Before any Supabase INSERT, UPDATE, or DELETE, check supabase.auth.getUser(). If no authenticated user, redirect to sign-in or show a "Please sign in to continue" prompt — NEVER let anonymous users write data.
+    - middleware.ts should protect write-action routes (/dashboard, /account, /admin, /checkout, /new, /create, /edit) but NOT public browse routes (/, /blog, /products, /about).
+    - Forms that write to the database (new blog post, add to cart, submit review) must verify the user is logged in BEFORE allowing submission. Show a sign-in CTA if unauthenticated.
+    - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive for public content.
+    - Shopping cart, wishlist, favorites must be tied to auth.uid() — anonymous users cannot add items.
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).
@@ -2949,7 +2979,7 @@ NAV + MOBILE RULES:
 - Keep header/navbar pinned at top with proper z-index.
 - Mobile menu must render above content with clear background contrast and full viewport height.
 - Avoid creating extra independent scrollbars inside nav/menu wrappers.
-- CRITICAL: Every nav link must use Next.js Link component with href pointing to a real route (e.g., href="/about"). Generate a matching app/{route}/page.tsx for each. No "#" or empty href values for primary navigation items.${linkedSchemaContext}`;
+- CRITICAL: Every nav link must use Next.js Link component with href pointing to a real route (e.g., href="/about"). Generate a matching app/{route}/page.tsx for each. No "#" or empty href values for primary navigation items.`;
     });
 
     // Step 1.5: Extract theme from prompt
@@ -2969,7 +2999,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 2: Generate with Gemini
-    await sendProgress(projectId, "[2/8] Creating your website...");
+    await sendProgress(projectId, "[2/7] Generating your app...");
     const generatedText = await step.run("generate-with-gemini", async () => {
       console.log("Using Gemini 3 Flash Preview...");
 
@@ -3005,7 +3035,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 3: Parse and prepare files
-    await sendProgress(projectId, "[3/8] Preparing project files...");
+    await sendProgress(projectId, "[3/7] Parsing and validating code...");
     const parsedProject = await step.run("parse-generated-code", async () => {
       console.log("Parsing AI response, length:", generatedText.length);
 
@@ -3132,7 +3162,7 @@ NAV + MOBILE RULES:
         console.warn(
           `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
         );
-        await sendProgress(projectId, "[4/8] Improving code reliability...");
+
 
         const repaired = await repairProjectFromLintFeedback({
           originalPrompt: prompt,
@@ -3158,20 +3188,14 @@ NAV + MOBILE RULES:
           console.warn(
             `[UXRepair] Max attempts reached. Continuing with unresolved UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
           );
-          await sendProgress(
-            projectId,
-            "[4/8] Note: some layout issues could not be auto-fixed. Your site may need minor responsive adjustments.",
-          );
+          // UX repair exhausted — continue silently.
           break;
         }
 
         console.warn(
           `[UXRepair] Attempt ${attempt} - ${uxIssues.length} responsive/navigation issue(s).`,
         );
-        await sendProgress(
-          projectId,
-          "[4/8] Refining layout and responsiveness...",
-        );
+        // UX repair in progress — no user-facing message.
 
         const repaired = await repairProjectFromLintFeedback({
           originalPrompt: prompt,
@@ -3209,7 +3233,7 @@ NAV + MOBILE RULES:
         console.warn(
           `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
         );
-        await sendProgress(projectId, "[4/8] Strengthening backend setup...");
+        // Schema repair in progress — no user-facing message.
 
         const repaired = await repairProjectFromLintFeedback({
           originalPrompt: prompt,
@@ -3251,7 +3275,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(projectId, "[5/8] Running code quality checks...");
+    await sendProgress(projectId, "[4/7] Running code quality checks...");
     const { fixedFiles } = await step.run("lint-and-repair", async () => {
       console.log(`Starting linting for ${files.length} files...`);
       let workingFiles = files;
@@ -3280,7 +3304,7 @@ NAV + MOBILE RULES:
         console.warn(
           `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
         );
-        await sendProgress(projectId, "[5/8] Fixing code quality...");
+        // Lint repair in progress — no user-facing message.
 
         const repaired = await repairProjectFromLintFeedback({
           originalPrompt: prompt,
@@ -3320,7 +3344,7 @@ NAV + MOBILE RULES:
 
     await sendProgress(
       projectId,
-      "[6/8] Validating Next.js runtime constraints...",
+      "[5/7] Validating Next.js compatibility...",
     );
     const { validatedFiles } = await step.run(
       "nextjs-validate-and-repair",
@@ -3341,10 +3365,7 @@ NAV + MOBILE RULES:
           console.warn(
             `[NextValidation] Attempt ${attempt} - ${issues.length} issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
           );
-          await sendProgress(
-            projectId,
-            "[6/8] Fixing Next.js compatibility...",
-          );
+          // Next.js repair in progress — no user-facing message.
 
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
@@ -3420,32 +3441,62 @@ NAV + MOBILE RULES:
         );
       }
 
-      await sendProgress(projectId, "[7/8] Setting up backend data...");
+      await sendProgress(projectId, "[6/7] Setting up database...");
 
-      // For linked (shared) backends the source project already bootstrapped
-      // the base schema. We only apply the new/extended SQL so we don't
-      // overwrite existing data or policies.
       await step.run("bootstrap-managed-supabase-schema", async () => {
-        if (linkedProjectId) {
-          // Apply only the incremental schema — use the same idempotent helpers.
-          const sql = buildSchemaBootstrapSql(schemaFile.content);
-          await applySqlToManagedProject(managedAuthConfig.projectRef, sql);
-          return { projectRef: managedAuthConfig.projectRef, applied: true, mode: "incremental" };
+        for (
+          let attempt = 1;
+          attempt <= MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS + 1;
+          attempt++
+        ) {
+          try {
+            const tablePhaseSql = buildTableCreationPhaseSql(schemaFile.content);
+            await applySqlToManagedProject(
+              managedAuthConfig.projectRef,
+              tablePhaseSql,
+            );
+            const sql = buildSchemaBootstrapSql(schemaFile.content);
+            await applySqlToManagedProject(managedAuthConfig.projectRef, sql);
+            return { projectRef: managedAuthConfig.projectRef, applied: true, mode: "full" };
+          } catch (err) {
+            const errorMsg =
+              err instanceof Error ? err.message : String(err);
+            console.warn(
+              `[schema-bootstrap] Attempt ${attempt} failed: ${errorMsg}`,
+            );
+
+            if (attempt > MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS) {
+              throw err;
+            }
+
+            // Schema bootstrap repair — no user-facing message.
+
+            const fixedSql = await repairSchemaFromBootstrapError({
+              schemaSql: schemaFile.content,
+              sqlError: errorMsg,
+            });
+
+            // Update the schema file in-place so subsequent attempts and
+            // downstream steps use the corrected SQL.
+            schemaFile.content = fixedSql;
+            const idx = finalFiles.findIndex(
+              (f) =>
+                f.path.replace(/\\/g, "/").toLowerCase() ===
+                "supabase/schema.sql",
+            );
+            if (idx !== -1) {
+              finalFiles[idx] = { ...finalFiles[idx], content: fixedSql };
+            }
+          }
         }
 
-        const tablePhaseSql = buildTableCreationPhaseSql(schemaFile.content);
-        await applySqlToManagedProject(
-          managedAuthConfig.projectRef,
-          tablePhaseSql,
-        );
-        const sql = buildSchemaBootstrapSql(schemaFile.content);
-        await applySqlToManagedProject(managedAuthConfig.projectRef, sql);
-        return { projectRef: managedAuthConfig.projectRef, applied: true, mode: "full" };
+        // Unreachable — loop always returns or throws — but satisfies TS.
+        throw new Error("Schema bootstrap repair loop exited unexpectedly.");
       });
     }
 
     // Step 6: Notify completion via API
-    await sendProgress(projectId, "[7/8] Finalizing and saving your app...");
+    await sendProgress(projectId, "[7/7] Finalizing your app...");
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
@@ -3484,7 +3535,7 @@ NAV + MOBILE RULES:
       return result;
     });
 
-    await sendProgress(projectId, "[8/8] Ready to preview.");
+    await sendProgress(projectId, "Ready to preview!");
 
     return {
       files: finalFiles,

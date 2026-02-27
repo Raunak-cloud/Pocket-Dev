@@ -2,7 +2,6 @@
  * GET /api/projects/backend-info?projectId=<id>
  *
  * Returns the Supabase backend credentials and existing schema SQL for a project.
- * Used when creating a new project that shares an existing project's backend.
  */
 import { auth } from "@/lib/supabase-auth/server";
 import { NextResponse } from "next/server";
@@ -27,19 +26,16 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Verify the requesting user owns the source project.
+    // Verify the requesting user owns the project.
     const project = await prisma.project.findFirst({
       where: { id: projectId, userId: user.id, deleted: false },
-      select: { id: true, files: true, linkedBackendProjectId: true },
+      select: { id: true, files: true },
     });
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    // If this project itself is linked, follow the chain to the real backend owner.
-    const backendOwnerId = project.linkedBackendProjectId ?? project.id;
-
-    const authConfig = await getAuthConfigForBindingKey(backendOwnerId);
+    const authConfig = await getAuthConfigForBindingKey(project.id);
     if (!authConfig) {
       return NextResponse.json(
         { error: "This project does not have a managed backend" },
@@ -47,7 +43,7 @@ export async function GET(req: Request) {
       );
     }
 
-    // Extract the existing schema SQL from the source project's files.
+    // Extract the existing schema SQL from the project's files.
     const files = project.files as Array<{ path: string; content: string }>;
     const schemaFile = files.find(
       (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql"
@@ -58,7 +54,6 @@ export async function GET(req: Request) {
       supabaseUrl: authConfig.supabaseUrl,
       anonKey: authConfig.anonKey,
       schemaSQL: schemaFile?.content ?? null,
-      backendOwnerProjectId: backendOwnerId,
     });
   } catch (error) {
     console.error("[GET /api/projects/backend-info] Error:", error);

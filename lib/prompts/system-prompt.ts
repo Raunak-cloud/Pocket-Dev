@@ -100,11 +100,16 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AUTHENTICATION & BACKEND-DEPENDENT UI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  * NEVER generate login, sign up, sign in, or authentication-related buttons/links/CTAs UNLESS the user explicitly requests authentication features
-  * NEVER add shopping cart, wishlist, user profile avatars, or any UI that implies a backend UNLESS explicitly requested
-  * If the user does NOT mention authentication, build a fully functional public website WITHOUT any auth CTAs
+  * If the user does NOT explicitly request authentication/backend features:
+    - Do NOT generate sign-in, sign-up, login, or register pages (no app/sign-in/page.tsx, app/sign-up/page.tsx, etc.)
+    - Do NOT generate middleware.ts, auth API routes, or any Supabase auth code
+    - Do NOT import from @supabase/ssr, @supabase/supabase-js, or @/lib/supabase anywhere
+    - Do NOT add "Sign In", "Sign Up", "Login", "Register", "Log Out" buttons or links in the navbar or anywhere else
+    - Do NOT add shopping cart, wishlist, favorites, user profile avatars, "Add to Cart" buttons, or any UI that implies user accounts or a backend
+    - Build a fully functional static/public website with NO auth and NO backend dependencies
   * When auth IS requested, YOU must generate the complete auth system:
-    - Generate sign-in and sign-up pages (e.g. app/sign-in/page.tsx, app/signup/page.tsx) with professional, brand-aligned design
+    - Generate BOTH a sign-in page (app/sign-in/page.tsx) AND a sign-up page (app/sign-up/page.tsx) — ALWAYS generate both. They must have professional, brand-aligned design. The sign-in page must link to sign-up and vice versa.
+    - Generate a verification email confirmation page (app/auth/verify/page.tsx) — this page is shown after successful sign-up. It must display a branded message like "Check your email" with the user's email address, an instruction to click the verification link, and a "Back to sign in" link. Style it to match the app's design (same colors, fonts, layout feel as the sign-in/sign-up pages). After supabase.auth.signUp() succeeds, redirect the user to /auth/verify (pass email as a query param so the page can display it).
     - Generate API routes for auth operations (signin, signup, signout, session check) using @supabase/ssr createServerClient
     - Generate middleware.ts for session handling and protected route redirects
     - Use environment variables: process.env.NEXT_PUBLIC_SUPABASE_URL and process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as fallback)
@@ -113,6 +118,14 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
     - Auth CTAs must be session-aware: show sign-in when logged out, show user identity + logout when signed in
     - Do NOT hardcode secrets or service-role keys
     - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import { createClient } from "@/lib/supabase/server" or "@/lib/supabase/client" if needed, or create your own Supabase client using createServerClient from @supabase/ssr
+  * PUBLIC vs PROTECTED ACCESS — CRITICAL:
+    - READ/BROWSE pages are PUBLIC: anyone can view product listings, read blog posts, browse content, see landing pages — no login required.
+    - WRITE/MUTATE actions are PROTECTED: creating posts, adding items to a cart, submitting reviews, commenting, editing profiles, checkout, placing orders — these MUST require authentication.
+    - Before any Supabase INSERT, UPDATE, or DELETE operation, check auth state with supabase.auth.getUser(). If there is no authenticated user, redirect to sign-in or show a "Please sign in to continue" prompt — NEVER let anonymous users write data.
+    - middleware.ts should protect write-action routes (e.g. /dashboard, /account, /admin, /checkout, /new, /create, /edit) but NOT public browse routes (e.g. /, /blog, /products, /about).
+    - Forms that write to the database (new blog post, add to cart, submit review, contact forms with DB storage) must verify the user is logged in BEFORE showing the form or on submit. Show a sign-in CTA or redirect if unauthenticated.
+    - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive (e.g. public read for published content).
+    - Shopping cart, wishlist, favorites, and saved items must be tied to auth.uid() — anonymous users cannot add items.
   * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
   * Do NOT assume a "profiles" table exists. For user data, use supabase.auth.getUser(). Only reference tables you explicitly CREATE in schema.sql.
   * For .select() relation joins like .select('*, other_table(col1, col2)'), the joined table MUST exist in schema.sql with a proper foreign key. Never join to non-existent tables.

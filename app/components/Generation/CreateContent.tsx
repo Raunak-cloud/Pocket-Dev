@@ -8,14 +8,13 @@ const EXAMPLES = [
     icon: "🛍️",
     name: "E-Commerce",
     desc: "Product listings, cart & checkout",
-    query:
-      "Create a modern e-commerce app with product listings, shopping cart, and checkout pages",
+    query: "Create a modern e-commerce app with product listings",
   },
   {
     icon: "🍕",
     name: "Restaurant",
     desc: "Menu, reservations & about",
-    query: "Create a restaurant app with menu, reservations, and about pages",
+    query: "Create a restaurant app with menu, and about pages",
   },
   {
     icon: "🚀",
@@ -29,14 +28,13 @@ const EXAMPLES = [
     name: "Blog",
     desc: "Posts, comments & search",
     query:
-      "Create a blog app with MDX support, comments section, and full-text search functionality",
+      "Create a blog app with MDX support, and full-text search functionality",
   },
   {
     icon: "🎬",
     name: "Movie Database",
     desc: "Listings, ratings & reviews",
-    query:
-      "Create a movie app with movie listings, user ratings, and review functionality",
+    query: "Create a movie app with movie listings, and mock user ratings",
   },
   {
     icon: "📚",

@@ -1702,7 +1702,7 @@ function ReactGeneratorContent() {
 
     let prompt = `\n\n⚙️ BACKEND REQUIREMENT:
 1. Implement a complete backend system ${integrationScope} using Supabase only.
-2. Include authentication flows: sign up, sign in, sign out, session handling, and protected routes.
+2. Include authentication flows: sign up, sign in, sign out, session handling, and protected routes. ALWAYS generate BOTH a sign-in page (app/sign-in/page.tsx) AND a sign-up page (app/sign-up/page.tsx) with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after successful sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>.
 3. Include data persistence: schema setup, typed data access, and practical relational tables.
 4. Include secure data operations: CRUD endpoints/actions and row-level access control where required.
 5. Use production-safe validation and error handling for auth and database operations.
@@ -1710,7 +1710,8 @@ function ReactGeneratorContent() {
 7. Every supabase.from("table_name") call in code MUST have a matching CREATE TABLE in supabase/schema.sql.
 8. Add RLS policies for user-scoped data (enable RLS + at least one policy per table with user data).
 9. Use CREATE TABLE IF NOT EXISTS for new tables. Use ALTER TABLE ADD COLUMN for adding columns to existing tables.
-10. Include "id uuid default gen_random_uuid() primary key" for new tables unless a different primary key is specified.`;
+10. Include "id uuid default gen_random_uuid() primary key" for new tables unless a different primary key is specified.
+11. PUBLIC vs PROTECTED ACCESS — CRITICAL: Read/browse pages (viewing products, reading blogs, browsing listings) are PUBLIC — no login required. Write/mutate actions (creating posts, adding to cart, submitting reviews, commenting, checkout, placing orders) MUST require authentication. Check supabase.auth.getUser() before any INSERT/UPDATE/DELETE — if unauthenticated, redirect to sign-in or show "Please sign in". middleware.ts must protect write-action routes (/dashboard, /account, /checkout, /new, /create, /edit) but NOT public browse routes. Shopping cart, wishlist, favorites must be tied to auth.uid(). RLS write policies must enforce auth.uid() = user_id.`;
 
     if (mode === "existing" && schemaContext) {
       prompt += `\n\n📊 CURRENT DATABASE SCHEMA (extend this, do NOT recreate from scratch):

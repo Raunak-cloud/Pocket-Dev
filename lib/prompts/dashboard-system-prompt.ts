@@ -99,8 +99,9 @@ ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AUTHENTICATION & BACKEND
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- NEVER generate auth CTAs UNLESS explicitly requested.
-- When auth IS requested: generate sign-in page (app/sign-in/page.tsx), middleware.ts for protected routes, and Supabase SSR auth using process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
+- If the user does NOT explicitly request authentication/backend: do NOT generate sign-in/sign-up/login pages, do NOT generate middleware.ts or auth API routes, do NOT import from @supabase/ssr or @supabase/supabase-js or @/lib/supabase, do NOT add "Sign In"/"Login"/"Register" buttons or links anywhere, do NOT add cart/wishlist/favorites UI. Build with NO auth and NO backend dependencies.
+- When auth IS requested: generate BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>. Generate middleware.ts for protected routes, and Supabase SSR auth using process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
+- PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login required). All write/mutate actions (create, update, delete data) MUST require authentication — check supabase.auth.getUser() before any INSERT/UPDATE/DELETE and redirect to sign-in if unauthenticated. middleware.ts should protect write-action routes (/dashboard, /admin, /new, /create, /edit) but not public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for write operations.
 - DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with CREATE TABLE statements and RLS policies for every table the code uses.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
