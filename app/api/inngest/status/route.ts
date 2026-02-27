@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 const COMPLETION_TTL_MS = 30 * 60 * 1000;
 const PROGRESS_TTL_MS = 60 * 60 * 1000;
 const CANCEL_TTL_MS = 60 * 60 * 1000;
+const FAILURE_TTL_MS = 60 * 60 * 1000;
 
 type TimedValue<T> = {
   value: T;
@@ -19,6 +20,7 @@ type TimedValue<T> = {
 const completedEvents = new Map<string, TimedValue<unknown>>();
 const progressEvents = new Map<string, TimedValue<string[]>>();
 const cancelledJobs = new Map<string, TimedValue<true>>(); // Track cancelled project IDs
+const failedJobs = new Map<string, TimedValue<string>>(); // Track failed project IDs with error message
 
 function now() {
   return Date.now();
@@ -34,6 +36,9 @@ function cleanupExpired() {
   }
   for (const [k, v] of cancelledJobs) {
     if (v.expiresAt <= t) cancelledJobs.delete(k);
+  }
+  for (const [k, v] of failedJobs) {
+    if (v.expiresAt <= t) failedJobs.delete(k);
   }
 }
 
@@ -64,6 +69,16 @@ export async function GET(request: NextRequest) {
   // Check if job was cancelled
   if (isCancelled(projectId)) {
     return NextResponse.json({ cancelled: true }, { status: 200 });
+  }
+
+  // Check if job failed
+  const failureEntry = failedJobs.get(projectId);
+  if (failureEntry) {
+    if (failureEntry.expiresAt <= now()) {
+      failedJobs.delete(projectId);
+    } else {
+      return NextResponse.json({ failed: true, error: failureEntry.value }, { status: 200 });
+    }
   }
 
   const key = `${projectId}:${event}`;
@@ -108,6 +123,7 @@ export async function POST(request: NextRequest) {
     });
     completedEvents.delete(`${projectId}:generate.completed`);
     progressEvents.delete(`${projectId}:progress`);
+    failedJobs.delete(projectId);
     console.log(`[Inngest] Job cancelled: ${projectId}`);
     return NextResponse.json({ success: true, cancelled: true });
   }
@@ -118,6 +134,7 @@ export async function POST(request: NextRequest) {
     completedEvents.delete(`${projectId}:images.processed`);
     progressEvents.delete(`${projectId}:progress`);
     cancelledJobs.delete(projectId);
+    failedJobs.delete(projectId);
     return NextResponse.json({ success: true, reset: true });
   }
 
@@ -137,6 +154,18 @@ export async function POST(request: NextRequest) {
       expiresAt: now() + PROGRESS_TTL_MS,
     });
     return NextResponse.json({ success: true });
+  }
+
+  // Handle failure notification from Inngest onFailure handler
+  const { failed, error: failureError } = body;
+  if (failed) {
+    const errorMessage = typeof failureError === "string" ? failureError : "Generation failed";
+    failedJobs.set(projectId, {
+      value: errorMessage,
+      expiresAt: now() + FAILURE_TTL_MS,
+    });
+    console.log(`[Inngest] Job failed: ${projectId} — ${errorMessage}`);
+    return NextResponse.json({ success: true, failed: true });
   }
 
   // Handle completion

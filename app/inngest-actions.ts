@@ -21,6 +21,7 @@ export async function triggerCodeGeneration(
     requiresGoogleOAuth?: boolean;
     requiresPasswordAuth?: boolean;
   },
+  linkedProjectId?: string,
 ) {
   const sendResult = await inngest.send({
     name: "app/generate.code",
@@ -29,6 +30,7 @@ export async function triggerCodeGeneration(
       userId,
       projectId,
       integrationRequirements,
+      linkedProjectId,
     },
   });
 

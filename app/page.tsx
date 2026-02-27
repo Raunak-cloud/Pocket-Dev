@@ -56,7 +56,7 @@ const DEFAULT_BACKEND_DATABASE = [
 ];
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
-const MAX_EDIT_HISTORY_ENTRIES = 3;
+const MAX_EDIT_HISTORY_ENTRIES = 10;
 
 type SelectedLinkTarget = {
   name: string;
@@ -140,7 +140,7 @@ const readStoredIntegrations = (
     return {};
   }
 
-  const configRecord = projectData.config as Record<string, unknown>;
+  const configRecord = projectData.config as unknown as Record<string, unknown>;
   const raw = configRecord[INTEGRATIONS_CONFIG_KEY];
   if (!raw || typeof raw !== "object") return {};
   return raw as StoredIntegrations;
@@ -1942,18 +1942,22 @@ ${userRequest}
 CRITICAL — MINIMAL CHANGES ONLY:
 - ONLY modify files that are directly needed to fulfill the user's request. Do NOT refactor, restyle, or "improve" unrelated code.
 - Do NOT add features the user did not ask for. Do NOT reorganize or restructure code beyond what the request requires.
-- Do NOT change existing styling, layout, colors, fonts, or design unless the user explicitly asked for those changes.
+- Do NOT change existing styling, layout, colors, fonts, spacing, or design unless the user explicitly asked for those changes.
 - Do NOT rename variables, refactor components, or clean up code that is not part of the request.
+- Do NOT add, remove, or reorder navigation links unless the user explicitly asked for nav changes.
 - Keep existing image src URLs unchanged unless the user explicitly requests image changes.
+- Do NOT change any page other than the one(s) directly mentioned in the user's request.
 
 HOW TO APPROACH THIS:
-1. Read the user's request. Identify the EXACT files that need to change — and change ONLY those.
-2. If the request involves backend/database work: create or update ONLY the tables/columns needed. Do NOT assume tables like "profiles" exist unless they are in the current schema. Only reference tables that exist in supabase/schema.sql.
-3. If the request involves UI changes: update only the relevant components. Do not touch unrelated pages or sections.
-4. For database queries with joins (e.g. .select('*, other_table(*)')), ONLY join tables that have a real foreign key relationship defined in supabase/schema.sql. Never assume a "profiles" table exists — use auth.users() or the actual table names from the schema.
-5. Install npm packages ONLY if they are required for the specific change.
+1. Read the user's request carefully. Identify the EXACT component or section that needs to change.
+2. Make the smallest possible code change that achieves the user's goal. Prefer changing 5 lines over 50.
+3. If the request involves conditional rendering (show/hide based on auth state): use the existing Supabase client to call supabase.auth.getUser() or useEffect + supabase.auth.onAuthStateChange(). Do NOT use placeholder booleans.
+4. If the request involves backend/database work: create or update ONLY the tables/columns needed. Only reference tables that exist in supabase/schema.sql.
+5. If the request involves UI changes: update only the relevant component. Do not touch unrelated pages or sections.
+6. For database queries with joins (e.g. .select('*, other_table(*)')), ONLY join tables that have a real foreign key relationship defined in supabase/schema.sql.
+7. Install npm packages ONLY if they are required for the specific change.
 
- TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
+TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
 - NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent — these WILL crash the build
 - ONLY use @apply with built-in Tailwind utilities: @apply px-4 py-2 bg-blue-600 text-white rounded-lg
 - Use standard Tailwind color classes (blue-600, gray-900, emerald-500, etc.) instead of custom names
@@ -2058,7 +2062,6 @@ Do not skip any files. Keep unmodified files exactly as they are.`;
         ].slice(-MAX_EDIT_HISTORY_ENTRIES);
         currentEditHistory = nextHistory;
         setEditHistory(nextHistory);
-        setShowEditHistory(true);
 
         const projectWithHistory = applyEditHistoryToProject(
           project,
