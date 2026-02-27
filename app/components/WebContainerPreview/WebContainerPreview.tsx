@@ -2,10 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { WebContainer } from "@webcontainer/api";
-import {
-  prepareSandboxFiles,
-  computeFileDiff,
-} from "@/lib/sandbox-utils";
+import { prepareSandboxFiles, computeFileDiff } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
 type FileTreeEntry = {
@@ -154,19 +151,26 @@ export default function WebContainerPreview({
         setLoadingState("installing");
         addLog("Installing dependencies (npm install)...");
 
-        const installProcess = await wc.spawn("npm", ["install", "--no-audit", "--no-fund", "--progress=false"]);
+        const installProcess = await wc.spawn("npm", [
+          "install",
+          "--no-audit",
+          "--no-fund",
+          "--progress=false",
+        ]);
 
-        installProcess.output.pipeTo(
-          new WritableStream({
-            write(data) {
-              if (!mounted) return;
-              const lines = data.split("\n").filter((l: string) => l.trim());
-              for (const line of lines) {
-                addLog(line);
-              }
-            },
-          }),
-        ).catch(() => {});
+        installProcess.output
+          .pipeTo(
+            new WritableStream({
+              write(data) {
+                if (!mounted) return;
+                const lines = data.split("\n").filter((l: string) => l.trim());
+                for (const line of lines) {
+                  addLog(line);
+                }
+              },
+            }),
+          )
+          .catch(() => {});
 
         const installExitCode = await installProcess.exit;
 
@@ -183,20 +187,27 @@ export default function WebContainerPreview({
         setLoadingState("starting");
         addLog("Starting development server...");
 
-        const devProcess = await wc.spawn("npx", ["next", "dev", "--port", "3000"]);
+        const devProcess = await wc.spawn("npx", [
+          "next",
+          "dev",
+          "--port",
+          "3000",
+        ]);
         serverProcessRef.current = devProcess;
 
-        devProcess.output.pipeTo(
-          new WritableStream({
-            write(data) {
-              if (!mounted) return;
-              const lines = data.split("\n").filter((l: string) => l.trim());
-              for (const line of lines) {
-                addLog(line);
-              }
-            },
-          }),
-        ).catch(() => {});
+        devProcess.output
+          .pipeTo(
+            new WritableStream({
+              write(data) {
+                if (!mounted) return;
+                const lines = data.split("\n").filter((l: string) => l.trim());
+                for (const line of lines) {
+                  addLog(line);
+                }
+              },
+            }),
+          )
+          .catch(() => {});
 
         // Listen for server-ready event
         wc.on("server-ready", (_port, url) => {
