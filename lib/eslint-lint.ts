@@ -49,7 +49,7 @@ export async function lintCode(
   filename = "website.js"
 ): Promise<LintResult> {
   const eslint = new ESLint({
-    overrideConfigFile: null,
+    overrideConfigFile: true,
     // @ts-expect-error — ESLint's RulesConfig index signature is overly narrow
     baseConfig: [{ rules: LINT_RULES }],
   });
@@ -82,7 +82,7 @@ export async function lintCode(
 async function lintCustomCode(code: string, componentName: string): Promise<LintResult> {
   try {
     const eslint = new ESLint({
-      overrideConfigFile: null,
+      overrideConfigFile: true,
       baseConfig: [{
         languageOptions: {
           ecmaVersion: 2022,
