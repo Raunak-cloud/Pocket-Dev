@@ -2799,7 +2799,7 @@ export const generateCodeFunction = inngest.createFunction(
     name: "Generate Next.js Code",
     retries: 3,
     onFailure: async ({ event, error }) => {
-      const projectId = (event.data as Record<string, unknown>)?.event?.data?.projectId as string | undefined;
+      const projectId = ((event as Record<string, unknown>).data as Record<string, unknown> | undefined)?.projectId as string | undefined;
       if (projectId) {
         await sendFailure(
           projectId,
