@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { WebContainer } from "@webcontainer/api";
+import { WebContainer, type FileSystemTree } from "@webcontainer/api";
 import { prepareSandboxFiles, computeFileDiff } from "@/lib/sandbox-utils";
 import type { ReactProject } from "@/app/types";
 
@@ -141,7 +141,7 @@ export default function WebContainerPreview({
         const fileTree = toFileTree(files);
 
         addLog(`Mounting ${Object.keys(files).length} files...`);
-        await wc.mount(fileTree);
+        await wc.mount(fileTree as FileSystemTree);
         prevFilesRef.current = files;
 
         if (!mounted) return;
