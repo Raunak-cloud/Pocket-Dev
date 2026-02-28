@@ -377,6 +377,8 @@ function ReactGeneratorContent() {
     null,
   );
   const [blockedPromptWords, setBlockedPromptWords] = useState<string[]>([]);
+  const [generationProjectType, setGenerationProjectType] = useState<"website" | "dashboard">("website");
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
   const [editClarificationQuestion, setEditClarificationQuestion] =
@@ -494,6 +496,8 @@ function ReactGeneratorContent() {
       setCurrentAppAuth([]);
       setEditAppAuth([]);
       setCurrentAppDatabase([]);
+      // Payments require backend — disable payments when backend is disabled
+      setPaymentsEnabled(false);
       return;
     }
 
@@ -506,17 +510,20 @@ function ReactGeneratorContent() {
     setBackendSelection(!isGenerationBackendSelected);
   }, [isGenerationBackendSelected, setBackendSelection]);
 
-  const showPaymentsComingSoon = useCallback(() => {
-    setBlockedPromptWords([]);
-    setAuthPromptWarning(
-      "Payment system will be available soon. We’re finalizing checkout and billing integration.",
-    );
-    setTokenToast(
-      "Payment system integration is coming soon. You will be able to accept payments from users soon.",
-    );
-    setTimeout(() => setAuthPromptWarning(null), 3500);
-    setTimeout(() => setTokenToast(""), 3500);
-  }, [setAuthPromptWarning, setBlockedPromptWords]);
+  const handleSetGenerationProjectType = useCallback((type: "website" | "dashboard") => {
+    setGenerationProjectType(type);
+  }, []);
+
+  const togglePayments = useCallback(() => {
+    setPaymentsEnabled(prev => {
+      const next = !prev;
+      // Payments require backend — auto-enable it
+      if (next && !isGenerationBackendSelected) {
+        setBackendSelection(true);
+      }
+      return next;
+    });
+  }, [isGenerationBackendSelected, setBackendSelection]);
 
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
@@ -1740,6 +1747,24 @@ ${schemaContext}
     return prompt;
   };
 
+  const buildPaymentRequirementPrompt = (mode: "new" | "existing") => {
+    const scope =
+      mode === "new"
+        ? "for this new app"
+        : "into this existing app";
+
+    return `\n\n💳 PAYMENT REQUIREMENT:
+1. Integrate Stripe Checkout ${scope}.
+2. Add "stripe": "^17.0.0" to dependencies.
+3. Generate app/api/checkout/route.ts — a POST API route that creates a Stripe Checkout Session using new Stripe(process.env.STRIPE_SECRET_KEY). Accept { priceId, mode } in the request body. Set success_url to \${origin}/payment/success and cancel_url to \${origin}/payment/cancel. Return the session URL as JSON.
+4. Generate app/payment/success/page.tsx — a thank-you/confirmation page shown after successful payment with a link back to the home page.
+5. Generate app/payment/cancel/page.tsx — a page shown when the user cancels checkout with a link to retry or go back.
+6. Add "Buy Now" or "Subscribe" buttons on product cards and pricing sections that call the checkout API route (POST /api/checkout) and redirect to the returned Stripe Checkout URL.
+7. Use environment variables only: process.env.STRIPE_SECRET_KEY (server-side, in API routes only), process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (client-side).
+8. NEVER collect card details directly — always redirect to Stripe Checkout. No custom card forms, no PCI scope.
+9. If authentication is also enabled, pass the authenticated user's email to the Checkout Session (customer_email parameter) so payments are tied to the user.`;
+  };
+
   const isExplicitImageChangeRequest = (request: string): boolean => {
     const text = request.toLowerCase();
     if (!text.trim()) return false;
@@ -1990,6 +2015,12 @@ ${schemaContext}
       editFullPrompt += `\n\n⚙️ NOTE: This app has an existing backend. If your changes involve data operations, update supabase/schema.sql accordingly and ensure all .from() references match the schema.`;
     }
 
+    // Check if payments are enabled for this project (from stored integrations or current toggle)
+    const paymentsEnabledForEdit = paymentsEnabled || readStoredIntegrations(project).paymentsEnabled;
+    if (paymentsEnabledForEdit) {
+      editFullPrompt += buildPaymentRequirementPrompt("existing");
+    }
+
     editFullPrompt += buildCriticalRequirementSection(existingFilePaths);
 
     // Save current project state as a snapshot before applying the edit
@@ -2052,6 +2083,7 @@ ${schemaContext}
           requiresDatabase: backendSelectedForEdit || hasExistingBackend,
           requiresGoogleOAuth: false,
           requiresPasswordAuth: backendSelectedForEdit,
+          requiresPayments: paymentsEnabledForEdit || false,
         },
       );
 
@@ -2075,6 +2107,7 @@ ${schemaContext}
         backendEnabled:
           backendSelectedForEdit ||
           inferProjectIntegrations(project).hasBackend,
+        paymentsEnabled: paymentsEnabledForEdit || false,
       });
 
       setProject(mergedProject);
@@ -2128,6 +2161,10 @@ ${schemaContext}
 
     if (isGenerationBackendSelected) {
       fullPrompt += buildBackendRequirementPrompt("new");
+    }
+
+    if (paymentsEnabled) {
+      fullPrompt += buildPaymentRequirementPrompt("new");
     }
 
     if (uploadedFiles.length > 0) {
@@ -2196,7 +2233,9 @@ ${pdfUrlList}
           requiresDatabase: isGenerationBackendSelected,
           requiresGoogleOAuth: false,
           requiresPasswordAuth: isGenerationBackendSelected,
+          requiresPayments: paymentsEnabled,
         },
+        generationProjectType,
       );
 
       // If user cancelled while awaiting, discard the result
@@ -2224,6 +2263,7 @@ ${pdfUrlList}
       result = { ...result, files: persistedFiles };
       const projectWithIntegrations = withStoredIntegrations(result, {
         backendEnabled: isGenerationBackendSelected,
+        paymentsEnabled,
       });
       setProject(projectWithIntegrations);
       syncIntegrationSelectionFromProject(projectWithIntegrations);
@@ -4903,7 +4943,8 @@ ${pdfUrlList}
             onClose={() => setShowEditIntegrationsModal(false)}
             backendEnabled={isEditBackendSelected}
             onBackendChange={setBackendSelection}
-            onPaymentClick={showPaymentsComingSoon}
+            paymentsEnabled={paymentsEnabled}
+        onTogglePayments={togglePayments}
           />
         )}
 
@@ -5173,7 +5214,10 @@ ${pdfUrlList}
         stopRecording={stopRecording}
         setVoiceError={setVoiceError}
         onToggleBackend={toggleGenerationBackendSelection}
-        onPaymentClick={showPaymentsComingSoon}
+        projectType={generationProjectType}
+        onSetProjectType={handleSetGenerationProjectType}
+        paymentsEnabled={paymentsEnabled}
+        onTogglePayments={togglePayments}
         handleGenerate={handleGenerate}
         setAuthPromptWarning={setAuthPromptWarning}
         setBlockedPromptWords={setBlockedPromptWords}
@@ -5824,7 +5868,8 @@ ${pdfUrlList}
           onClose={() => setShowEditIntegrationsModal(false)}
           backendEnabled={isEditBackendSelected}
           onBackendChange={setBackendSelection}
-          onPaymentClick={showPaymentsComingSoon}
+          paymentsEnabled={paymentsEnabled}
+        onTogglePayments={togglePayments}
         />
       )}
 

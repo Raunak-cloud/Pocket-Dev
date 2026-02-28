@@ -64,6 +64,7 @@ type IntegrationRequirements = {
   requiresDatabase: boolean;
   requiresGoogleOAuth: boolean;
   requiresPasswordAuth: boolean;
+  requiresPayments: boolean;
 };
 
 type ProjectType = "website" | "dashboard";
@@ -213,6 +214,10 @@ function detectIntegrationRequirements(
       /\busername\/password\b|\bpassword\b|\bforgot password\b|\breset password\b/.test(
         text,
       ),
+    requiresPayments:
+      /\b💳 payment requirement\b|\bstripe checkout\b|\bpayment integration\b/.test(
+        text,
+      ),
   };
 }
 
@@ -226,6 +231,7 @@ function normalizeIntegrationRequirements(
     requiresDatabase: raw.requiresDatabase === true,
     requiresGoogleOAuth: raw.requiresGoogleOAuth === true,
     requiresPasswordAuth: raw.requiresPasswordAuth === true,
+    requiresPayments: raw.requiresPayments === true,
   };
 }
 
@@ -2976,6 +2982,7 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
+    const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
 
     // Detect edit requests so repair loops can use a focused system prompt
     // instead of the new-generation design-agency prompt.
@@ -3012,10 +3019,13 @@ export const generateCodeFunction = inngest.createFunction(
     const detectedProjectType = await step.run(
       "detect-project-type",
       async (): Promise<ProjectType> => {
+        // User explicitly chose a project type → use their choice
+        if (userProjectType) return userProjectType;
         const isEdit = (prompt as string)
           .trimStart()
           .startsWith("You are a senior full-stack developer");
         if (isEdit) return "website"; // edits preserve the existing type
+        // Auto-detect for legacy/API calls without explicit type
         return await extractProjectType(prompt);
       },
     );
@@ -3061,7 +3071,11 @@ AUTHENTICATION & BACKEND RULES:
   * When auth IS requested, generate: BOTH app/sign-in/page.tsx AND app/sign-up/page.tsx (always both, linked to each other), a verification email page (app/auth/verify/page.tsx) shown after sign-up with "Check your email" message + "Back to sign in" link (redirect to /auth/verify?email=... after signUp()), middleware.ts, Supabase SSR auth
   * Use env vars: process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY
   * DATABASE CONTRACT: include supabase/schema.sql with CREATE TABLE IF NOT EXISTS + RLS for every .from() table
-  * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes.`;
+  * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes.
+
+PAYMENT RULES:
+  * If payments are NOT requested: do NOT generate Stripe code, checkout API routes, or payment pages. Display-only pricing sections are fine.
+  * When payments ARE requested: add "stripe": "^17.0.0" dependency. Generate app/api/checkout/route.ts (Stripe Checkout Session with process.env.STRIPE_SECRET_KEY), app/payment/success/page.tsx, app/payment/cancel/page.tsx. Add Buy/Subscribe buttons on pricing cards that call the checkout route. Use env vars only (STRIPE_SECRET_KEY server-side, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY client-side). Redirect to Stripe Checkout — no custom card forms. If auth is enabled, pass customer_email to the Checkout Session.`;
       }
 
       // ── Website / Marketing prompt ────────────────────────────────────────
@@ -3079,6 +3093,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 7. Add micro-interactions: hover:scale-105 on cards, transition-all duration-300, hover color shifts on buttons and links.
 8. Use Lucide React icons (from "lucide-react") for features, benefits, and UI elements.
 9. Write realistic, compelling copy that matches the business — no lorem ipsum or generic placeholder text.
+10. Ensure ALL text has strong contrast against its background — never place light text on light backgrounds or dark text on dark backgrounds.
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
@@ -3120,6 +3135,10 @@ AUTHENTICATION & BACKEND RULES:
     - Forms that write to the database (new blog post, add to cart, submit review) must verify the user is logged in BEFORE allowing submission. Show a sign-in CTA if unauthenticated.
     - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive for public content.
     - Shopping cart, wishlist, favorites must be tied to auth.uid() — anonymous users cannot add items.
+
+PAYMENT RULES:
+  * If payments are NOT requested: do NOT generate Stripe code, checkout API routes, or payment pages. Display-only pricing sections are fine.
+  * When payments ARE requested: add "stripe": "^17.0.0" dependency. Generate app/api/checkout/route.ts (Stripe Checkout Session with process.env.STRIPE_SECRET_KEY), app/payment/success/page.tsx, app/payment/cancel/page.tsx. Add Buy/Subscribe buttons on pricing cards that call the checkout route. Use env vars only (STRIPE_SECRET_KEY server-side, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY client-side). Redirect to Stripe Checkout — no custom card forms. If auth is enabled, pass customer_email to the Checkout Session.
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).

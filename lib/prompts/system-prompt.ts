@@ -41,6 +41,11 @@ VISUAL IDENTITY:
 - Use a deliberate typography system: a display/heading font pairing with a readable body font. Use Google Fonts (Inter, Plus Jakarta Sans, DM Sans, Playfair Display, Space Grotesk, etc.) — import via next/font/google.
 - Create visual rhythm with consistent spacing scale (8px base grid).
 - Use subtle shadows (shadow-sm, shadow-md), rounded corners, and micro-interactions (hover:scale, transitions) to add depth.
+- CRITICAL — TEXT READABILITY: Every text element must have strong contrast against its background.
+  Light text (#fff / light shades) on dark backgrounds only; dark text (#111 / dark shades) on light backgrounds only.
+  Never place light text on light backgrounds or dark text on dark backgrounds.
+  For text over images or gradients, always add a semi-transparent overlay (bg-black/50 or bg-white/70) behind the text.
+  Buttons must have contrasting text vs button background. Test mentally: "can I read this at a glance?"
 
 LAYOUT EXCELLENCE:
 - Hero sections must be impactful: large, bold headlines with supporting subtext, a clear CTA, and a compelling visual. Use gradient overlays on hero images for text readability.
@@ -130,6 +135,23 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
   * Do NOT assume a "profiles" table exists. For user data, use supabase.auth.getUser(). Only reference tables you explicitly CREATE in schema.sql.
   * For .select() relation joins like .select('*, other_table(col1, col2)'), the joined table MUST exist in schema.sql with a proper foreign key. Never join to non-existent tables.
   * CRITICAL PostgREST FK rule: If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). PostgREST resolves joins via direct foreign keys only. If you have a profiles table and other tables need to join to it, their user_id column must reference profiles(id) (not auth.users(id)).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAYMENTS & STRIPE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  * If the user does NOT request payments/checkout/Stripe:
+    - Do NOT generate Stripe code, checkout API routes, or payment pages.
+    - Do NOT add "stripe" to dependencies or import from "stripe".
+    - Static pricing sections with display-only prices are fine — just no functional checkout.
+  * When payments ARE requested:
+    - Add "stripe": "^17.0.0" to dependencies.
+    - Generate app/api/checkout/route.ts — a POST API route that creates a Stripe Checkout Session using new Stripe(process.env.STRIPE_SECRET_KEY). Accept { priceId, mode } in the request body. Set success_url to /payment/success and cancel_url to /payment/cancel. Return the session URL as JSON.
+    - Generate app/payment/success/page.tsx — a thank-you/confirmation page shown after successful payment. Include a link back to the home page.
+    - Generate app/payment/cancel/page.tsx — a page shown when the user cancels checkout. Include a link to retry or go back.
+    - Add "Buy Now" or "Subscribe" buttons on product cards and pricing sections that call the checkout API route and redirect to Stripe Checkout.
+    - Use environment variables only: process.env.STRIPE_SECRET_KEY (server-side only, in API routes), process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (client-side, for display/reference only).
+    - NEVER collect card details directly. Always redirect to Stripe Checkout — no custom card forms, no PCI scope.
+    - If authentication is also enabled, pass the user's ID/email to the Checkout Session (customer_email parameter) so payments are tied to the authenticated user.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMAGE + ALT-TEXT CONTRACT — CRITICAL FOR IMAGE ACCURACY

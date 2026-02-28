@@ -72,7 +72,10 @@ interface CreateContentProps {
   stopRecording: () => void;
   setVoiceError: (val: string | null) => void;
   onToggleBackend: () => void;
-  onPaymentClick: () => void;
+  projectType: "website" | "dashboard";
+  onSetProjectType: (type: "website" | "dashboard") => void;
+  paymentsEnabled: boolean;
+  onTogglePayments: () => void;
   handleGenerate: (e: React.FormEvent) => void;
   setAuthPromptWarning: (val: string | null) => void;
   setBlockedPromptWords: (val: string[]) => void;
@@ -106,7 +109,10 @@ export default function CreateContent({
   stopRecording,
   setVoiceError,
   onToggleBackend,
-  onPaymentClick,
+  projectType,
+  onSetProjectType,
+  paymentsEnabled,
+  onTogglePayments,
   handleGenerate,
   setAuthPromptWarning,
   setBlockedPromptWords,
@@ -477,6 +483,20 @@ export default function CreateContent({
                 )}
               </button>
               <div className="w-px h-5 bg-border-secondary mx-0.5" />
+              <select
+                value={projectType}
+                onChange={(e) => onSetProjectType(e.target.value as "website" | "dashboard")}
+                className={`px-2 py-1.5 rounded-lg transition text-[11px] font-medium bg-transparent border-none outline-none cursor-pointer appearance-none pr-5 ${
+                  projectType === "dashboard"
+                    ? "text-blue-300 bg-blue-500/10"
+                    : "text-text-muted hover:text-text-secondary"
+                }`}
+                title="Select project type"
+                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 4px center' }}
+              >
+                <option value="website">Website</option>
+                <option value="dashboard">Dashboard</option>
+              </select>
               <button
                 type="button"
                 onClick={onToggleBackend}
@@ -504,9 +524,13 @@ export default function CreateContent({
               </button>
               <button
                 type="button"
-                onClick={onPaymentClick}
-                className="px-2 py-1 rounded-lg transition text-text-muted hover:text-text-secondary hover:bg-bg-tertiary flex flex-col items-center leading-none"
-                title="Enable payments (coming soon)"
+                onClick={onTogglePayments}
+                className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${paymentsEnabled ? "text-amber-300 bg-amber-500/10 hover:bg-amber-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                title={
+                  paymentsEnabled
+                    ? "Payments enabled (Stripe Checkout)"
+                    : "Enable payments (Stripe Checkout)"
+                }
               >
                 <svg
                   className="w-5 h-5"
@@ -570,8 +594,47 @@ export default function CreateContent({
         </div>
       </form>
 
-      {backendEnabled && (
-        <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap max-w-2xl">
+      <div className="flex items-center justify-center gap-2 mt-2.5 flex-wrap max-w-2xl">
+        {projectType === "dashboard" ? (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 border border-blue-300 rounded-full dark:bg-blue-500/10 dark:border-blue-500/30">
+            <svg
+              className="w-3.5 h-3.5 text-blue-700 dark:text-blue-300"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.8}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"
+              />
+            </svg>
+            <span className="text-xs text-blue-800 font-medium dark:text-blue-200">
+              Dashboard mode
+            </span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 border border-gray-300 rounded-full dark:bg-gray-500/10 dark:border-gray-500/30">
+            <svg
+              className="w-3.5 h-3.5 text-gray-700 dark:text-gray-300"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.8}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"
+              />
+            </svg>
+            <span className="text-xs text-gray-800 font-medium dark:text-gray-200">
+              Website mode
+            </span>
+          </span>
+        )}
+        {backendEnabled && (
           <button
             type="button"
             onClick={onToggleBackend}
@@ -594,8 +657,32 @@ export default function CreateContent({
               Backend enabled (Auth + Database)
             </span>
           </button>
-        </div>
-      )}
+        )}
+        {paymentsEnabled && (
+          <button
+            type="button"
+            onClick={onTogglePayments}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 border border-amber-300 rounded-full hover:bg-amber-200 transition dark:bg-amber-500/10 dark:border-amber-500/30 dark:hover:bg-amber-500/20"
+          >
+            <svg
+              className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.8}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3.75 7.5h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v10.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V6.75a1.5 1.5 0 011.5-1.5zm10.5 8.25h1.5"
+              />
+            </svg>
+            <span className="text-xs text-amber-800 font-medium dark:text-amber-200">
+              Payments (Stripe)
+            </span>
+          </button>
+        )}
+      </div>
     </>
   );
 }

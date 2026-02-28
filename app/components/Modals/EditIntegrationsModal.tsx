@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
-
 interface EditIntegrationsModalProps {
   isOpen: boolean;
   onClose: () => void;
   backendEnabled: boolean;
   onBackendChange: (enabled: boolean) => void;
-  onPaymentClick: () => void;
+  paymentsEnabled: boolean;
+  onTogglePayments: () => void;
 }
 
 export function EditIntegrationsModal({
@@ -15,10 +14,9 @@ export function EditIntegrationsModal({
   onClose,
   backendEnabled,
   onBackendChange,
-  onPaymentClick,
+  paymentsEnabled,
+  onTogglePayments,
 }: EditIntegrationsModalProps) {
-  const [paymentInfoVisible, setPaymentInfoVisible] = useState(false);
-
   if (!isOpen) return null;
 
   return (
@@ -144,17 +142,19 @@ export function EditIntegrationsModal({
 
             <button
               type="button"
-              onClick={() => {
-                onPaymentClick();
-                setPaymentInfoVisible(true);
-                setTimeout(() => setPaymentInfoVisible(false), 3000);
-              }}
-              className="w-full text-left p-5 rounded-xl border transition-all bg-bg-secondary/50 border-border-primary hover:border-amber-500/30 hover:bg-amber-500/5"
+              onClick={onTogglePayments}
+              className={`w-full text-left p-5 rounded-xl border transition-all ${
+                paymentsEnabled
+                  ? "bg-amber-600/15 border-amber-500/40 ring-1 ring-amber-500/20"
+                  : "bg-bg-secondary/50 border-border-primary hover:border-amber-500/30 hover:bg-amber-500/5"
+              }`}
             >
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-bg-tertiary">
+                <div
+                  className={`w-10 h-10 rounded-lg flex items-center justify-center ${paymentsEnabled ? "bg-amber-500/20" : "bg-bg-tertiary"}`}
+                >
                   <svg
-                    className="w-5 h-5 text-text-tertiary"
+                    className={`w-5 h-5 ${paymentsEnabled ? "text-amber-300" : "text-text-tertiary"}`}
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -168,27 +168,46 @@ export function EditIntegrationsModal({
                   </svg>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-text-primary">
-                      Payment System
-                    </p>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-amber-500/10 text-amber-300 border border-amber-500/25">
-                      Coming soon
+                  <p className="text-sm font-semibold text-text-primary">
+                    Payment System
+                  </p>
+                  <p className="text-xs text-text-tertiary mt-1">
+                    Accept payments with Stripe Checkout — checkout API route,
+                    success/cancel pages, and buy buttons on pricing sections.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                      Stripe Checkout
+                    </span>
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                      Payment Pages
+                    </span>
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                      Buy Buttons
                     </span>
                   </div>
-                  <p className="text-xs text-text-tertiary mt-1">
-                    Accept payments from your users with a hosted checkout and
-                    transaction flow.
-                  </p>
+                </div>
+                <div
+                  className={`mt-0.5 w-5 h-5 rounded-full border flex items-center justify-center ${paymentsEnabled ? "bg-amber-500 border-amber-500" : "border-border-secondary"}`}
+                >
+                  {paymentsEnabled && (
+                    <svg
+                      className="w-3 h-3 text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={3}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M5 13l4 4L19 7"
+                      />
+                    </svg>
+                  )}
                 </div>
               </div>
             </button>
-            {paymentInfoVisible && (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                Payment system is coming soon. You will be able to accept user
-                payments shortly.
-              </div>
-            )}
           </div>
         </div>
 
