@@ -223,7 +223,7 @@ export default function CodeViewer({
     });
   };
 
-  const renderTreeNodes = (nodes: TreeNode[]): JSX.Element[] => {
+  const renderTreeNodes = (nodes: TreeNode[]): React.ReactElement[] => {
     return nodes.flatMap((node) => {
       if (node.kind === "directory") {
         const expanded = isDirectoryExpanded(node.path);
