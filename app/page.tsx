@@ -269,6 +269,7 @@ function ReactGeneratorContent() {
     "support",
   );
   const [isGenerationMinimized, setIsGenerationMinimized] = useState(false);
+  const [isLaunching, setIsLaunching] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [currentGenerationProjectId, setCurrentGenerationProjectId] = useState<
     string | null
@@ -1594,32 +1595,39 @@ function ReactGeneratorContent() {
     const generationCost = getGenerationAppCost();
     const appTokenBalance = userData?.appTokens || 0;
 
-    // Reflect deduction immediately in the UI on confirm click.
+    // Show launch animation IMMEDIATELY — before any async work
     applyAppTokenBalance(
       roundToken(Math.max(0, appTokenBalance - generationCost)),
     );
     setShowTokenConfirmModal(null);
+    setIsLaunching(true);
+    setGenerationPrompt(prompt);
 
-    try {
-      await adjustAppTokens(-generationCost, "Project creation token usage");
-    } catch (err) {
-      console.error("Error deducting generation tokens:", err);
-      await refreshUserData();
-      const message =
-        err instanceof Error ? err.message : "Failed to deduct app tokens";
-      setError(message);
-      if (message.toLowerCase().includes("insufficient")) {
-        const deficit = Math.max(0, generationCost - appTokenBalance);
-        setInsufficientTokenMessage(
-          `You need ${formatTokens(generationCost)} app tokens to continue but only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more app token${deficit > 1 ? "s" : ""} to continue.`,
-        );
-        setTokenPurchaseAmount(0);
-        setShowTokenPurchaseModal(true);
-      }
-      return;
-    }
+    // Deduct tokens in background while animation plays
+    adjustAppTokens(-generationCost, "Project creation token usage").catch(
+      async (err) => {
+        console.error("Error deducting generation tokens:", err);
+        await refreshUserData();
+        const message =
+          err instanceof Error ? err.message : "Failed to deduct app tokens";
+        setError(message);
+        setIsLaunching(false);
+        if (message.toLowerCase().includes("insufficient")) {
+          const deficit = Math.max(0, generationCost - appTokenBalance);
+          setInsufficientTokenMessage(
+            `You need ${formatTokens(generationCost)} app tokens to continue but only have ${formatTokens(appTokenBalance)}. Please purchase at least ${formatTokens(deficit)} more app token${deficit > 1 ? "s" : ""} to continue.`,
+          );
+          setTokenPurchaseAmount(0);
+          setShowTokenPurchaseModal(true);
+        }
+      },
+    );
 
-    startGeneration();
+    // After 3s animation, start generation
+    setTimeout(() => {
+      setIsLaunching(false);
+      startGeneration();
+    }, 3000);
   };
 
   const extractSchemaContext = (
@@ -5170,6 +5178,7 @@ ${pdfUrlList}
         setAuthPromptWarning={setAuthPromptWarning}
         setBlockedPromptWords={setBlockedPromptWords}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
+        isLaunching={isLaunching}
       />
     );
   };

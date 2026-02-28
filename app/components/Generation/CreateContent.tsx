@@ -1,5 +1,6 @@
 import Logo from "../Logo";
 import GenerationProgress from "../GenerationProgress";
+import LaunchAnimation from "../LaunchAnimation";
 import type { CompatibleUser } from "@/app/contexts/AuthContext";
 import type { UploadedFile } from "@/app/types";
 
@@ -76,6 +77,7 @@ interface CreateContentProps {
   setAuthPromptWarning: (val: string | null) => void;
   setBlockedPromptWords: (val: string[]) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
+  isLaunching?: boolean;
 }
 
 export default function CreateContent({
@@ -109,7 +111,12 @@ export default function CreateContent({
   setAuthPromptWarning,
   setBlockedPromptWords,
   textareaRef,
+  isLaunching = false,
 }: CreateContentProps) {
+  if (isLaunching) {
+    return <LaunchAnimation prompt={generationPrompt || prompt} />;
+  }
+
   if (status === "loading" && !isGenerationMinimized) {
     return (
       <GenerationProgress
