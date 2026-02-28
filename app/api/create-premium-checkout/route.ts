@@ -43,8 +43,8 @@ export async function POST(request: NextRequest) {
         },
       ],
       mode: "subscription",
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?premium_payment=success&session_id={CHECKOUT_SESSION_ID}&projectId=${projectId}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?premium_payment=cancelled`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL}?premium_payment=success&session_id={CHECKOUT_SESSION_ID}&projectId=${projectId}`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}?premium_payment=cancelled`,
       customer_email: userEmail,
       metadata: {
         type: "premium_upgrade",

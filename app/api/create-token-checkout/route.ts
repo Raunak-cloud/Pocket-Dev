@@ -10,17 +10,14 @@ export async function POST(request: NextRequest) {
     if (!stripeKey) {
       return NextResponse.json(
         { error: "Stripe is not configured" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
     const stripe = new Stripe(stripeKey);
     const { userId: authUserId } = await auth();
     if (!authUserId) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await request.json();
@@ -29,14 +26,14 @@ export async function POST(request: NextRequest) {
     if (!quantity) {
       return NextResponse.json(
         { error: "Missing required field: quantity" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (typeof quantity !== "number" || quantity < 1 || quantity > 1000) {
       return NextResponse.json(
         { error: "Quantity must be between 1 and 1000" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -46,10 +43,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
     // App tokens: 1 AUD = 1 token
@@ -76,8 +70,8 @@ export async function POST(request: NextRequest) {
         },
       ],
       mode: "payment",
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=success&session_id={CHECKOUT_SESSION_ID}&tokenType=app&amount=${tokensToCredit}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}?token_payment=cancelled`,
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://pocket-dev-lac.vercel.app/"}?token_payment=success&session_id={CHECKOUT_SESSION_ID}&tokenType=app&amount=${tokensToCredit}`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://pocket-dev-lac.vercel.app/"}?token_payment=cancelled`,
       client_reference_id: user.id,
       customer_email: user.email || userEmail || undefined,
       metadata: {
@@ -96,11 +90,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[create-token-checkout] Error:", error);
+    const message = error instanceof Error ? error.message : "Failed to create checkout session";
     return NextResponse.json(
-      { error: "Failed to create checkout session" },
-      { status: 500 }
+      { error: message },
+      { status: 500 },
     );
   }
 }
-
-
