@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     // Send email via Resend
     const { data, error } = await resend.emails.send({
-      from: "Pocket Dev Support <onboarding@resend.dev>", // Use Resend's test domain for development
+      from: "Mato Support <onboarding@resend.dev>", // Use Resend's test domain for development
       to: [userEmail],
       subject: `Re: ${safeSubject}`,
       html: `
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
             <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
               <!-- Header -->
               <div style="text-align: center; margin-bottom: 32px;">
-                <h1 style="margin: 0; font-size: 24px; font-weight: bold; color: #ffffff;">Pocket Dev</h1>
+                <h1 style="margin: 0; font-size: 24px; font-weight: bold; color: #ffffff;">Mato</h1>
                 <p style="margin: 8px 0 0; font-size: 12px; color: #64748b;">Build apps with AI</p>
               </div>
 

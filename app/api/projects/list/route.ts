@@ -60,9 +60,12 @@ export async function GET() {
     return NextResponse.json(savedProjects);
   } catch (error) {
     console.error('[GET /api/projects/list] Error:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    // Surface connection-related issues so the client can distinguish them
+    const isConnectionError = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|Can't reach database/i.test(message);
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      { error: isConnectionError ? 'Database connection error — please try again' : 'Internal server error' },
+      { status: isConnectionError ? 503 : 500 }
     );
   }
 }

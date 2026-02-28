@@ -6,10 +6,10 @@
 
 import { Inngest } from "inngest";
 
-export const INNGEST_APP_ID = "pocket-dev";
+export const INNGEST_APP_ID = "mato";
 
 export const inngest = new Inngest({
   id: INNGEST_APP_ID,
-  name: "Pocket Dev",
+  name: "Mato",
   eventKey: process.env.INNGEST_EVENT_KEY,
 });

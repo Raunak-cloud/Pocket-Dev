@@ -19,7 +19,7 @@ type ResolvedComponent = {
   localName: string;
 };
 const WRANGLER_VERSION = process.env.WRANGLER_VERSION || "4.64.0";
-const WRANGLER_EXEC_CWD = join(tmpdir(), "pocketdev-wrangler-exec");
+const WRANGLER_EXEC_CWD = join(tmpdir(), "mato-wrangler-exec");
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -2112,7 +2112,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No projectId provided" }, { status: 400 });
     }
 
-    const projectName = `pocketdev-${projectId}`
+    const projectName = `mato-${projectId}`
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .slice(0, 52);

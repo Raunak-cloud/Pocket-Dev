@@ -51,36 +51,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    try {
-      const response = await fetch('/api/user/me');
-      if (response.ok) {
-        const data = await response.json();
-        setUserData(data);
-
-        // Check if user was just created AND hasn't dismissed the welcome modal
-        const createdAt = new Date(data.createdAt);
-        const now = new Date();
-        const diffInMinutes = (now.getTime() - createdAt.getTime()) / 1000 / 60;
-
-        // Only show welcome modal if account is less than 1 minute old AND user hasn't dismissed it
-        const hasDismissed = typeof window !== 'undefined'
-          ? localStorage.getItem(`welcome_dismissed_${authUser.id}`) === 'true'
-          : false;
-
-        if (diffInMinutes < 1 && !hasDismissed) {
-          setIsNewUser(true);
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch('/api/user/me');
+        if (response.status === 503 && attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
         }
-      } else {
-        const data = await response.json().catch(() => ({}));
-        console.error('Failed to fetch user data', data?.error || response.status);
+        if (response.ok) {
+          const data = await response.json();
+          setUserData(data);
+
+          // Check if user was just created AND hasn't dismissed the welcome modal
+          const createdAt = new Date(data.createdAt);
+          const now = new Date();
+          const diffInMinutes = (now.getTime() - createdAt.getTime()) / 1000 / 60;
+
+          // Only show welcome modal if account is less than 1 minute old AND user hasn't dismissed it
+          const hasDismissed = typeof window !== 'undefined'
+            ? localStorage.getItem(`welcome_dismissed_${authUser.id}`) === 'true'
+            : false;
+
+          if (diffInMinutes < 1 && !hasDismissed) {
+            setIsNewUser(true);
+          }
+        } else {
+          const data = await response.json().catch(() => ({}));
+          console.error('Failed to fetch user data', data?.error || response.status);
+          setUserData(null);
+        }
+        break;
+      } catch (error) {
+        if (attempt < maxRetries) continue;
+        console.error('Error fetching user data:', error);
         setUserData(null);
       }
-    } catch (error) {
-      console.error('Error fetching user data:', error);
-      setUserData(null);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [authUser, isSignedIn]);
 
   // Fetch user data when auth user changes

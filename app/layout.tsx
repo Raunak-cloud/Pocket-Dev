@@ -13,12 +13,12 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Pocket Dev - AI App Generator",
+  title: "Mato - AI App Generator",
   description: "Generate professional React applications with AI. Describe your app and watch it come to life.",
   keywords: ["AI", "React", "App Generator", "Code Generator", "Web Development"],
-  authors: [{ name: "Pocket Dev" }],
+  authors: [{ name: "Mato" }],
   openGraph: {
-    title: "Pocket Dev - AI App Generator",
+    title: "Mato - AI App Generator",
     description: "Generate professional React applications with AI",
     type: "website",
   },
@@ -34,7 +34,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('pocket-dev-theme');if(t==='light'){}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})()`,
+            __html: `(function(){try{var t=localStorage.getItem('mato-theme');if(t==='light'){}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})()`,
           }}
         />
       </head>

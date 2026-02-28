@@ -942,27 +942,36 @@ function ReactGeneratorContent() {
     );
   };
 
-  // Load saved projects from Firestore
+  // Load saved projects from database
   const loadSavedProjects = async () => {
     if (!user) return;
 
     setLoadingProjects(true);
-    try {
-      const response = await fetch("/api/projects/list", { cache: "no-store" });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to load projects");
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch("/api/projects/list", { cache: "no-store" });
+        if (response.status === 503 && attempt < maxRetries) {
+          // Transient connection error — wait briefly and retry
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to load projects");
+        }
+        const projects = (await response.json()) as SavedProject[];
+        setSavedProjects(projects);
+        break;
+      } catch (error) {
+        if (attempt < maxRetries) continue;
+        console.error("Error loading projects:", error);
+        setError(
+          error instanceof Error ? error.message : "Failed to load projects",
+        );
       }
-      const projects = (await response.json()) as SavedProject[];
-      setSavedProjects(projects);
-    } catch (error) {
-      console.error("Error loading projects:", error);
-      setError(
-        error instanceof Error ? error.message : "Failed to load projects",
-      );
-    } finally {
-      setLoadingProjects(false);
     }
+    setLoadingProjects(false);
   };
 
   // Load support tickets for current user

@@ -61,16 +61,16 @@ export default function DashboardSidebar({
       <div className="flex items-center justify-between px-5 py-5 border-b border-border-primary/60">
         <button
           onClick={() => onSectionChange("create")}
-          className={`flex items-center gap-3 hover:opacity-80 transition ${isCollapsed ? "justify-center w-full" : ""}`}
+          className={`flex items-center gap-2.5 hover:opacity-80 transition ${isCollapsed ? "justify-center w-full" : ""}`}
         >
           <Logo size={30} />
           {!isCollapsed && (
             <div>
               <span className="font-bold text-text-primary text-base tracking-tight">
-                Pocket Dev
+                Mato
               </span>
               <span className="block text-[10px] text-text-muted font-medium -mt-0.5">
-                Build apps with AI
+                Build apps with Mato AI
               </span>
             </div>
           )}
@@ -239,7 +239,9 @@ export default function DashboardSidebar({
           </div>
           {!isCollapsed && (
             <>
-              <span className="text-sm font-medium flex-1 text-left">Support</span>
+              <span className="text-sm font-medium flex-1 text-left">
+                Support
+              </span>
               {unreadTicketCount && unreadTicketCount > 0 && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500 text-white animate-pulse">
                   {unreadTicketCount}
@@ -322,9 +324,7 @@ export default function DashboardSidebar({
                 />
               </svg>
             </div>
-            {!isCollapsed && (
-              <span className="text-sm font-medium">Admin</span>
-            )}
+            {!isCollapsed && <span className="text-sm font-medium">Admin</span>}
           </button>
         )}
       </nav>

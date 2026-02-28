@@ -140,7 +140,7 @@ export function GitHubExportModal({
                   </span>{" "}
                   scope.{" "}
                   <a
-                    href="https://github.com/settings/tokens/new?scopes=repo&description=Pocket+Dev+Export"
+                    href="https://github.com/settings/tokens/new?scopes=repo&description=Mato+Export"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-400 hover:text-blue-300 underline"

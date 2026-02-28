@@ -56,7 +56,7 @@ export function usePublishing({
           files: project.files,
           dependencies: project.dependencies,
           projectId: currentProjectId,
-          title: generationPrompt || "Pocket Dev App",
+          title: generationPrompt || "Mato App",
         }),
       });
 

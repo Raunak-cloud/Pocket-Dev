@@ -169,7 +169,7 @@ export default function CreateContent({
             <Logo size={56} animate />
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold text-text-primary mb-3 tracking-tight">
-            Pocket Dev
+            Mato
           </h1>
           <p className="text-lg text-text-tertiary max-w-md mx-auto mb-6">
             Describe your app and watch it come to life
