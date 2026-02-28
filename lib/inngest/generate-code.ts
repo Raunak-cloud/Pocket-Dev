@@ -1865,6 +1865,170 @@ function collectModuleResolutionIssues(
   return issues;
 }
 
+/**
+ * General-purpose undefined reference detection.
+ * Extracts all identifiers used as function calls or JSX components,
+ * compares against imports + local declarations + known globals,
+ * and flags anything that's missing.
+ */
+function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
+  const issues: LintIssue[] = [];
+  const sourceFiles = files.filter((f) =>
+    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
+  );
+
+  // JS/TS/React/Node/Browser built-in globals — these never need importing
+  const GLOBALS = new Set([
+    // JS built-ins
+    "undefined", "null", "NaN", "Infinity", "globalThis", "eval",
+    "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "decodeURI",
+    "encodeURIComponent", "decodeURIComponent", "escape", "unescape",
+    "Object", "Function", "Boolean", "Symbol", "Number", "BigInt", "Math",
+    "Date", "String", "RegExp", "Array", "Int8Array", "Uint8Array",
+    "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
+    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array",
+    "BigUint64Array", "Map", "Set", "WeakMap", "WeakSet", "ArrayBuffer",
+    "SharedArrayBuffer", "DataView", "Atomics", "JSON", "Promise",
+    "Proxy", "Reflect", "Error", "EvalError", "RangeError", "ReferenceError",
+    "SyntaxError", "TypeError", "URIError", "AggregateError",
+    // Browser/DOM
+    "window", "document", "navigator", "location", "history", "screen",
+    "localStorage", "sessionStorage", "console", "alert", "confirm", "prompt",
+    "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "Worker",
+    "URL", "URLSearchParams", "Headers", "Request", "Response", "FormData",
+    "Blob", "File", "FileReader", "AbortController", "AbortSignal",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+    "requestAnimationFrame", "cancelAnimationFrame", "queueMicrotask",
+    "structuredClone", "atob", "btoa", "crypto", "performance",
+    "MutationObserver", "IntersectionObserver", "ResizeObserver",
+    "matchMedia", "getComputedStyle", "scrollTo", "requestIdleCallback",
+    "CustomEvent", "Event", "EventTarget", "HTMLElement", "Element", "Node",
+    // Node.js
+    "process", "Buffer", "global", "__dirname", "__filename", "module",
+    "require", "exports",
+    // TypeScript utility types (appear as values in some patterns)
+    "Record", "Partial", "Required", "Readonly", "Pick", "Omit", "Exclude",
+    "Extract", "NonNullable", "ReturnType", "Parameters", "InstanceType",
+    // React — available via JSX transform (no import needed in modern React)
+    "React",
+  ]);
+
+  for (const file of sourceFiles) {
+    const content = file.content;
+
+    // 1. Collect all imported identifiers
+    const imported = new Set<string>();
+    const importRe = /import\s+(?:type\s+)?(?:(\w+)(?:\s*,\s*)?)?(?:\{([^}]*)\})?\s*from\s*["'][^"']+["']/g;
+    let importMatch;
+    while ((importMatch = importRe.exec(content)) !== null) {
+      if (importMatch[1]) imported.add(importMatch[1].trim());
+      if (importMatch[2]) {
+        importMatch[2].split(",").forEach((s) => {
+          const name = s.trim().split(/\s+as\s+/).pop()?.trim();
+          if (name) imported.add(name);
+        });
+      }
+    }
+    // import * as X
+    const starImportRe = /import\s+\*\s+as\s+(\w+)\s+from/g;
+    let starMatch;
+    while ((starMatch = starImportRe.exec(content)) !== null) {
+      imported.add(starMatch[1]);
+    }
+
+    // 2. Collect locally declared identifiers
+    const declared = new Set<string>();
+    const declRe = /(?:const|let|var|function|class|enum)\s+(\w+)/g;
+    let declMatch;
+    while ((declMatch = declRe.exec(content)) !== null) {
+      declared.add(declMatch[1]);
+    }
+    // Arrow functions assigned: const Foo = (
+    const arrowRe = /(?:const|let|var)\s+(\w+)\s*=\s*(?:\([^)]*\)|[^=])\s*=>/g;
+    let arrowMatch;
+    while ((arrowMatch = arrowRe.exec(content)) !== null) {
+      declared.add(arrowMatch[1]);
+    }
+    // Destructured declarations: const { a, b } = or const [a, b] =
+    const destructObjRe = /(?:const|let|var)\s+\{([^}]+)\}\s*=/g;
+    let dMatch;
+    while ((dMatch = destructObjRe.exec(content)) !== null) {
+      dMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*:\s*/).pop()?.split(/\s*=\s*/)[0]?.trim();
+        if (name && /^\w+$/.test(name)) declared.add(name);
+      });
+    }
+    const destructArrRe = /(?:const|let|var)\s+\[([^\]]+)\]\s*=/g;
+    let daMatch;
+    while ((daMatch = destructArrRe.exec(content)) !== null) {
+      daMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*=\s*/)[0]?.trim();
+        if (name && /^\w+$/.test(name)) declared.add(name);
+      });
+    }
+    // Function parameters (simple): function foo(a, b) or (a, b) =>
+    const paramRe = /(?:function\s+\w+|=>)\s*\(([^)]*)\)/g;
+    let pMatch;
+    while ((pMatch = paramRe.exec(content)) !== null) {
+      pMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*[=:]/)[0]?.replace(/\.\.\./,"").trim();
+        if (name && /^\w+$/.test(name)) declared.add(name);
+      });
+    }
+    // Type/interface declarations
+    const typeRe = /(?:type|interface)\s+(\w+)/g;
+    let tMatch;
+    while ((tMatch = typeRe.exec(content)) !== null) {
+      declared.add(tMatch[1]);
+    }
+
+    // 3. Find identifiers used as function calls: identifier(
+    const callRe = /\b([A-Za-z_$]\w*)\s*\(/g;
+    const used = new Map<string, number>(); // identifier → first char index
+    let callMatch;
+    while ((callMatch = callRe.exec(content)) !== null) {
+      const name = callMatch[1];
+      if (!used.has(name)) used.set(name, callMatch.index);
+    }
+
+    // Find identifiers used as JSX components: <Identifier (capitalized)
+    const jsxRe = /<([A-Z]\w*)/g;
+    let jsxMatch;
+    while ((jsxMatch = jsxRe.exec(content)) !== null) {
+      const name = jsxMatch[1];
+      if (!used.has(name)) used.set(name, jsxMatch.index);
+    }
+
+    // 4. Flag undefined references
+    // Skip keywords that look like function calls
+    const jsKeywords = new Set([
+      "if", "else", "for", "while", "do", "switch", "case", "break",
+      "continue", "return", "throw", "try", "catch", "finally", "new",
+      "delete", "typeof", "void", "instanceof", "in", "of", "yield",
+      "await", "async", "super", "this", "class", "extends", "import",
+      "export", "default", "from", "as", "with", "debugger",
+    ]);
+
+    for (const [name, idx] of used) {
+      if (jsKeywords.has(name)) continue;
+      if (GLOBALS.has(name)) continue;
+      if (imported.has(name)) continue;
+      if (declared.has(name)) continue;
+
+      const pos = lineColumnAt(content, idx);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "undefined-reference",
+        message: `'${name}' is used but never imported or declared. Add the missing import.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
 function collectNextJsValidationIssues(
   files: GeneratedFile[],
   dependencies: Record<string, string>,
@@ -1882,6 +2046,7 @@ function collectNextJsValidationIssues(
   const issues: LintIssue[] = [
     ...collectServerClientBoundaryIssues(files),
     ...collectModuleResolutionIssues(files, dependencies),
+    ...collectUndefinedReferenceIssues(files),
   ];
 
   const nextClientHooks = [
