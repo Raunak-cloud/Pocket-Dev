@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSupabaseAuth } from "@/lib/supabase-auth/client";
 
-export default function SignInPage() {
+function SignInContent() {
   const { openSignIn } = useSupabaseAuth();
   const params = useSearchParams();
 
@@ -14,8 +14,16 @@ export default function SignInPage() {
   }, [openSignIn, params]);
 
   return (
+    <p className="text-sm text-text-tertiary">Redirecting to sign in...</p>
+  );
+}
+
+export default function SignInPage() {
+  return (
     <div className="min-h-screen flex items-center justify-center">
-      <p className="text-sm text-text-tertiary">Redirecting to sign in...</p>
+      <Suspense fallback={<p className="text-sm text-text-tertiary">Loading...</p>}>
+        <SignInContent />
+      </Suspense>
     </div>
   );
 }
