@@ -369,6 +369,35 @@ For real auth, replace placeholder values with your Supabase project URL and ano
 `;
   }
 
+  // Inject payment proxy env vars for preview
+  const hasPaymentIntegration = project.files.some(
+    (f) => f.content.includes("NEXT_PUBLIC_POCKET_DEV_URL"),
+  );
+  if (hasPaymentIntegration) {
+    const existingEnv = files[".env.local"] || "";
+    const rawPocketDevUrl =
+      sourceEnv.get("NEXT_PUBLIC_POCKET_DEV_URL") ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      "";
+    // localhost URLs are unreachable from E2B sandbox browser context — use production URL
+    const pocketDevUrl =
+      rawPocketDevUrl && !rawPocketDevUrl.includes("localhost")
+        ? rawPocketDevUrl
+        : "https://pocket-dev-lac.vercel.app";
+    const pocketProjectId =
+      sourceEnv.get("NEXT_PUBLIC_POCKET_PROJECT_ID") || "";
+    if (!existingEnv.includes("NEXT_PUBLIC_POCKET_DEV_URL")) {
+      // Key missing — append it
+      files[".env.local"] = `${existingEnv}NEXT_PUBLIC_POCKET_DEV_URL=${pocketDevUrl}\nNEXT_PUBLIC_POCKET_PROJECT_ID=${pocketProjectId}\n`;
+    } else if (existingEnv.includes("localhost")) {
+      // Already generated apps may have localhost baked in — replace with production URL
+      files[".env.local"] = existingEnv.replace(
+        /NEXT_PUBLIC_POCKET_DEV_URL=.*localhost[^\n]*/,
+        `NEXT_PUBLIC_POCKET_DEV_URL=${pocketDevUrl}`,
+      );
+    }
+  }
+
   // Apply preview bridges to enable text editing and image selection in preview
   return applyPreviewBridges(files);
 }

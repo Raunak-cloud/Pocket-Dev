@@ -17,4 +17,5 @@ export {
   buildSchemaContextSection,
   buildCriticalRequirementSection,
 } from "./edit-prompt";
+export { SUPABASE_API_REFERENCE } from "./supabase-api-reference";
 export type { LintIssue } from "./types";

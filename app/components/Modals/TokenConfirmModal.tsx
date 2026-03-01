@@ -16,6 +16,8 @@ interface TokenConfirmModalProps {
   editAppAuth?: string[];
 }
 
+const fmt = (n: number) => n.toFixed(2);
+
 export function TokenConfirmModal({
   isOpen,
   onClose,
@@ -95,14 +97,14 @@ export function TokenConfirmModal({
               <span className="text-xs font-medium text-blue-400 uppercase tracking-wide">
                 App Tokens
               </span>
-              <span className="text-sm font-bold text-blue-400">-{totalCost}</span>
+              <span className="text-sm font-bold text-blue-400">-{fmt(totalCost)}</span>
             </div>
             <div className="space-y-1.5 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-text-secondary">
                   {isGeneration ? "Project creation" : "Edit request"}
                 </span>
-                <span className="font-medium text-text-primary">-{baseCost}</span>
+                <span className="font-medium text-text-primary">-{fmt(baseCost)}</span>
               </div>
               {backendEnabled ? (
                 <div className="flex items-center justify-between">
@@ -110,7 +112,7 @@ export function TokenConfirmModal({
                     Backend integration (Auth + Database)
                   </span>
                   <span className="font-medium text-text-primary">
-                    -{authCost + databaseCost}
+                    -{fmt(authCost + databaseCost)}
                   </span>
                 </div>
               ) : (
@@ -122,7 +124,7 @@ export function TokenConfirmModal({
                         {authList.length === 1 ? "" : "s"})
                       </span>
                       <span className="font-medium text-text-primary">
-                        -{authCost}
+                        -{fmt(authCost)}
                       </span>
                     </div>
                   )}
@@ -130,7 +132,7 @@ export function TokenConfirmModal({
                     <div className="flex items-center justify-between">
                       <span className="text-text-secondary">Database setup</span>
                       <span className="font-medium text-text-primary">
-                        -{databaseCost}
+                        -{fmt(databaseCost)}
                       </span>
                     </div>
                   )}
@@ -138,8 +140,8 @@ export function TokenConfirmModal({
               )}
             </div>
             <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 mt-2 border-t border-border-secondary/50">
-              <span>Balance: {appBalance}</span>
-              <span>After: {appBalance - totalCost}</span>
+              <span>Balance: {fmt(appBalance)}</span>
+              <span>After: {fmt(appBalance - totalCost)}</span>
             </div>
           </div>
           <div className="flex items-start gap-2 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">

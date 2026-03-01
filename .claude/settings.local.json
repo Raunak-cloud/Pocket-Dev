@@ -27,7 +27,8 @@
       "Bash(npx prisma migrate deploy:*)",
       "Bash(npx dotenv:*)",
       "Bash(npm uninstall:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:supabase.com)"
     ]
   }
 }

@@ -25,17 +25,19 @@ import {
   buildShapeRepairPrompt,
   buildLintRepairPrompt,
   buildSchemaBootstrapRepairPrompt,
+  SUPABASE_API_REFERENCE,
 } from "@/lib/prompts";
 
 const MODEL = "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
-const MAX_LINT_REPAIR_ATTEMPTS = 2;
-const MAX_SYNTAX_REPAIR_ATTEMPTS = 2;
-const MAX_JSON_REPAIR_ATTEMPTS = 2;
-const MAX_STRUCTURE_REPAIR_ATTEMPTS = 2;
+const MAX_LINT_REPAIR_ATTEMPTS = 4;
+const MAX_SYNTAX_REPAIR_ATTEMPTS = 3;
+const MAX_JSON_REPAIR_ATTEMPTS = 3;
+const MAX_STRUCTURE_REPAIR_ATTEMPTS = 3;
 const MAX_UX_REPAIR_ATTEMPTS = 3;
-const MAX_SCHEMA_REPAIR_ATTEMPTS = 2;
-const MAX_NEXTJS_REPAIR_ATTEMPTS = 2;
+const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
+const MAX_NEXTJS_REPAIR_ATTEMPTS = 4;
+const MAX_TYPECHECK_REPAIR_ATTEMPTS = 3;
 const MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS = 2;
 const MAX_FILE_COUNT = 300;
 const MAX_FILE_CONTENT_LENGTH = 300_000;
@@ -215,7 +217,7 @@ function detectIntegrationRequirements(
         text,
       ),
     requiresPayments:
-      /\b💳 payment requirement\b|\bstripe checkout\b|\bpayment integration\b/.test(
+      /\b💳 payment requirement\b|\bstripe checkout\b|\bpayment integration\b|\bpayment requirement \(proxy pattern\)\b/.test(
         text,
       ),
   };
@@ -488,6 +490,7 @@ function validateProjectStructureOrThrow(files: GeneratedFile[]) {
   const required = new Set([
     "app/layout.tsx",
     "app/page.tsx",
+    "app/not-found.tsx",
     "app/loading.tsx",
     "app/globals.css",
   ]);
@@ -826,12 +829,14 @@ function ensureRequiredFiles(
   dependencies: Record<string, string>,
   requirements?: IntegrationRequirements,
   managedAuthConfig?: ManagedSupabaseAuthConfig | null,
+  projectId?: string,
 ): GeneratedFile[] {
   const requested: IntegrationRequirements = requirements || {
     requiresAuth: false,
     requiresDatabase: false,
     requiresGoogleOAuth: false,
     requiresPasswordAuth: false,
+    requiresPayments: false,
   };
   function parseEnvContent(content: string): Map<string, string> {
     const vars = new Map<string, string>();
@@ -1544,40 +1549,28 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Inject payment proxy env vars when payments are requested
+  if (requested.requiresPayments && projectId) {
+    const rawAppUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+    const paymentEnvValues: Record<string, string> = {
+      NEXT_PUBLIC_POCKET_DEV_URL: rawAppUrl && !rawAppUrl.includes("localhost") ? rawAppUrl : "https://pocket-dev-lac.vercel.app",
+      NEXT_PUBLIC_POCKET_PROJECT_ID: projectId,
+    };
+    const envIndex = files.findIndex((f) => f.path === ".env.local");
+    if (envIndex >= 0) {
+      files[envIndex] = {
+        ...files[envIndex],
+        content: buildEnvContent(files[envIndex].content, paymentEnvValues),
+      };
+    } else {
+      files.push({
+        path: ".env.local",
+        content: buildEnvContent("", paymentEnvValues),
+      });
+    }
+  }
+
   files = ensureProviderGuardsForGeneratedFiles(files);
-
-  // Inject a pre-built not-found.tsx for all projects — saves AI tokens
-  // and ensures a consistent, branded 404 page.
-  upsertFile(
-    "app/not-found.tsx",
-    `import Link from "next/link";
-
-export default function NotFound() {
-  return (
-    <div className="min-h-screen flex items-center justify-center px-6 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-950 dark:to-gray-900">
-      <div className="text-center max-w-md">
-        <p className="text-8xl font-extrabold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          404
-        </p>
-        <h1 className="mt-4 text-2xl font-bold text-gray-900 dark:text-white">
-          Page not found
-        </h1>
-        <p className="mt-3 text-gray-600 dark:text-gray-400 leading-relaxed">
-          Sorry, the page you are looking for does not exist or has been moved.
-        </p>
-        <Link
-          href="/"
-          className="mt-8 inline-flex items-center gap-2 rounded-lg bg-gray-900 dark:bg-white px-5 py-2.5 text-sm font-medium text-white dark:text-gray-900 transition-all hover:opacity-90"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
-          Back to Home
-        </Link>
-      </div>
-    </div>
-  );
-}
-`,
-  );
 
   return files;
 }
@@ -1879,8 +1872,18 @@ function collectModuleResolutionIssues(
  */
 function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
   const issues: LintIssue[] = [];
+  // Skip template-injected infrastructure files — they are known-good
+  const TEMPLATE_FILES = new Set([
+    "lib/supabase/server.ts",
+    "lib/supabase/client.ts",
+    "lib/supabase/middleware.ts",
+    "app/auth/callback/route.ts",
+    "app/loading.tsx",
+    "app/global-error.tsx",
+  ]);
   const sourceFiles = files.filter((f) =>
-    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()),
+    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()) &&
+    !TEMPLATE_FILES.has(f.path.replace(/\\/g, "/")),
   );
 
   // JS/TS/React/Node/Browser built-in globals — these never need importing
@@ -1972,14 +1975,59 @@ function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
         if (name && /^\w+$/.test(name)) declared.add(name);
       });
     }
-    // Function parameters (simple): function foo(a, b) or (a, b) =>
-    const paramRe = /(?:function\s+\w+|=>)\s*\(([^)]*)\)/g;
-    let pMatch;
-    while ((pMatch = paramRe.exec(content)) !== null) {
-      pMatch[1].split(",").forEach((s) => {
-        const name = s.trim().split(/\s*[=:]/)[0]?.replace(/\.\.\./,"").trim();
+    // Function parameters — named, anonymous, and arrow functions
+    // Named: function foo(a, b) { ... }
+    // Anonymous: function(a, b) { ... }
+    const fnParamRe = /function\s*\w*\s*\(([^)]*)\)/g;
+    let fpMatch;
+    while ((fpMatch = fnParamRe.exec(content)) !== null) {
+      fpMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*[=:]/)[0]?.replace(/\.\.\./, "").trim();
         if (name && /^\w+$/.test(name)) declared.add(name);
       });
+    }
+    // Arrow function params: (a, b) => or single param: a =>
+    const arrowParamRe = /\(([^)]*)\)\s*=>/g;
+    let apMatch;
+    while ((apMatch = arrowParamRe.exec(content)) !== null) {
+      apMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*[=:]/)[0]?.replace(/\.\.\./, "").trim();
+        if (name && /^\w+$/.test(name)) declared.add(name);
+      });
+    }
+    // Single-param arrow without parens: x =>
+    const singleArrowRe = /\b(\w+)\s*=>/g;
+    let saMatch;
+    while ((saMatch = singleArrowRe.exec(content)) !== null) {
+      const name = saMatch[1];
+      if (name && name !== "async") declared.add(name);
+    }
+    // Destructured params in arrow/function: ({ name, value, options }) =>
+    const destructParamRe = /\(\s*\{([^}]*)\}\s*(?::[^)]*?)?\)\s*(?:=>|\{)/g;
+    let dpMatch;
+    while ((dpMatch = destructParamRe.exec(content)) !== null) {
+      dpMatch[1].split(",").forEach((s) => {
+        const name = s.trim().split(/\s*[=:]/)[0]?.trim();
+        if (name && /^\w+$/.test(name)) declared.add(name);
+      });
+    }
+    // Object method shorthand: { foo() { }, bar(x) { } }
+    const objMethodRe = /[,{]\s*(\w+)\s*\([^)]*\)\s*\{/g;
+    let omMatch;
+    while ((omMatch = objMethodRe.exec(content)) !== null) {
+      declared.add(omMatch[1]);
+    }
+    // for...of / for...in loop variables: for (const x of ...) or for (const x in ...)
+    const forOfInRe = /for\s*\(\s*(?:const|let|var)\s+(\w+)\s+(?:of|in)\b/g;
+    let foiMatch;
+    while ((foiMatch = forOfInRe.exec(content)) !== null) {
+      declared.add(foiMatch[1]);
+    }
+    // catch clause parameter: catch (err)
+    const catchRe = /catch\s*\(\s*(\w+)\s*\)/g;
+    let cMatch;
+    while ((cMatch = catchRe.exec(content)) !== null) {
+      declared.add(cMatch[1]);
     }
     // Type/interface declarations
     const typeRe = /(?:type|interface)\s+(\w+)/g;
@@ -1989,11 +2037,17 @@ function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
     }
 
     // 3. Find identifiers used as function calls: identifier(
+    // Exclude method calls (preceded by .) — e.g. .select(), .get(), .from()
     const callRe = /\b([A-Za-z_$]\w*)\s*\(/g;
     const used = new Map<string, number>(); // identifier → first char index
     let callMatch;
     while ((callMatch = callRe.exec(content)) !== null) {
       const name = callMatch[1];
+      // Skip method calls: check if preceded by '.' (with optional whitespace)
+      const charBefore = callMatch.index > 0 ? content[callMatch.index - 1] : "";
+      if (charBefore === ".") continue;
+      // Also check for ?. optional chaining
+      if (callMatch.index > 1 && content[callMatch.index - 2] === "?" && charBefore === ".") continue;
       if (!used.has(name)) used.set(name, callMatch.index);
     }
 
@@ -2872,6 +2926,90 @@ function buildTableCreationPhaseSql(schemaSql: string): string {
   return `${prelude}\n\n-- phase 1: create tables first\n${createTableStatements.join("\n\n")}`;
 }
 
+function parseTscOutput(output: string): LintIssue[] {
+  const issues: LintIssue[] = [];
+  // tsc output format: file(line,col): error TS####: message
+  const errorRegex = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/gm;
+  let match;
+  while ((match = errorRegex.exec(output)) !== null) {
+    const [, filePath, line, column, code, message] = match;
+    // Skip errors from node_modules
+    if (filePath.includes("node_modules/")) continue;
+    issues.push({
+      path: filePath,
+      line: parseInt(line, 10),
+      column: parseInt(column, 10),
+      rule: code,
+      message: `${code}: ${message}`,
+    });
+  }
+  return issues;
+}
+
+function buildPackageJsonForTypecheck(
+  deps: Record<string, string>,
+  files: GeneratedFile[],
+): string {
+  const hasAuth = files.some(
+    (f) =>
+      f.content.includes("@supabase/supabase-js") ||
+      f.content.includes("supabase.auth"),
+  );
+  return JSON.stringify(
+    {
+      name: "typecheck-project",
+      private: true,
+      dependencies: {
+        ...deps,
+        next: "^14.0.0",
+        react: "^18.2.0",
+        "react-dom": "^18.2.0",
+        ...(hasAuth
+          ? {
+              "@supabase/supabase-js": "^2.57.4",
+              "@supabase/ssr": "^0.7.0",
+            }
+          : {}),
+      },
+      devDependencies: {
+        "@types/node": "^20",
+        "@types/react": "^18",
+        "@types/react-dom": "^18",
+        typescript: "^5",
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function buildTsconfigForTypecheck(): string {
+  return JSON.stringify(
+    {
+      compilerOptions: {
+        lib: ["dom", "dom.iterable", "esnext"],
+        allowJs: true,
+        skipLibCheck: true,
+        strict: true,
+        noEmit: true,
+        esModuleInterop: true,
+        module: "esnext",
+        moduleResolution: "bundler",
+        resolveJsonModule: true,
+        isolatedModules: true,
+        jsx: "preserve",
+        incremental: false,
+        plugins: [{ name: "next" }],
+        paths: { "@/*": ["./*"] },
+      },
+      include: ["**/*.ts", "**/*.tsx"],
+      exclude: ["node_modules"],
+    },
+    null,
+    2,
+  );
+}
+
 async function lintAllFiles(files: GeneratedFile[]): Promise<{
   fixedFiles: GeneratedFile[];
   lintReport: { passed: boolean; errors: number; warnings: number };
@@ -2968,9 +3106,13 @@ export const generateCodeFunction = inngest.createFunction(
   {
     id: "generate-code",
     name: "Generate Next.js Code",
-    retries: 3,
+    retries: 0,
     onFailure: async ({ event, error }) => {
-      const projectId = ((event as Record<string, unknown>).data as Record<string, unknown> | undefined)?.projectId as string | undefined;
+      // In onFailure, the original event is nested at event.data.event.data
+      const failureData = (event as Record<string, unknown>).data as Record<string, unknown> | undefined;
+      const originalEvent = failureData?.event as Record<string, unknown> | undefined;
+      const originalData = originalEvent?.data as Record<string, unknown> | undefined;
+      const projectId = originalData?.projectId as string | undefined;
       if (projectId) {
         await sendFailure(
           projectId,
@@ -2982,6 +3124,8 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
+
+    try {
     const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
 
     // Detect edit requests so repair loops can use a focused system prompt
@@ -3013,7 +3157,7 @@ export const generateCodeFunction = inngest.createFunction(
     }
 
     // Step 1: Detect project type + build user prompt
-    await sendProgress(projectId, "[1/7] Understanding your request...");
+    await sendProgress(projectId, "[1/8] Understanding your request...");
 
     // Detect project type in a dedicated step so edit requests skip it cheaply.
     const detectedProjectType = await step.run(
@@ -3058,8 +3202,8 @@ DASHBOARD MANDATE:
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
-- Required files: app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css, components/sidebar.tsx (or inline sidebar in layout).
-- DO NOT generate app/not-found.tsx.
+- Required files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, components/sidebar.tsx (or inline sidebar in layout).
+- Generate app/not-found.tsx — a styled 404 page matching the dashboard's design. Include sidebar/nav so auth state stays visible.
 - Every sidebar nav link MUST have a real corresponding page file. No dead links.
 - Charts live in "use client" components — never import recharts in a server component.
 - Do not use @apply in CSS.
@@ -3073,9 +3217,9 @@ AUTHENTICATION & BACKEND RULES:
   * DATABASE CONTRACT: include supabase/schema.sql with CREATE TABLE IF NOT EXISTS + RLS for every .from() table
   * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes.
 
-PAYMENT RULES:
-  * If payments are NOT requested: do NOT generate Stripe code, checkout API routes, or payment pages. Display-only pricing sections are fine.
-  * When payments ARE requested: add "stripe": "^17.0.0" dependency. Generate app/api/checkout/route.ts (Stripe Checkout Session with process.env.STRIPE_SECRET_KEY), app/payment/success/page.tsx, app/payment/cancel/page.tsx. Add Buy/Subscribe buttons on pricing cards that call the checkout route. Use env vars only (STRIPE_SECRET_KEY server-side, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY client-side). Redirect to Stripe Checkout — no custom card forms. If auth is enabled, pass customer_email to the Checkout Session.`;
+PAYMENT RULES (PROXY PATTERN):
+  * If payments are NOT requested: do NOT generate any payment code, checkout routes, or payment pages. Display-only pricing is fine.
+  * When payments ARE requested: Do NOT add "stripe" dependency. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code. Buy/Subscribe buttons POST to the platform proxy: \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }. Redirect to the returned { url }. Generate static app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customer_email.`;
       }
 
       // ── Website / Marketing prompt ────────────────────────────────────────
@@ -3097,8 +3241,8 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
-- Return a complete runnable project with app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
-- DO NOT generate app/not-found.tsx — it is automatically injected by the platform.
+- Return a complete runnable project with app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
+- Generate app/not-found.tsx — a styled 404 page that matches the site's design (colors, fonts, layout). Include the site's navbar/header so auth state stays visible if auth is enabled. Must have a link back to the home page.
 - EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
 - Each sub-page must contain real, domain-relevant content — at minimum a hero/header + 1-2 meaningful content sections. Not just an empty placeholder.
 - If app/globals.css contains @layer base/components/utilities, include matching @tailwind directives.
@@ -3136,9 +3280,9 @@ AUTHENTICATION & BACKEND RULES:
     - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive for public content.
     - Shopping cart, wishlist, favorites must be tied to auth.uid() — anonymous users cannot add items.
 
-PAYMENT RULES:
-  * If payments are NOT requested: do NOT generate Stripe code, checkout API routes, or payment pages. Display-only pricing sections are fine.
-  * When payments ARE requested: add "stripe": "^17.0.0" dependency. Generate app/api/checkout/route.ts (Stripe Checkout Session with process.env.STRIPE_SECRET_KEY), app/payment/success/page.tsx, app/payment/cancel/page.tsx. Add Buy/Subscribe buttons on pricing cards that call the checkout route. Use env vars only (STRIPE_SECRET_KEY server-side, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY client-side). Redirect to Stripe Checkout — no custom card forms. If auth is enabled, pass customer_email to the Checkout Session.
+PAYMENT RULES (PROXY PATTERN):
+  * If payments are NOT requested: do NOT generate any payment code, checkout routes, or payment pages. Display-only pricing is fine.
+  * When payments ARE requested: Do NOT add "stripe" dependency. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code. Buy/Subscribe buttons POST to the platform proxy: \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }. Redirect to the returned { url }. Generate static app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customer_email.
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).
@@ -3183,7 +3327,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 2: Generate with Gemini
-    await sendProgress(projectId, "[2/7] Generating your app...");
+    await sendProgress(projectId, "[2/8] Generating your app...");
     const generatedText = await step.run("generate-with-gemini", async () => {
       console.log("Using Gemini 3 Flash Preview...");
 
@@ -3192,11 +3336,17 @@ NAV + MOBILE RULES:
         // - Edits: REPAIR_SYSTEM_PROMPT (minimal, targeted changes)
         // - Dashboard/app: DASHBOARD_SYSTEM_PROMPT
         // - Website: SYSTEM_PROMPT (design-agency)
-        const generationSystemPrompt = isEditRequest
+        let generationSystemPrompt = isEditRequest
           ? REPAIR_SYSTEM_PROMPT
           : detectedProjectType === "dashboard"
             ? DASHBOARD_SYSTEM_PROMPT
             : SYSTEM_PROMPT;
+
+        // Append Supabase API reference when backend/auth is enabled
+        if (integrationRequirements.requiresAuth || integrationRequirements.requiresDatabase) {
+          generationSystemPrompt += "\n" + SUPABASE_API_REFERENCE;
+        }
+
         const text = await generateWithGemini(generationSystemPrompt, userPrompt);
         console.log("Gemini response length:", text.length, "chars");
         console.log("Response preview:", text.substring(0, 200) + "...");
@@ -3219,7 +3369,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 3: Parse and prepare files
-    await sendProgress(projectId, "[3/7] Parsing and validating code...");
+    await sendProgress(projectId, "[3/8] Parsing and validating code...");
     const parsedProject = await step.run("parse-generated-code", async () => {
       console.log("Parsing AI response, length:", generatedText.length);
 
@@ -3276,6 +3426,7 @@ NAV + MOBILE RULES:
         normalizedProject.dependencies,
         integrationRequirements,
         managedAuthConfig,
+        projectId,
       );
       files = applyKnownImportSpecifierFixups(files);
       let dependencies = normalizedProject.dependencies;
@@ -3320,6 +3471,7 @@ NAV + MOBILE RULES:
             repairedProject.dependencies,
             integrationRequirements,
             managedAuthConfig,
+            projectId,
           );
           files = applyKnownImportSpecifierFixups(files);
           dependencies = repairedProject.dependencies;
@@ -3347,18 +3499,24 @@ NAV + MOBILE RULES:
           `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
         );
 
-
-        const repaired = await repairProjectFromLintFeedback({
-          originalPrompt: prompt,
-          files,
-          dependencies,
-          lintIssues: syntaxIssues,
-          requirements: integrationRequirements,
-          managedAuthConfig,
-          systemPrompt: repairSystemPrompt,
-        });
-        files = applyKnownImportSpecifierFixups(repaired.files);
-        dependencies = repaired.dependencies;
+        try {
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: syntaxIssues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+            systemPrompt: repairSystemPrompt,
+          });
+          files = applyKnownImportSpecifierFixups(repaired.files);
+          dependencies = repaired.dependencies;
+        } catch (repairErr) {
+          console.warn(
+            `[SyntaxRepair] Repair attempt ${attempt} failed:`,
+            repairErr instanceof Error ? repairErr.message : repairErr,
+          );
+        }
       }
 
       for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS + 1; attempt++) {
@@ -3381,17 +3539,24 @@ NAV + MOBILE RULES:
         );
         // UX repair in progress — no user-facing message.
 
-        const repaired = await repairProjectFromLintFeedback({
-          originalPrompt: prompt,
-          files,
-          dependencies,
-          lintIssues: uxIssues,
-          requirements: integrationRequirements,
-          managedAuthConfig,
-          systemPrompt: repairSystemPrompt,
-        });
-        files = applyKnownImportSpecifierFixups(repaired.files);
-        dependencies = repaired.dependencies;
+        try {
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: uxIssues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+            systemPrompt: repairSystemPrompt,
+          });
+          files = applyKnownImportSpecifierFixups(repaired.files);
+          dependencies = repaired.dependencies;
+        } catch (repairErr) {
+          console.warn(
+            `[UXRepair] Repair attempt ${attempt} failed:`,
+            repairErr instanceof Error ? repairErr.message : repairErr,
+          );
+        }
       }
 
       for (
@@ -3419,17 +3584,24 @@ NAV + MOBILE RULES:
         );
         // Schema repair in progress — no user-facing message.
 
-        const repaired = await repairProjectFromLintFeedback({
-          originalPrompt: prompt,
-          files,
-          dependencies,
-          lintIssues: schemaIssues,
-          requirements: integrationRequirements,
-          managedAuthConfig,
-          systemPrompt: repairSystemPrompt,
-        });
-        files = applyKnownImportSpecifierFixups(repaired.files);
-        dependencies = repaired.dependencies;
+        try {
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files,
+            dependencies,
+            lintIssues: schemaIssues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+            systemPrompt: repairSystemPrompt,
+          });
+          files = applyKnownImportSpecifierFixups(repaired.files);
+          dependencies = repaired.dependencies;
+        } catch (repairErr) {
+          console.warn(
+            `[SchemaRepair] Repair attempt ${attempt} failed:`,
+            repairErr instanceof Error ? repairErr.message : repairErr,
+          );
+        }
       }
 
       validateSyntaxOrThrow(files);
@@ -3455,11 +3627,12 @@ NAV + MOBILE RULES:
         dependencies,
         integrationRequirements,
         managedAuthConfig,
+        projectId,
       );
     }
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(projectId, "[4/7] Running code quality checks...");
+    await sendProgress(projectId, "[4/8] Running code quality checks...");
     const { fixedFiles } = await step.run("lint-and-repair", async () => {
       console.log(`Starting linting for ${files.length} files...`);
       let workingFiles = files;
@@ -3490,18 +3663,25 @@ NAV + MOBILE RULES:
         );
         // Lint repair in progress — no user-facing message.
 
-        const repaired = await repairProjectFromLintFeedback({
-          originalPrompt: prompt,
-          files: workingFiles,
-          dependencies: workingDependencies,
-          lintIssues: issuesToFix,
-          requirements: integrationRequirements,
-          managedAuthConfig,
-          systemPrompt: repairSystemPrompt,
-        });
+        try {
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files: workingFiles,
+            dependencies: workingDependencies,
+            lintIssues: issuesToFix,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+            systemPrompt: repairSystemPrompt,
+          });
 
-        workingFiles = applyKnownImportSpecifierFixups(repaired.files);
-        workingDependencies = repaired.dependencies;
+          workingFiles = applyKnownImportSpecifierFixups(repaired.files);
+          workingDependencies = repaired.dependencies;
+        } catch (repairErr) {
+          console.warn(
+            `[LintRepair] Repair attempt ${attempt} failed:`,
+            repairErr instanceof Error ? repairErr.message : repairErr,
+          );
+        }
         lintResult = await lintAllFiles(workingFiles);
         schemaIssues = collectSupabaseSchemaIssues(
           workingFiles,
@@ -3528,12 +3708,20 @@ NAV + MOBILE RULES:
 
     await sendProgress(
       projectId,
-      "[5/7] Validating Next.js compatibility...",
+      "[5/8] Validating Next.js compatibility...",
     );
     const { validatedFiles } = await step.run(
       "nextjs-validate-and-repair",
       async () => {
-        let workingFiles = fixedFiles;
+        // Apply known-good templates before validation so AI-broken
+        // infra files (e.g. auth/callback/route.ts) are overwritten first.
+        let workingFiles = ensureRequiredFiles(
+          fixedFiles,
+          dependencies,
+          integrationRequirements,
+          managedAuthConfig,
+          projectId,
+        );
         let workingDependencies = dependencies;
         let issues = collectNextJsValidationIssues(
           workingFiles,
@@ -3551,18 +3739,25 @@ NAV + MOBILE RULES:
           );
           // Next.js repair in progress — no user-facing message.
 
-          const repaired = await repairProjectFromLintFeedback({
-            originalPrompt: prompt,
-            files: workingFiles,
-            dependencies: workingDependencies,
-            lintIssues: issues,
-            requirements: integrationRequirements,
-            managedAuthConfig,
-            systemPrompt: repairSystemPrompt,
-          });
+          try {
+            const repaired = await repairProjectFromLintFeedback({
+              originalPrompt: prompt,
+              files: workingFiles,
+              dependencies: workingDependencies,
+              lintIssues: issues,
+              requirements: integrationRequirements,
+              managedAuthConfig,
+              systemPrompt: repairSystemPrompt,
+            });
 
-          workingFiles = applyKnownImportSpecifierFixups(repaired.files);
-          workingDependencies = repaired.dependencies;
+            workingFiles = applyKnownImportSpecifierFixups(repaired.files);
+            workingDependencies = repaired.dependencies;
+          } catch (repairErr) {
+            console.warn(
+              `[NextValidation] Repair attempt ${attempt} failed:`,
+              repairErr instanceof Error ? repairErr.message : repairErr,
+            );
+          }
           issues = collectNextJsValidationIssues(
             workingFiles,
             workingDependencies,
@@ -3581,11 +3776,204 @@ NAV + MOBILE RULES:
       },
     );
 
+    // Step 5.5: TypeScript type-checking in E2B sandbox (backend-enabled apps only)
+    const hasBackend = integrationRequirements.requiresAuth || integrationRequirements.requiresDatabase;
+    const typecheckEnabled = hasBackend && !!process.env.E2B_API_KEY;
+    let typecheckedFiles = validatedFiles;
+    let previewSandboxId: string | null = null;
+
+    if (!hasBackend) {
+      console.log("[E2B Typecheck] Skipped — not a backend-enabled app.");
+    } else if (!process.env.E2B_API_KEY) {
+      console.log("[E2B Typecheck] Skipped — E2B_API_KEY not configured.");
+    }
+
+    if (typecheckEnabled) {
+      await sendProgress(
+        projectId,
+        "[6/8] Running TypeScript type checks...",
+      );
+      const typecheckResult = await step.run(
+        "typecheck-and-repair",
+        async () => {
+          const { Sandbox } = await import("e2b");
+          let sandbox: InstanceType<typeof Sandbox> | null = null;
+
+          try {
+            // 1. Create sandbox
+            console.log("[E2B Typecheck] Creating E2B sandbox...");
+            const sandboxStart = Date.now();
+            sandbox = await Sandbox.create("code-interpreter-v1", { timeoutMs: 5 * 60 * 1000 });
+            console.log(`[E2B Typecheck] Sandbox created in ${Date.now() - sandboxStart}ms (id: ${sandbox.sandboxId})`);
+
+            // 2. Build package.json + tsconfig.json
+            const packageJson = buildPackageJsonForTypecheck(
+              dependencies,
+              validatedFiles,
+            );
+            const tsconfigJson = buildTsconfigForTypecheck();
+
+            // 3. Write all files to sandbox
+            console.log(`[E2B Typecheck] Writing ${validatedFiles.length} files to sandbox...`);
+            await sandbox.files.write(
+              "/home/user/project/package.json",
+              packageJson,
+            );
+            await sandbox.files.write(
+              "/home/user/project/tsconfig.json",
+              tsconfigJson,
+            );
+            for (const file of validatedFiles) {
+              await sandbox.files.write(
+                `/home/user/project/${file.path}`,
+                file.content,
+              );
+            }
+            console.log("[E2B Typecheck] Files written successfully.");
+
+            // 4. npm install (installs all type definitions)
+            // Use shell "|| true" to prevent non-zero exit codes from throwing
+            console.log("[E2B Typecheck] Running npm install...");
+            const installStart = Date.now();
+            const installResult = await sandbox.commands.run(
+              "cd /home/user/project && npm install --ignore-scripts --no-optional --no-audit --no-fund --legacy-peer-deps 2>&1; echo \"EXIT_CODE:$?\"",
+              { timeoutMs: 120_000 },
+            );
+            const installOutput = installResult.stdout + "\n" + installResult.stderr;
+            const installFailed = installOutput.includes("ERR!") || installOutput.includes("npm error");
+            if (installFailed) {
+              console.error(
+                `[E2B Typecheck] npm install FAILED (${Date.now() - installStart}ms)`,
+              );
+              console.error("[E2B Typecheck] output:", installOutput.slice(-500));
+              // Kill sandbox on npm failure since we won't reuse it
+              if (sandbox) {
+                try { await sandbox.kill(); } catch { /* ignore */ }
+              }
+              return { files: validatedFiles, sandboxId: null };
+            }
+            console.log(`[E2B Typecheck] npm install completed in ${Date.now() - installStart}ms.`);
+
+            // 5. Repair loop: tsc → parse errors → repair → rewrite → tsc
+            let workingFiles = validatedFiles;
+            let workingDeps = dependencies;
+
+            for (
+              let attempt = 1;
+              attempt <= MAX_TYPECHECK_REPAIR_ATTEMPTS + 1;
+              attempt++
+            ) {
+              console.log(`[E2B Typecheck] Running tsc --noEmit (attempt ${attempt})...`);
+              const tscStart = Date.now();
+              // tsc exits with code 1 when there are type errors — use "|| true" to prevent throw
+              const tscResult = await sandbox.commands.run(
+                "cd /home/user/project && npx tsc --noEmit --pretty false 2>&1 || true",
+                { timeoutMs: 60_000 },
+              );
+              console.log(`[E2B Typecheck] tsc completed in ${Date.now() - tscStart}ms.`);
+
+              const issues = parseTscOutput(
+                tscResult.stdout + "\n" + tscResult.stderr,
+              );
+
+              if (issues.length === 0) {
+                console.log("[E2B Typecheck] No type errors found. All clear!");
+                break;
+              }
+
+              if (attempt > MAX_TYPECHECK_REPAIR_ATTEMPTS) {
+                console.warn(
+                  `[E2B Typecheck] ${issues.length} issue(s) remain after ${MAX_TYPECHECK_REPAIR_ATTEMPTS} repair attempts. Giving up.`,
+                );
+                issues.slice(0, 5).forEach((issue, i) => {
+                  console.warn(`  [${i + 1}] ${issue.path}:${issue.line} ${issue.message}`);
+                });
+                break;
+              }
+
+              console.warn(
+                `[E2B Typecheck] Found ${issues.length} type error(s). Sending to Gemini for repair...`,
+              );
+              issues.slice(0, 5).forEach((issue, i) => {
+                console.warn(`  [${i + 1}] ${issue.path}:${issue.line} ${issue.message}`);
+              });
+
+              // Call Gemini to repair — catch errors so the loop can retry
+              const repairStart = Date.now();
+              try {
+                const repaired = await repairProjectFromLintFeedback({
+                  originalPrompt: prompt,
+                  files: workingFiles,
+                  dependencies: workingDeps,
+                  lintIssues: issues,
+                  requirements: integrationRequirements,
+                  managedAuthConfig,
+                  systemPrompt: repairSystemPrompt,
+                });
+                console.log(`[E2B Typecheck] Gemini repair completed in ${Date.now() - repairStart}ms.`);
+
+                workingFiles = applyKnownImportSpecifierFixups(repaired.files);
+                workingDeps = repaired.dependencies;
+
+                // Rewrite only changed files to sandbox
+                for (const file of workingFiles) {
+                  await sandbox.files.write(
+                    `/home/user/project/${file.path}`,
+                    file.content,
+                  );
+                }
+                console.log("[E2B Typecheck] Updated files written to sandbox.");
+              } catch (repairErr) {
+                console.warn(
+                  `[E2B Typecheck] Gemini repair attempt ${attempt} failed (${Date.now() - repairStart}ms):`,
+                  repairErr instanceof Error ? repairErr.message : repairErr,
+                );
+                // Continue loop — next tsc run will use the unchanged workingFiles
+              }
+            }
+
+            dependencies = workingDeps;
+
+            // Keep sandbox alive for preview reuse instead of killing it
+            if (sandbox) {
+              try {
+                await sandbox.setTimeout(30 * 60 * 1000); // 30 min for preview
+                console.log(`[E2B Typecheck] Sandbox kept alive for preview (id: ${sandbox.sandboxId})`);
+              } catch {
+                console.warn("[E2B Typecheck] Failed to extend sandbox timeout.");
+              }
+            }
+
+            return {
+              files: workingFiles,
+              sandboxId: sandbox?.sandboxId ?? null,
+            };
+          } catch (err) {
+            console.error("[E2B Typecheck] FAILED with error:", err instanceof Error ? err.message : err);
+            console.error("[E2B Typecheck] Skipping typecheck — generation will continue without it.");
+            // Kill sandbox on error since we won't reuse it
+            if (sandbox) {
+              try {
+                await sandbox.kill();
+                console.log("[E2B Typecheck] Sandbox killed after error.");
+              } catch {
+                // ignore
+              }
+            }
+            return { files: validatedFiles, sandboxId: null };
+          }
+        },
+      );
+      typecheckedFiles = typecheckResult.files;
+      previewSandboxId = typecheckResult.sandboxId;
+    }
+
     const finalFiles = ensureRequiredFiles(
-      validatedFiles,
+      typecheckedFiles,
       dependencies,
       integrationRequirements,
       managedAuthConfig,
+      projectId,
     );
     validateSyntaxOrThrow(finalFiles);
 
@@ -3625,7 +4013,7 @@ NAV + MOBILE RULES:
         );
       }
 
-      await sendProgress(projectId, "[6/7] Setting up database...");
+      await sendProgress(projectId, "[7/8] Setting up database...");
 
       await step.run("bootstrap-managed-supabase-schema", async () => {
         for (
@@ -3680,7 +4068,7 @@ NAV + MOBILE RULES:
     }
 
     // Step 6: Notify completion via API
-    await sendProgress(projectId, "[7/7] Finalizing your app...");
+    await sendProgress(projectId, "[8/8] Finalizing your app...");
     await step.run("notify-completion", async () => {
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
@@ -3702,6 +4090,7 @@ NAV + MOBILE RULES:
             model: "gemini",
             originalPrompt: prompt,
             detectedTheme: detectedTheme,
+            sandboxId: previewSandboxId,
           },
         }),
       });
@@ -3729,6 +4118,16 @@ NAV + MOBILE RULES:
       originalPrompt: prompt,
       detectedTheme: detectedTheme,
       projectType: detectedProjectType,
+      sandboxId: previewSandboxId,
     };
+
+    } catch (err) {
+      // Send failure directly to the status API so the client sees it immediately
+      await sendFailure(
+        projectId,
+        err instanceof Error ? err.message : String(err),
+      );
+      throw err; // Re-throw so Inngest marks the run as failed
+    }
   },
 );

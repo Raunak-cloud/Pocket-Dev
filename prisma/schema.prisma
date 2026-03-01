@@ -24,6 +24,11 @@ model User {
   appTokens           Float               @default(4) // Free tier: 4 app tokens
   integrationTokens   Int                 @default(10) // Free tier: 10 integration tokens
 
+  // Stripe Connect
+  stripeConnectAccountId          String?   @map("stripe_connect_account_id")
+  stripeConnectStatus             String?   @map("stripe_connect_status") // "pending" | "active" | "restricted"
+  stripeConnectOnboardingComplete Boolean   @default(false) @map("stripe_connect_onboarding_complete")
+
   // Relations
   projects            Project[]
   supportTickets      SupportTicket[]

@@ -2164,6 +2164,13 @@ export async function POST(request: NextRequest) {
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
         "",
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
+      NEXT_PUBLIC_POCKET_DEV_URL:
+        parsedFileEnv.NEXT_PUBLIC_POCKET_DEV_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        "",
+      NEXT_PUBLIC_POCKET_PROJECT_ID:
+        parsedFileEnv.NEXT_PUBLIC_POCKET_PROJECT_ID ||
+        "",
     };
     const globalsCss =
       findFileByCandidates(normalizedFiles, ["app/globals.css"])?.content || "";

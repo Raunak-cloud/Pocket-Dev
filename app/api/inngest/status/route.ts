@@ -138,6 +138,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, reset: true });
   }
 
+  // Handle failure notification from Inngest onFailure handler
+  // (checked before `event` guard because sendFailure doesn't include an event field)
+  const { failed, error: failureError } = body;
+  if (failed) {
+    const errorMessage = typeof failureError === "string" ? failureError : "Generation failed";
+    failedJobs.set(projectId, {
+      value: errorMessage,
+      expiresAt: now() + FAILURE_TTL_MS,
+    });
+    console.log(`[Inngest] Job failed: ${projectId} — ${errorMessage}`);
+    return NextResponse.json({ success: true, failed: true });
+  }
+
   if (!event) {
     return NextResponse.json(
       { error: "Missing event" },
@@ -154,18 +167,6 @@ export async function POST(request: NextRequest) {
       expiresAt: now() + PROGRESS_TTL_MS,
     });
     return NextResponse.json({ success: true });
-  }
-
-  // Handle failure notification from Inngest onFailure handler
-  const { failed, error: failureError } = body;
-  if (failed) {
-    const errorMessage = typeof failureError === "string" ? failureError : "Generation failed";
-    failedJobs.set(projectId, {
-      value: errorMessage,
-      expiresAt: now() + FAILURE_TTL_MS,
-    });
-    console.log(`[Inngest] Job failed: ${projectId} — ${errorMessage}`);
-    return NextResponse.json({ success: true, failed: true });
   }
 
   // Handle completion

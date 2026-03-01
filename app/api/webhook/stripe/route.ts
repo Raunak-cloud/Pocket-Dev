@@ -26,6 +26,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
+  // Handle Stripe Connect account updates
+  if (event.type === "account.updated") {
+    const account = event.data.object as Stripe.Account;
+    const status = account.charges_enabled
+      ? "active"
+      : account.details_submitted
+        ? "restricted"
+        : "pending";
+    await prisma.user.updateMany({
+      where: { stripeConnectAccountId: account.id },
+      data: {
+        stripeConnectStatus: status,
+        stripeConnectOnboardingComplete: account.details_submitted || false,
+      },
+    });
+    return NextResponse.json({ received: true });
+  }
+
   if (event.type !== "checkout.session.completed") {
     return NextResponse.json({ received: true });
   }

@@ -79,8 +79,8 @@ WHAT TO AVOID:
 ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Target stack: Next.js App Router + TypeScript + Tailwind utility classes.
-- Required core files: app/layout.tsx, app/page.tsx, app/loading.tsx, app/globals.css.
-- DO NOT generate app/not-found.tsx — it is automatically injected by the platform. Do not include it in your output.
+- Required core files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css.
+- Generate app/not-found.tsx — a styled 404 page that matches the app's design (colors, fonts, layout). It must include navigation back to the home page. If the app uses auth, the not-found page should preserve the app's layout/navbar so the user's auth state remains visible.
 - MULTI-PAGE RULE: Every internal navigation link in the navbar/header/footer MUST have a corresponding page file. If the navbar contains links to "About", "Services", "Contact", "Blog", etc., you MUST generate app/about/page.tsx, app/services/page.tsx, app/contact/page.tsx, app/blog/page.tsx, etc. No dead links — every href="/path" must resolve to a real page.
 - Each generated sub-page should have real, domain-appropriate content (not just a placeholder heading). At minimum include: a hero/header section, 1-2 content sections relevant to the page topic, and consistent navigation (shared layout).
 - Use Next.js App Router file-based routing: each page is a separate app/{route}/page.tsx file.
@@ -116,11 +116,20 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
     - Generate BOTH a sign-in page (app/sign-in/page.tsx) AND a sign-up page (app/sign-up/page.tsx) — ALWAYS generate both. They must have professional, brand-aligned design. The sign-in page must link to sign-up and vice versa.
     - Generate a verification email confirmation page (app/auth/verify/page.tsx) — this page is shown after successful sign-up. It must display a branded message like "Check your email" with the user's email address, an instruction to click the verification link, and a "Back to sign in" link. Style it to match the app's design (same colors, fonts, layout feel as the sign-in/sign-up pages). After supabase.auth.signUp() succeeds, redirect the user to /auth/verify (pass email as a query param so the page can display it).
     - Generate API routes for auth operations (signin, signup, signout, session check) using @supabase/ssr createServerClient
-    - Generate middleware.ts for session handling and protected route redirects
+    - Generate middleware.ts for session handling and protected route redirects. CRITICAL: Use the EXACT middleware pattern below. Do NOT deviate from this structure:
+      1. Initialize response with: let response = NextResponse.next({ request })   // pass full request, NOT { request: { headers: request.headers } }
+      2. Use getAll/setAll cookie API. In setAll, you MUST create a NEW response from the updated request:
+         cookies: { getAll() { return request.cookies.getAll(); }, setAll(cookiesToSet) { cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value)); response = NextResponse.next({ request }); cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options)); } }
+      3. Call await supabase.auth.getUser() to refresh the session.
+      4. Check protected routes and redirect if needed. When redirecting, copy cookies from response to the redirect: const redirect = NextResponse.redirect(url); response.cookies.getAll().forEach(cookie => redirect.cookies.set(cookie.name, cookie.value)); return redirect;
+      5. Return response at the end.
+      The middleware matcher MUST be broad: matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)']
+      Put protected-route redirect logic INSIDE the middleware function, not in the matcher.
     - Use environment variables: process.env.NEXT_PUBLIC_SUPABASE_URL and process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as fallback)
     - Use supabase.auth.signInWithPassword(), supabase.auth.signUp(), supabase.auth.signOut(), supabase.auth.getUser()
     - Auth pages must include: password visibility toggle, password confirmation on signup, inline validation, loading states, error messaging
-    - Auth CTAs must be session-aware: show sign-in when logged out, show user identity + logout when signed in
+    - After successful signInWithPassword(), redirect using window.location.href (NOT router.push) so the full page re-renders with the new session cookie. Same for signOut() — use window.location.href = "/" to force a full page reload.
+    - Auth-aware navbar/header MUST be a "use client" component that checks auth state on mount using supabase.auth.onAuthStateChange() and supabase.auth.getUser(). Show a "Sign In" button when logged out. When logged in, show the user's email/name and a "Sign Out" button. NEVER rely on server-component auth checks alone for navbar UI — the client component must listen for auth changes to update immediately after login/logout.
     - Do NOT hardcode secrets or service-role keys
     - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import { createClient } from "@/lib/supabase/server" or "@/lib/supabase/client" if needed, or create your own Supabase client using createServerClient from @supabase/ssr
   * PUBLIC vs PROTECTED ACCESS — CRITICAL:
@@ -137,21 +146,23 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
   * CRITICAL PostgREST FK rule: If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). PostgREST resolves joins via direct foreign keys only. If you have a profiles table and other tables need to join to it, their user_id column must reference profiles(id) (not auth.users(id)).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PAYMENTS & STRIPE
+PAYMENTS & STRIPE (PROXY PATTERN)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   * If the user does NOT request payments/checkout/Stripe:
-    - Do NOT generate Stripe code, checkout API routes, or payment pages.
+    - Do NOT generate any payment code, checkout routes, or payment pages.
     - Do NOT add "stripe" to dependencies or import from "stripe".
     - Static pricing sections with display-only prices are fine — just no functional checkout.
   * When payments ARE requested:
-    - Add "stripe": "^17.0.0" to dependencies.
-    - Generate app/api/checkout/route.ts — a POST API route that creates a Stripe Checkout Session using new Stripe(process.env.STRIPE_SECRET_KEY). Accept { priceId, mode } in the request body. Set success_url to /payment/success and cancel_url to /payment/cancel. Return the session URL as JSON.
+    - Do NOT add "stripe" to dependencies. Do NOT import from "stripe". Do NOT generate app/api/checkout/route.ts or any server-side Stripe code.
+    - Payments are handled via the Pocket Dev platform proxy. Buy/Subscribe buttons must POST to the platform API:
+      POST \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\`
+      Body: { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, description?, amount (in cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }
+      Response: { url } — redirect the browser to this URL.
     - Generate app/payment/success/page.tsx — a thank-you/confirmation page shown after successful payment. Include a link back to the home page.
     - Generate app/payment/cancel/page.tsx — a page shown when the user cancels checkout. Include a link to retry or go back.
-    - Add "Buy Now" or "Subscribe" buttons on product cards and pricing sections that call the checkout API route and redirect to Stripe Checkout.
-    - Use environment variables only: process.env.STRIPE_SECRET_KEY (server-side only, in API routes), process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (client-side, for display/reference only).
-    - NEVER collect card details directly. Always redirect to Stripe Checkout — no custom card forms, no PCI scope.
-    - If authentication is also enabled, pass the user's ID/email to the Checkout Session (customer_email parameter) so payments are tied to the authenticated user.
+    - Use environment variables: process.env.NEXT_PUBLIC_POCKET_DEV_URL (platform API base URL), process.env.NEXT_PUBLIC_POCKET_PROJECT_ID (this project's ID).
+    - NEVER collect card details directly. Always redirect to Stripe Checkout via the proxy — no custom card forms, no PCI scope.
+    - If authentication is also enabled, pass the user's email to customerEmail so payments are tied to the authenticated user.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMAGE + ALT-TEXT CONTRACT — CRITICAL FOR IMAGE ACCURACY

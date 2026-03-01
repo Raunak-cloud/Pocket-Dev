@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { generateCodeWithInngest } from "@/lib/inngest-helpers";
 import CodeViewer from "./components/CodeViewer";
 import WebContainerPreview from "./components/WebContainerPreview";
+import E2BSandboxPreview from "./components/E2BSandboxPreview/E2BSandboxPreview";
 import LoadingScreen from "./components/LoadingScreen";
 import BackgroundEffects from "./components/BackgroundEffects";
 import SettingsContent from "./components/Settings";
@@ -27,6 +28,7 @@ import {
   GitHubExportModal,
   TokenConfirmModal,
   EditIntegrationsModal,
+  StripeConnectModal,
 } from "./components/Modals";
 import CreateContentComponent from "./components/Generation/CreateContent";
 import SupportContentComponent from "./components/Support/SupportContent";
@@ -285,6 +287,7 @@ function ReactGeneratorContent() {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
+  const [previewSandboxId, setPreviewSandboxId] = useState<string | null>(null);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
   const [textEditMode, setTextEditMode] = useState(false);
   const [imageSelectMode, setImageSelectMode] = useState(false);
@@ -379,6 +382,8 @@ function ReactGeneratorContent() {
   const [blockedPromptWords, setBlockedPromptWords] = useState<string[]>([]);
   const [generationProjectType, setGenerationProjectType] = useState<"website" | "dashboard">("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<string | null>(null);
+  const [showStripeConnectModal, setShowStripeConnectModal] = useState(false);
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
   const [editClarificationQuestion, setEditClarificationQuestion] =
@@ -390,6 +395,36 @@ function ReactGeneratorContent() {
     Array<{ question: string; answer: string }>
   >([]);
   const { startUpload } = useSupabaseUploads();
+
+  // Fetch Stripe Connect status on mount when user exists
+  useEffect(() => {
+    if (!user) return;
+    fetch("/api/stripe/connect/status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setUserStripeConnectStatus(data.status || null);
+      })
+      .catch(() => {});
+  }, [user]);
+
+  // Handle return from Stripe onboarding
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("stripe_onboarding") === "complete" || params.get("stripe_refresh") === "true") {
+      // Re-fetch status
+      fetch("/api/stripe/connect/status")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) setUserStripeConnectStatus(data.status || null);
+        })
+        .catch(() => {});
+      // Clear query params
+      const url = new URL(window.location.href);
+      url.searchParams.delete("stripe_onboarding");
+      url.searchParams.delete("stripe_refresh");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
 
   // Always keep edit history collapsed when a project is loaded/reloaded.
   useEffect(() => {
@@ -515,6 +550,11 @@ function ReactGeneratorContent() {
   }, []);
 
   const togglePayments = useCallback(() => {
+    // If enabling payments, check if Stripe Connect is active
+    if (!paymentsEnabled && userStripeConnectStatus !== "active") {
+      setShowStripeConnectModal(true);
+      return;
+    }
     setPaymentsEnabled(prev => {
       const next = !prev;
       // Payments require backend — auto-enable it
@@ -523,7 +563,7 @@ function ReactGeneratorContent() {
       }
       return next;
     });
-  }, [isGenerationBackendSelected, setBackendSelection]);
+  }, [paymentsEnabled, userStripeConnectStatus, isGenerationBackendSelected, setBackendSelection]);
 
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
@@ -1243,6 +1283,14 @@ function ReactGeneratorContent() {
     setDeploymentId(savedProject.deploymentId || null);
     setCustomDomain(savedProject.customDomain || "");
     setHasUnpublishedChanges(hasPendingPublishChanges(savedProject));
+    // For backend-enabled saved projects, spin up a fresh E2B sandbox for preview
+    const restoredProject: ReactProject = {
+      files: savedProject.files,
+      dependencies: savedProject.dependencies || {},
+      lintReport: savedProject.lintReport || { passed: true, errors: 0, warnings: 0 },
+    };
+    const isBackend = inferProjectIntegrations(restoredProject).hasBackend;
+    setPreviewSandboxId(isBackend ? "create-new" : null);
     setStatus("success");
     setActiveSection("create");
     setShowEditHistory(false);
@@ -1753,16 +1801,17 @@ ${schemaContext}
         ? "for this new app"
         : "into this existing app";
 
-    return `\n\n💳 PAYMENT REQUIREMENT:
-1. Integrate Stripe Checkout ${scope}.
-2. Add "stripe": "^17.0.0" to dependencies.
-3. Generate app/api/checkout/route.ts — a POST API route that creates a Stripe Checkout Session using new Stripe(process.env.STRIPE_SECRET_KEY). Accept { priceId, mode } in the request body. Set success_url to \${origin}/payment/success and cancel_url to \${origin}/payment/cancel. Return the session URL as JSON.
-4. Generate app/payment/success/page.tsx — a thank-you/confirmation page shown after successful payment with a link back to the home page.
-5. Generate app/payment/cancel/page.tsx — a page shown when the user cancels checkout with a link to retry or go back.
-6. Add "Buy Now" or "Subscribe" buttons on product cards and pricing sections that call the checkout API route (POST /api/checkout) and redirect to the returned Stripe Checkout URL.
-7. Use environment variables only: process.env.STRIPE_SECRET_KEY (server-side, in API routes only), process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (client-side).
-8. NEVER collect card details directly — always redirect to Stripe Checkout. No custom card forms, no PCI scope.
-9. If authentication is also enabled, pass the authenticated user's email to the Checkout Session (customer_email parameter) so payments are tied to the user.`;
+    return `\n\n💳 PAYMENT REQUIREMENT (PROXY PATTERN):
+1. Add payment functionality ${scope} using the Pocket Dev platform proxy. Do NOT add "stripe" to dependencies. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code.
+2. Buy/Subscribe buttons must POST to the platform API:
+   POST \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\`
+   Body: { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name: string, description?: string, amount: number (in cents), currency?: string, quantity?: number }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail?: string }
+   Response: { url } — redirect the browser to this URL.
+3. Generate app/payment/success/page.tsx — a thank-you/confirmation page shown after successful payment with a link back to the home page.
+4. Generate app/payment/cancel/page.tsx — a page shown when the user cancels checkout with a link to retry or go back.
+5. Use environment variables: process.env.NEXT_PUBLIC_POCKET_DEV_URL (platform API base URL), process.env.NEXT_PUBLIC_POCKET_PROJECT_ID (this project's ID). Do NOT use STRIPE_SECRET_KEY or NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.
+6. NEVER collect card details directly — always redirect to Stripe Checkout via the proxy. No custom card forms, no PCI scope.
+7. If authentication is also enabled, pass the authenticated user's email as customerEmail so payments are tied to the user.`;
   };
 
   const isExplicitImageChangeRequest = (request: string): boolean => {
@@ -2112,6 +2161,7 @@ ${schemaContext}
 
       setProject(mergedProject);
       syncIntegrationSelectionFromProject(mergedProject);
+      setPreviewSandboxId(result.sandboxId ?? null);
       // Force preview re-init after AI edit to avoid stale iframe/HMR state.
       setPreviewKey((prev) => prev + 1);
       setEditPrompt("");
@@ -2267,6 +2317,7 @@ ${pdfUrlList}
       });
       setProject(projectWithIntegrations);
       syncIntegrationSelectionFromProject(projectWithIntegrations);
+      setPreviewSandboxId(result.sandboxId ?? null);
 
       // Save project to Firestore
       if (user) {
@@ -3971,7 +4022,7 @@ ${pdfUrlList}
                     </div>
                   )}
 
-                  {/* WebContainer Preview */}
+                  {/* Preview — E2B cloud sandbox for backend apps, WebContainer for others */}
                   <div
                     className={
                       previewMode !== "desktop"
@@ -3979,16 +4030,30 @@ ${pdfUrlList}
                         : "h-full"
                     }
                   >
-                    <WebContainerPreview
-                      project={project}
-                      previewKey={previewKey}
-                      textEditMode={textEditMode}
-                      imageSelectMode={imageSelectMode}
-                      linkSelectMode={linkSelectMode}
-                      onTextEdited={handlePreviewTextEdited}
-                      onImageSelected={handlePreviewImageSelected}
-                      onButtonSelected={handlePreviewButtonSelected}
-                    />
+                    {previewSandboxId && inferProjectIntegrations(project).hasBackend ? (
+                      <E2BSandboxPreview
+                        project={project}
+                        sandboxId={previewSandboxId}
+                        previewKey={previewKey}
+                        textEditMode={textEditMode}
+                        imageSelectMode={imageSelectMode}
+                        linkSelectMode={linkSelectMode}
+                        onTextEdited={handlePreviewTextEdited}
+                        onImageSelected={handlePreviewImageSelected}
+                        onButtonSelected={handlePreviewButtonSelected}
+                      />
+                    ) : (
+                      <WebContainerPreview
+                        project={project}
+                        previewKey={previewKey}
+                        textEditMode={textEditMode}
+                        imageSelectMode={imageSelectMode}
+                        linkSelectMode={linkSelectMode}
+                        onTextEdited={handlePreviewTextEdited}
+                        onImageSelected={handlePreviewImageSelected}
+                        onButtonSelected={handlePreviewButtonSelected}
+                      />
+                    )}
                   </div>
                 </div>
               </div>
@@ -5872,6 +5937,19 @@ ${pdfUrlList}
         onTogglePayments={togglePayments}
         />
       )}
+
+      <StripeConnectModal
+        isOpen={showStripeConnectModal}
+        onClose={() => setShowStripeConnectModal(false)}
+        connectStatus={userStripeConnectStatus}
+        onSuccess={() => {
+          setPaymentsEnabled(true);
+          if (!isGenerationBackendSelected) {
+            setBackendSelection(true);
+          }
+          setShowStripeConnectModal(false);
+        }}
+      />
 
       {/* Edit History Modal */}
       {showEditHistory && editHistory.length > 0 && (

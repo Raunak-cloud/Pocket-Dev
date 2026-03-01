@@ -88,8 +88,8 @@ VISUAL DESIGN
 ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Stack: Next.js App Router + TypeScript + Tailwind utility classes.
-- Required files: app/layout.tsx, app/page.tsx, app/globals.css, app/loading.tsx, components/sidebar.tsx (or equivalent sidebar component).
-- DO NOT generate app/not-found.tsx.
+- Required files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/globals.css, app/loading.tsx, components/sidebar.tsx (or equivalent sidebar component).
+- Generate app/not-found.tsx — a styled 404 page matching the dashboard's design. Include sidebar/nav so auth state stays visible.
 - For every sidebar nav link, generate the corresponding app/{route}/page.tsx with real content.
 - Charts must be in "use client" components. Server components must not import recharts directly.
 - All mock data should be typed (TypeScript interfaces).
@@ -101,15 +101,17 @@ ENGINEERING CONTRACT
 AUTHENTICATION & BACKEND
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - If the user does NOT explicitly request authentication/backend: do NOT generate sign-in/sign-up/login pages, do NOT generate middleware.ts or auth API routes, do NOT import from @supabase/ssr or @supabase/supabase-js or @/lib/supabase, do NOT add "Sign In"/"Login"/"Register" buttons or links anywhere, do NOT add cart/wishlist/favorites UI. Build with NO auth and NO backend dependencies.
-- When auth IS requested: generate BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>. Generate middleware.ts for protected routes, and Supabase SSR auth using process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
+- When auth IS requested: generate BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>. Generate middleware.ts for protected routes using Supabase SSR auth with process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY. CRITICAL middleware.ts pattern — use EXACTLY this setAll: cookies: { getAll() { return request.cookies.getAll(); }, setAll(cookiesToSet) { cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value)); response = NextResponse.next({ request }); cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options)); } }. Initialize response with NextResponse.next({ request }) — NOT { request: { headers: request.headers } }. When redirecting for protected routes, copy cookies: response.cookies.getAll().forEach(c => redirect.cookies.set(c.name, c.value)). Broad matcher: matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'].
+- After successful signInWithPassword(), redirect using window.location.href (NOT router.push) so the full page re-renders with the new session cookie. Same for signOut() — use window.location.href = "/" to force a full page reload.
+- Auth-aware navbar/sidebar MUST be a "use client" component that checks auth state on mount using supabase.auth.onAuthStateChange() and supabase.auth.getUser(). Show "Sign In" when logged out. When logged in, show user email/name + "Sign Out" button. NEVER rely on server-component auth checks alone for nav UI — the client component must listen for auth changes to update immediately after login/logout.
 - PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login required). All write/mutate actions (create, update, delete data) MUST require authentication — check supabase.auth.getUser() before any INSERT/UPDATE/DELETE and redirect to sign-in if unauthenticated. middleware.ts should protect write-action routes (/dashboard, /admin, /new, /create, /edit) but not public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for write operations.
 - DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with CREATE TABLE statements and RLS policies for every table the code uses.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PAYMENTS & STRIPE
+PAYMENTS & STRIPE (PROXY PATTERN)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - If NOT requested: no Stripe code, no checkout routes, no payment pages. Display-only pricing is fine.
-- If requested: add "stripe": "^17.0.0" dependency. Generate app/api/checkout/route.ts (Stripe Checkout Session), app/payment/success/page.tsx, app/payment/cancel/page.tsx. Buy/Subscribe buttons on pricing cards. Use STRIPE_SECRET_KEY server-side, NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY client-side. Redirect to Stripe Checkout only — no custom card forms. If auth is also enabled, pass customer_email to the Checkout Session.
+- If requested: Do NOT add "stripe" dependency. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code. Instead, Buy/Subscribe buttons POST to the platform proxy: \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl, cancelUrl, customerEmail? }. Redirect to the returned { url }. Generate static app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customer_email.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MOCK DATA QUALITY

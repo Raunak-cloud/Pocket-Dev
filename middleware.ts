@@ -9,6 +9,7 @@ const PUBLIC_ROUTE_PATTERNS = [
   /^\/api\/webhooks(?:\/.*)?$/,
   /^\/api\/webhook\/stripe(?:\/.*)?$/,
   /^\/api\/inngest(?:\/.*)?$/,
+  /^\/api\/stripe\/connect(?:\/.*)?$/,
 ];
 
 function isPublicRoute(pathname: string) {
