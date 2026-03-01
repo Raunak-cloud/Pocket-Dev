@@ -3968,33 +3968,40 @@ NAV + MOBILE RULES:
       previewSandboxId = typecheckResult.sandboxId;
     }
 
-    const finalFiles = ensureRequiredFiles(
-      typecheckedFiles,
-      dependencies,
-      integrationRequirements,
-      managedAuthConfig,
-      projectId,
-    );
-    validateSyntaxOrThrow(finalFiles);
+    const { finalFiles, finalLint } = await step.run(
+      "post-scaffold-validation",
+      async () => {
+        const scaffoldedFiles = ensureRequiredFiles(
+          typecheckedFiles,
+          dependencies,
+          integrationRequirements,
+          managedAuthConfig,
+          projectId,
+        );
+        validateSyntaxOrThrow(scaffoldedFiles);
 
-    const finalLint = await lintAllFiles(finalFiles);
-    if (finalLint.lintReport.errors > 0) {
-      const firstIssue = finalLint.lintIssues[0];
-      throw new Error(
-        `Post-scaffold lint failed. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
-      );
-    }
+        const lint = await lintAllFiles(scaffoldedFiles);
+        if (lint.lintReport.errors > 0) {
+          const firstIssue = lint.lintIssues[0];
+          throw new Error(
+            `Post-scaffold lint failed. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+          );
+        }
 
-    const finalSchemaIssues = collectSupabaseSchemaIssues(
-      finalFiles,
-      integrationRequirements,
+        const schemaIssues = collectSupabaseSchemaIssues(
+          scaffoldedFiles,
+          integrationRequirements,
+        );
+        if (schemaIssues.length > 0) {
+          const firstIssue = schemaIssues[0];
+          throw new Error(
+            `Schema validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
+          );
+        }
+
+        return { finalFiles: scaffoldedFiles, finalLint: lint };
+      },
     );
-    if (finalSchemaIssues.length > 0) {
-      const firstIssue = finalSchemaIssues[0];
-      throw new Error(
-        `Schema validation failed. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
-      );
-    }
 
     if (integrationRequirements.requiresDatabase) {
       if (!managedAuthConfig?.projectRef) {

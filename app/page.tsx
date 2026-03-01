@@ -439,6 +439,7 @@ function ReactGeneratorContent() {
     generationPrompt,
     setError,
     loadSavedProjects: () => loadSavedProjects(), // Will be defined below
+    backendEnabled: inferProjectIntegrations(project).hasBackend,
   });
 
   const githubExportHook = useGitHubExport({

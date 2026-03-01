@@ -11,6 +11,7 @@ interface UsePublishingProps {
   generationPrompt: string;
   setError: (error: string) => void;
   loadSavedProjects: () => Promise<void>;
+  backendEnabled: boolean;
 }
 
 export function usePublishing({
@@ -20,6 +21,7 @@ export function usePublishing({
   generationPrompt,
   setError,
   loadSavedProjects,
+  backendEnabled,
 }: UsePublishingProps) {
   const [isPublishing, setIsPublishing] = useState(false);
   const [isUnpublishing, setIsUnpublishing] = useState(false);
@@ -46,8 +48,9 @@ export function usePublishing({
     setIsPublishing(true);
     setError("");
     try {
-      // Call our publish API with the original Next.js project files
-      const response = await fetch("/api/publish", {
+      // Route to Vercel for backend-enabled projects, Cloudflare for static sites
+      const publishEndpoint = backendEnabled ? "/api/publish/vercel" : "/api/publish";
+      const response = await fetch(publishEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -96,7 +99,7 @@ export function usePublishing({
     } finally {
       setIsPublishing(false);
     }
-  }, [project, currentProjectId, user, generationPrompt, setError, loadSavedProjects]);
+  }, [project, currentProjectId, user, generationPrompt, setError, loadSavedProjects, backendEnabled]);
 
   const unpublishProject = useCallback(async () => {
     if (!currentProjectId || !user) return;
@@ -104,16 +107,20 @@ export function usePublishing({
     setIsUnpublishing(true);
     setError("");
     try {
-      // Delete the Cloudflare Pages project if we have a deployment ID
+      // Delete the deployed project — detect provider from URL
       if (deploymentId) {
+        const isVercelDeployment = publishedUrl?.includes(".vercel.app");
+        const deleteEndpoint = isVercelDeployment
+          ? "/api/publish/vercel"
+          : "/api/publish";
         try {
-          await fetch("/api/publish", {
+          await fetch(deleteEndpoint, {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ projectName: deploymentId }),
           });
         } catch (deleteError) {
-          console.error("Error deleting Cloudflare project:", deleteError);
+          console.error("Error deleting deployed project:", deleteError);
           // Continue with unpublishing even if remote delete fails
         }
       }
@@ -143,7 +150,7 @@ export function usePublishing({
     } finally {
       setIsUnpublishing(false);
     }
-  }, [currentProjectId, user, deploymentId, setError, loadSavedProjects]);
+  }, [currentProjectId, user, deploymentId, publishedUrl, setError, loadSavedProjects]);
 
   const connectDomain = useCallback(
     async (domain: string) => {
