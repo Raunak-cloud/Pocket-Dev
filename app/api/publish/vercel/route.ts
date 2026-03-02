@@ -3,6 +3,7 @@ import {
   acquireAuthConfigForBindingKey,
   getAuthConfigForBindingKey,
 } from "@/lib/supabase-project-pool";
+import { POCKET_ANALYTICS_COMPONENT } from "@/lib/analytics-tracking-script";
 
 interface ProjectFile {
   path: string;
@@ -367,6 +368,33 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
     );
   }
 
+  // ── Inject Pocket Analytics tracking component ──────────────
+  result.set("app/components/PocketAnalytics.tsx", POCKET_ANALYTICS_COMPONENT);
+
+  // Inject analytics import + component into layout.tsx
+  const layoutPath = result.has("app/layout.tsx") ? "app/layout.tsx" : null;
+  if (layoutPath) {
+    let layout = result.get(layoutPath)!;
+    // Add import at the top (after existing imports or after "use client")
+    const analyticsImport = `import PocketAnalytics from "./components/PocketAnalytics";\n`;
+    if (!layout.includes("PocketAnalytics")) {
+      // Insert import after the last import statement
+      const lastImportIdx = layout.lastIndexOf("\nimport ");
+      if (lastImportIdx !== -1) {
+        const endOfLine = layout.indexOf("\n", lastImportIdx + 1);
+        layout = layout.slice(0, endOfLine + 1) + analyticsImport + layout.slice(endOfLine + 1);
+      } else {
+        layout = analyticsImport + layout;
+      }
+      // Insert <PocketAnalytics /> right after <body...>
+      layout = layout.replace(
+        /(<body[^>]*>)/,
+        "$1\n        <PocketAnalytics />",
+      );
+      result.set(layoutPath, layout);
+    }
+  }
+
   return result;
 }
 
@@ -571,15 +599,13 @@ export async function POST(request: NextRequest) {
       });
     }
     const pocketProjectId =
-      parsedFileEnv.NEXT_PUBLIC_POCKET_PROJECT_ID || "";
-    if (pocketProjectId) {
-      envVars.push({
-        key: "NEXT_PUBLIC_POCKET_PROJECT_ID",
-        value: pocketProjectId,
-        target: ["production", "preview"],
-        type: "plain",
-      });
-    }
+      parsedFileEnv.NEXT_PUBLIC_POCKET_PROJECT_ID || projectId;
+    envVars.push({
+      key: "NEXT_PUBLIC_POCKET_PROJECT_ID",
+      value: pocketProjectId,
+      target: ["production", "preview"],
+      type: "plain",
+    });
 
     await upsertVercelEnvVars(vercelProjectName, envVars);
 

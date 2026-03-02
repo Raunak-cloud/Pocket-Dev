@@ -11,6 +11,7 @@ import LoadingScreen from "./components/LoadingScreen";
 import BackgroundEffects from "./components/BackgroundEffects";
 import SettingsContent from "./components/Settings";
 import ProjectsContent from "./components/Projects";
+import { AnalyticsContent } from "./components/Analytics";
 import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
@@ -5660,6 +5661,8 @@ ${pdfUrlList}
             }}
           />
         );
+      case "analytics":
+        return <AnalyticsContent />;
       case "settings":
         return <SettingsContent user={user} savedProjects={savedProjects} />;
       case "support":

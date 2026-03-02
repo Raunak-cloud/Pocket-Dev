@@ -28,7 +28,9 @@
       "Bash(npx dotenv:*)",
       "Bash(npm uninstall:*)",
       "mcp__ide__getDiagnostics",
-      "WebFetch(domain:supabase.com)"
+      "WebFetch(domain:supabase.com)",
+      "Bash(npx prisma:*)",
+      "Bash(grep:*)"
     ]
   }
 }

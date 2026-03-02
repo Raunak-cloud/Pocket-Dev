@@ -153,3 +153,24 @@ model Maintenance {
 
   @@map("maintenance")
 }
+
+// Analytics events — pageviews from deployed apps
+model AnalyticsEvent {
+  id          String   @id @default(cuid())
+  projectId   String
+  event       String   @default("pageview")
+  pathname    String
+  referrer    String?
+  country     String?
+  device      String?  // "mobile" | "tablet" | "desktop"
+  browser     String?
+  screenWidth Int?
+  language    String?
+  sessionId   String?
+  createdAt   DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([projectId, event])
+  @@index([sessionId])
+  @@map("analytics_events")
+}
