@@ -3150,14 +3150,13 @@ export const generateCodeFunction = inngest.createFunction(
       );
     }
 
-    // Check if cancelled before starting
-    if (await checkIfCancelled(projectId)) {
-      console.log(`[Inngest] Generation cancelled before start: ${projectId}`);
-      throw new Error("Generation cancelled by user");
-    }
-
     // Step 1: Detect project type + build user prompt
-    await sendProgress(projectId, "[1/8] Understanding your request...");
+    await step.run("check-cancelled-and-notify-start", async () => {
+      if (await checkIfCancelled(projectId)) {
+        throw new Error("Generation cancelled by user");
+      }
+      await sendProgress(projectId, "[1/8] Understanding your request...");
+    });
 
     // Detect project type in a dedicated step so edit requests skip it cheaply.
     const detectedProjectType = await step.run(
@@ -3318,17 +3317,13 @@ NAV + MOBILE RULES:
       },
     );
 
-    // Check if cancelled after building prompt
-    if (await checkIfCancelled(projectId)) {
-      console.log(
-        `[Inngest] Generation cancelled after building prompt: ${projectId}`,
-      );
-      throw new Error("Generation cancelled by user");
-    }
-
     // Step 2: Generate with Gemini
-    await sendProgress(projectId, "[2/8] Generating your app...");
     const generatedText = await step.run("generate-with-gemini", async () => {
+      // Progress + cancel check inside the step so they don't eat into replay overhead
+      await sendProgress(projectId, "[2/8] Generating your app...");
+      if (await checkIfCancelled(projectId)) {
+        throw new Error("Generation cancelled by user");
+      }
       console.log("Using Gemini 3 Flash Preview...");
 
       try {
@@ -3360,17 +3355,12 @@ NAV + MOBILE RULES:
       }
     });
 
-    // Check if cancelled after generation
-    if (await checkIfCancelled(projectId)) {
-      console.log(
-        `[Inngest] Generation cancelled after AI generation: ${projectId}`,
-      );
-      throw new Error("Generation cancelled by user");
-    }
-
     // Step 3: Parse and prepare files
-    await sendProgress(projectId, "[3/8] Parsing and validating code...");
     const parsedProject = await step.run("parse-and-normalize", async () => {
+      await sendProgress(projectId, "[3/8] Parsing and validating code...");
+      if (await checkIfCancelled(projectId)) {
+        throw new Error("Generation cancelled by user");
+      }
       console.log("Parsing AI response, length:", generatedText.length);
 
       let normalizedProject: {
@@ -3645,9 +3635,9 @@ NAV + MOBILE RULES:
     }
 
     // Step 4: Lint and fix code (parallel linting for all files)
-    await sendProgress(projectId, "[4/8] Running code quality checks...");
     // Step 4a: Initial lint check (its own step for 60s budget)
     let lintState = await step.run("lint-check", async () => {
+      await sendProgress(projectId, "[4/8] Running code quality checks...");
       console.log(`Starting linting for ${files.length} files...`);
       const lintResult = await lintAllFiles(files);
       const schemaIssues = collectSupabaseSchemaIssues(
@@ -3739,12 +3729,9 @@ NAV + MOBILE RULES:
     dependencies = lintState.dependencies;
     const fixedFiles = lintState.files;
 
-    await sendProgress(
-      projectId,
-      "[5/8] Validating Next.js compatibility...",
-    );
     // Step 5a: Initial Next.js validation (its own step)
     let nextjsState = await step.run("nextjs-check", async () => {
+      await sendProgress(projectId, "[5/8] Validating Next.js compatibility...");
       // Apply known-good templates before validation so AI-broken
       // infra files (e.g. auth/callback/route.ts) are overwritten first.
       const workingFiles = ensureRequiredFiles(
@@ -3833,13 +3820,10 @@ NAV + MOBILE RULES:
     }
 
     if (typecheckEnabled) {
-      await sendProgress(
-        projectId,
-        "[6/8] Running TypeScript type checks...",
-      );
       const typecheckResult = await step.run(
         "typecheck-and-repair",
         async () => {
+          await sendProgress(projectId, "[6/8] Running TypeScript type checks...");
           const { Sandbox } = await import("e2b");
           let sandbox: InstanceType<typeof Sandbox> | null = null;
 
@@ -4064,9 +4048,8 @@ NAV + MOBILE RULES:
         );
       }
 
-      await sendProgress(projectId, "[7/8] Setting up database...");
-
       await step.run("bootstrap-managed-supabase-schema", async () => {
+        await sendProgress(projectId, "[7/8] Setting up database...");
         for (
           let attempt = 1;
           attempt <= MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS + 1;
@@ -4119,8 +4102,8 @@ NAV + MOBILE RULES:
     }
 
     // Step 6: Notify completion via API
-    await sendProgress(projectId, "[8/8] Finalizing your app...");
     await step.run("notify-completion", async () => {
+      await sendProgress(projectId, "[8/8] Finalizing your app...");
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
         url,
