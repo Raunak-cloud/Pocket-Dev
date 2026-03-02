@@ -30,6 +30,9 @@ import {
 
 const MODEL = "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
+const GENERATED_NEXT_VERSION = "^16.1.6";
+const GENERATED_REACT_VERSION = "^19.2.3";
+const GENERATED_LUCIDE_VERSION = "^0.468.0";
 const MAX_LINT_REPAIR_ATTEMPTS = 4;
 const MAX_SYNTAX_REPAIR_ATTEMPTS = 3;
 const MAX_JSON_REPAIR_ATTEMPTS = 3;
@@ -381,10 +384,10 @@ async function checkIfCancelled(projectId: string): Promise<boolean> {
 
 function getDefaultDependencies(): Record<string, string> {
   return {
-    next: "^15.0.0",
-    react: "^19.0.0",
-    "react-dom": "^19.0.0",
-    "lucide-react": "^0.468.0",
+    next: GENERATED_NEXT_VERSION,
+    react: GENERATED_REACT_VERSION,
+    "react-dom": GENERATED_REACT_VERSION,
+    "lucide-react": GENERATED_LUCIDE_VERSION,
     sonner: "^1.7.0",
     "@radix-ui/react-slot": "^1.0.2",
     "@radix-ui/react-accordion": "^1.2.2",
@@ -3217,9 +3220,9 @@ function buildPackageJsonForTypecheck(
       private: true,
       dependencies: {
         ...deps,
-        next: "^14.0.0",
-        react: "^18.2.0",
-        "react-dom": "^18.2.0",
+        next: GENERATED_NEXT_VERSION,
+        react: GENERATED_REACT_VERSION,
+        "react-dom": GENERATED_REACT_VERSION,
         ...(hasAuth
           ? {
               "@supabase/supabase-js": "^2.57.4",
@@ -3229,8 +3232,8 @@ function buildPackageJsonForTypecheck(
       },
       devDependencies: {
         "@types/node": "^20",
-        "@types/react": "^18",
-        "@types/react-dom": "^18",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
         typescript: "^5",
       },
     },
@@ -3457,6 +3460,7 @@ DASHBOARD MANDATE:
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
+- Runtime dependency policy: if you generate package.json, set "next": "${GENERATED_NEXT_VERSION}", "react": "${GENERATED_REACT_VERSION}", and "react-dom": "${GENERATED_REACT_VERSION}". Do NOT pin Next 14/15.
 - Required files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, components/sidebar.tsx (or inline sidebar in layout).
 - Generate app/not-found.tsx — a styled 404 page matching the dashboard's design. Include sidebar/nav so auth state stays visible.
 - Every sidebar nav link MUST have a real corresponding page file. No dead links.
@@ -3466,11 +3470,12 @@ CORE IMPLEMENTATION RULES:
 - Do not output lockfiles.
 
 AUTHENTICATION & BACKEND RULES:
-  * If auth/backend is NOT requested: do NOT generate sign-in/sign-up/login pages, middleware.ts, auth API routes, or any Supabase imports. Do NOT add "Sign In"/"Login" buttons, cart, wishlist, or favorites UI. Build with zero backend dependencies.
+  * If auth/backend is NOT requested: do NOT generate sign-in/sign-up/login pages, middleware.ts, auth API routes, or any Supabase imports. Do NOT add account-dependent transactional features that imply backend state. Build with zero backend dependencies.
   * When auth IS requested, generate: BOTH app/sign-in/page.tsx AND app/sign-up/page.tsx (always both, linked to each other), a verification email page (app/auth/verify/page.tsx) shown after sign-up with "Check your email" message + "Back to sign in" link (redirect to /auth/verify?email=... after signUp()), middleware.ts, Supabase SSR auth
   * Use env vars: process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY
   * DATABASE CONTRACT: include supabase/schema.sql with CREATE TABLE IF NOT EXISTS + RLS for every .from() table
-  * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes.
+  * PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login). All write/mutate actions (create, update, delete) MUST require auth — check supabase.auth.getUser() before INSERT/UPDATE/DELETE, redirect to sign-in if unauthenticated. Protect write-action routes in middleware.ts (/dashboard, /admin, /new, /create, /edit) but NOT public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for writes. Protected examples include: Add to cart, add/remove favorites or wishlist items, save-for-later, submit comments/reviews, like/follow/bookmark, checkout/order placement, billing updates, and private account/profile changes.
+  * Derive protected routes/actions from behavior, not hardcoded names: if a route or handler performs mutation, billing, private-account access, or user-owned state changes, it must be auth-gated in both UI flow and server/API checks (including Add to cart/favorites/wishlist flows).
 
 PAYMENT RULES (PROXY PATTERN):
   * If payments are NOT requested: do NOT generate any payment code, checkout routes, or payment pages. Display-only pricing is fine.
@@ -3496,6 +3501,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
+- Runtime dependency policy: if you generate package.json, set "next": "${GENERATED_NEXT_VERSION}", "react": "${GENERATED_REACT_VERSION}", and "react-dom": "${GENERATED_REACT_VERSION}". Do NOT pin Next 14/15.
 - Return a complete runnable project with app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
 - Generate app/not-found.tsx — a styled 404 page that matches the site's design (colors, fonts, layout). Include the site's navbar/header so auth state stays visible if auth is enabled. Must have a link back to the home page.
 - EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
@@ -3513,7 +3519,7 @@ AUTHENTICATION & BACKEND RULES:
     - Do NOT generate middleware.ts, auth API routes, or any Supabase auth code
     - Do NOT import from @supabase/ssr, @supabase/supabase-js, or @/lib/supabase anywhere
     - Do NOT add "Sign In", "Sign Up", "Login", "Register", "Log Out" buttons or links in the navbar or anywhere
-    - Do NOT add shopping cart, wishlist, favorites, user profile avatars, "Add to Cart" buttons, or any backend-dependent UI
+    - Do NOT add account-dependent transactional features or any backend-dependent UI
     - Build a fully functional static/public website with NO auth and NO backend dependencies
   * When auth IS requested, generate the COMPLETE auth system yourself:
     - BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them, professional brand-aligned design
@@ -3528,12 +3534,13 @@ AUTHENTICATION & BACKEND RULES:
     - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import from those or create your own client using @supabase/ssr
   * PUBLIC vs PROTECTED ACCESS — CRITICAL:
     - READ/BROWSE pages are PUBLIC: anyone can view product listings, read blog posts, browse content, see landing pages — no login required.
-    - WRITE/MUTATE actions are PROTECTED: creating posts, adding items to cart, submitting reviews, commenting, editing profiles, checkout, placing orders — MUST require authentication.
+    - WRITE/MUTATE actions are PROTECTED: any action that creates/updates/deletes user-scoped, transactional, billing, or private data MUST require authentication. Examples include: Add to cart, add/remove favorites or wishlist items, save-for-later, submit comments/reviews, like/follow/bookmark, start checkout/place orders, manage addresses/payment methods, bookings, and private account/profile updates.
     - Before any Supabase INSERT, UPDATE, or DELETE, check supabase.auth.getUser(). If no authenticated user, redirect to sign-in or show a "Please sign in to continue" prompt — NEVER let anonymous users write data.
     - middleware.ts should protect write-action routes (/dashboard, /account, /admin, /checkout, /new, /create, /edit) but NOT public browse routes (/, /blog, /products, /about).
-    - Forms that write to the database (new blog post, add to cart, submit review) must verify the user is logged in BEFORE allowing submission. Show a sign-in CTA if unauthenticated.
+    - Derive protected routes/actions from behavior, not hardcoded route names or feature names: if a route or handler performs mutation, billing, private-account access, or user-owned state changes, it must be auth-gated in both UI flow and server/API checks (including Add to cart/favorites/wishlist flows).
+    - Forms or action handlers that write to the database must verify the user is logged in BEFORE allowing submission. Show a sign-in CTA if unauthenticated.
     - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive for public content.
-    - Shopping cart, wishlist, favorites must be tied to auth.uid() — anonymous users cannot add items.
+    - Any user-owned saved state must be tied to auth.uid(); unauthenticated users must not mutate persistent or user-scoped state.
 
 PAYMENT RULES (PROXY PATTERN):
   * If payments are NOT requested: do NOT generate any payment code, checkout routes, or payment pages. Display-only pricing is fine.

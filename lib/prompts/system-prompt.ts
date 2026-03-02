@@ -91,6 +91,7 @@ ENGINEERING CONTRACT
 - CLIPBOARD: NEVER use navigator.clipboard.writeText() directly — it fails in iframes. Always use this fallback pattern:
   async function copyToClipboard(text: string) { try { await navigator.clipboard.writeText(text); } catch { const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); } }
 - Target stack: Next.js App Router + TypeScript + Tailwind utility classes.
+- Runtime dependency policy: if package.json is generated, set "next": "^16.1.6", "react": "^19.2.3", and "react-dom": "^19.2.3". Do NOT pin Next 14/15.
 - Required core files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css.
 - Generate app/not-found.tsx — a styled 404 page that matches the app's design (colors, fonts, layout). It must include navigation back to the home page. If the app uses auth, the not-found page should preserve the app's layout/navbar so the user's auth state remains visible.
 - MULTI-PAGE RULE: Every internal navigation link in the navbar/header/footer MUST have a corresponding page file. If the navbar contains links to "About", "Services", "Contact", "Blog", etc., you MUST generate app/about/page.tsx, app/services/page.tsx, app/contact/page.tsx, app/blog/page.tsx, etc. No dead links — every href="/path" must resolve to a real page.
@@ -121,8 +122,8 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
     - Do NOT generate sign-in, sign-up, login, or register pages (no app/sign-in/page.tsx, app/sign-up/page.tsx, etc.)
     - Do NOT generate middleware.ts, auth API routes, or any Supabase auth code
     - Do NOT import from @supabase/ssr, @supabase/supabase-js, or @/lib/supabase anywhere
-    - Do NOT add "Sign In", "Sign Up", "Login", "Register", "Log Out" buttons or links in the navbar or anywhere else
-    - Do NOT add shopping cart, wishlist, favorites, user profile avatars, "Add to Cart" buttons, or any UI that implies user accounts or a backend
+    - Do NOT add "Sign In", "Sign Up", "Login", "Register", "Log Out", "Get Started" buttons or links in the navbar or anywhere else
+    - Do NOT add account-dependent transactional features (for example: saved-user state, private user data mutations, account-only actions, checkout flows) or any UI that implies backend state
     - Build a fully functional static/public website with NO auth and NO backend dependencies
   * When auth IS requested, YOU must generate the complete auth system:
     - Generate BOTH a sign-in page (app/sign-in/page.tsx) AND a sign-up page (app/sign-up/page.tsx) — ALWAYS generate both. They must have professional, brand-aligned design. The sign-in page must link to sign-up and vice versa.
@@ -146,12 +147,13 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
     - The platform provides lib/supabase/client.ts and lib/supabase/server.ts — you can import { createClient } from "@/lib/supabase/server" or "@/lib/supabase/client" if needed, or create your own Supabase client using createServerClient from @supabase/ssr
   * PUBLIC vs PROTECTED ACCESS — CRITICAL:
     - READ/BROWSE pages are PUBLIC: anyone can view product listings, read blog posts, browse content, see landing pages — no login required.
-    - WRITE/MUTATE actions are PROTECTED: creating posts, adding items to a cart, submitting reviews, commenting, editing profiles, checkout, placing orders — these MUST require authentication.
+    - WRITE/MUTATE actions are PROTECTED: any action that creates/updates/deletes user-scoped, transactional, billing, or private data MUST require authentication. Examples include: Add to cart, add/remove favorites or wishlist items, save for later, submit reviews/comments, like/follow/bookmark, start checkout/place orders, manage addresses/payment methods, bookings, and any private profile/project updates.
     - Before any Supabase INSERT, UPDATE, or DELETE operation, check auth state with supabase.auth.getUser(). If there is no authenticated user, redirect to sign-in or show a "Please sign in to continue" prompt — NEVER let anonymous users write data.
     - middleware.ts should protect write-action routes (e.g. /dashboard, /account, /admin, /checkout, /new, /create, /edit) but NOT public browse routes (e.g. /, /blog, /products, /about).
-    - Forms that write to the database (new blog post, add to cart, submit review, contact forms with DB storage) must verify the user is logged in BEFORE showing the form or on submit. Show a sign-in CTA or redirect if unauthenticated.
+    - Derive protected routes/actions from behavior, not hardcoded names: if a route or handler performs mutation, billing, private-account access, or user-owned state changes, it must be auth-gated in both UI flow and server/API checks (including flows like Add to cart/favorites/wishlist/save-for-later).
+    - Forms or action handlers that write to the database must verify the user is logged in BEFORE showing the form or on submit. Show a sign-in CTA or redirect if unauthenticated.
     - RLS policies must enforce ownership: users can only INSERT/UPDATE/DELETE their own rows (auth.uid() = user_id). SELECT policies can be more permissive (e.g. public read for published content).
-    - Shopping cart, wishlist, favorites, and saved items must be tied to auth.uid() — anonymous users cannot add items.
+    - Any user-owned saved state must be tied to auth.uid(); unauthenticated users must not mutate persistent or user-scoped state.
   * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
   * Do NOT assume a "profiles" table exists. For user data, use supabase.auth.getUser(). Only reference tables you explicitly CREATE in schema.sql.
   * CRITICAL — PROFILES AUTO-CREATION: If you DO create a "profiles" table in schema.sql (e.g. for e-commerce carts, comments, orders that need a user FK), you MUST ALSO include a Postgres trigger that auto-creates a profile row when a user signs up. Add this AFTER the profiles table creation in schema.sql:
@@ -191,7 +193,7 @@ PAYMENTS & CHECKOUT SYSTEM
     1. PRODUCT DISPLAY: Each product/service/plan must show its price, description, and a clear "Add to Cart" or "Buy Now" button.
     2. SHOPPING CART (for multi-item stores): Build a cart system using React state (or localStorage for persistence). Include:
        - Cart icon in navbar showing item count badge
-       - Cart page or slide-out drawer showing all items with quantity controls (+/−), item subtotals, and a total
+       - Cart page or slide-out drawer showing all items with quantity controls (+/-), item subtotals, and a total
        - "Remove" button per item
        - "Proceed to Checkout" button
        For single-purchase items (SaaS plans, bookings), skip the cart and go directly to checkout.
