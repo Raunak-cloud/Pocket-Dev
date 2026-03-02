@@ -1881,10 +1881,17 @@ function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
     "app/loading.tsx",
     "app/global-error.tsx",
   ]);
-  const sourceFiles = files.filter((f) =>
-    /\.(tsx|ts|jsx|js)$/.test(f.path.toLowerCase()) &&
-    !TEMPLATE_FILES.has(f.path.replace(/\\/g, "/")),
-  );
+  // Skip config files — they don't contain app logic and their syntax
+  // (e.g. CSS transform strings like 'translateY(-100%)') causes false positives
+  const CONFIG_FILE_RE = /(?:^|\/)(?:tailwind|next|postcss|vite|webpack|eslint|prettier)\.config\.\w+$/;
+  const sourceFiles = files.filter((f) => {
+    const normalized = f.path.replace(/\\/g, "/");
+    return (
+      /\.(tsx|ts|jsx|js)$/.test(normalized.toLowerCase()) &&
+      !TEMPLATE_FILES.has(normalized) &&
+      !CONFIG_FILE_RE.test(normalized)
+    );
+  });
 
   // JS/TS/React/Node/Browser built-in globals — these never need importing
   const GLOBALS = new Set([
@@ -1920,6 +1927,17 @@ function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
     "Extract", "NonNullable", "ReturnType", "Parameters", "InstanceType",
     // React — available via JSX transform (no import needed in modern React)
     "React",
+    // CSS functions — appear inside style strings/template literals and are
+    // not real JS function calls. Listed here as a safety net in case string
+    // stripping misses template literal interpolation edges.
+    "url", "calc", "clamp",
+    "translate", "translateX", "translateY", "translateZ", "translate3d",
+    "rotate", "rotateX", "rotateY", "rotateZ", "rotate3d",
+    "scale", "scaleX", "scaleY", "scaleZ", "scale3d",
+    "skew", "skewX", "skewY",
+    "matrix", "matrix3d", "perspective",
+    "rgb", "rgba", "hsl", "hsla",
+    "cubic", "steps",
   ]);
 
   for (const file of sourceFiles) {
@@ -2038,23 +2056,28 @@ function collectUndefinedReferenceIssues(files: GeneratedFile[]): LintIssue[] {
 
     // 3. Find identifiers used as function calls: identifier(
     // Exclude method calls (preceded by .) — e.g. .select(), .get(), .from()
+    // Strip string literal contents first to avoid false positives from CSS
+    // functions inside strings like "url(/bg.png)", "translateY(-50%)", etc.
+    const strippedContent = content
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''");
     const callRe = /\b([A-Za-z_$]\w*)\s*\(/g;
     const used = new Map<string, number>(); // identifier → first char index
     let callMatch;
-    while ((callMatch = callRe.exec(content)) !== null) {
+    while ((callMatch = callRe.exec(strippedContent)) !== null) {
       const name = callMatch[1];
       // Skip method calls: check if preceded by '.' (with optional whitespace)
-      const charBefore = callMatch.index > 0 ? content[callMatch.index - 1] : "";
+      const charBefore = callMatch.index > 0 ? strippedContent[callMatch.index - 1] : "";
       if (charBefore === ".") continue;
       // Also check for ?. optional chaining
-      if (callMatch.index > 1 && content[callMatch.index - 2] === "?" && charBefore === ".") continue;
+      if (callMatch.index > 1 && strippedContent[callMatch.index - 2] === "?" && charBefore === ".") continue;
       if (!used.has(name)) used.set(name, callMatch.index);
     }
 
     // Find identifiers used as JSX components: <Identifier (capitalized)
     const jsxRe = /<([A-Z]\w*)/g;
     let jsxMatch;
-    while ((jsxMatch = jsxRe.exec(content)) !== null) {
+    while ((jsxMatch = jsxRe.exec(strippedContent)) !== null) {
       const name = jsxMatch[1];
       if (!used.has(name)) used.set(name, jsxMatch.index);
     }
