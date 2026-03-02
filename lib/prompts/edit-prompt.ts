@@ -95,6 +95,7 @@ ${schemaContext}
 STRICT DATABASE RULES:
 - ONLY use tables that are defined above or that you explicitly CREATE in supabase/schema.sql.
 - Do NOT assume a "profiles" table exists unless it is listed above. If you need user info, use auth.users via supabase.auth.getUser() — do NOT invent a profiles table.
+- If a "profiles" table IS listed above or you are adding one, you MUST include a trigger to auto-create profile rows on signup (CREATE OR REPLACE FUNCTION public.handle_new_user() ... AFTER INSERT ON auth.users) and upsert the profile in client code after signUp()/signIn().
 - For .select() joins like .select('*, other_table(*)'), the other_table MUST exist in the schema AND have a foreign key relationship. Never join to a table that doesn't exist.
 - CRITICAL PostgREST FK rule: PostgREST resolves joins ONLY via direct foreign keys. If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). If a profiles table exists and other tables join to it, their user_id must reference profiles(id).
 - Extend the existing schema — do NOT drop or recreate existing tables.

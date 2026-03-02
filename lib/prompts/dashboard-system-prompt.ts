@@ -109,6 +109,10 @@ AUTHENTICATION & BACKEND
 - Auth-aware navbar/sidebar MUST be a "use client" component that checks auth state on mount using supabase.auth.onAuthStateChange() and supabase.auth.getUser(). Show "Sign In" when logged out. When logged in, show user email/name + "Sign Out" button. NEVER rely on server-component auth checks alone for nav UI — the client component must listen for auth changes to update immediately after login/logout.
 - PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login required). All write/mutate actions (create, update, delete data) MUST require authentication — check supabase.auth.getUser() before any INSERT/UPDATE/DELETE and redirect to sign-in if unauthenticated. middleware.ts should protect write-action routes (/dashboard, /admin, /new, /create, /edit) but not public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for write operations.
 - DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with CREATE TABLE statements and RLS policies for every table the code uses.
+- CRITICAL — PROFILES AUTO-CREATION: If you create a "profiles" table in schema.sql (for carts, comments, orders, or any table with a FK to profiles), you MUST also include a trigger that auto-creates a profile row on signup:
+    CREATE OR REPLACE FUNCTION public.handle_new_user() RETURNS trigger AS $$ BEGIN INSERT INTO public.profiles (id, email) VALUES (NEW.id, NEW.email) ON CONFLICT (id) DO NOTHING; RETURN NEW; END; $$ LANGUAGE plpgsql SECURITY DEFINER;
+    CREATE OR REPLACE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+  Also upsert the profile in client code after signUp()/signIn() as a safety net: await supabase.from("profiles").upsert({ id: user.id, email: user.email }, { onConflict: "id" });
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PAYMENTS & CHECKOUT SYSTEM

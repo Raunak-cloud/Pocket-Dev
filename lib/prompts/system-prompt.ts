@@ -154,6 +154,27 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
     - Shopping cart, wishlist, favorites, and saved items must be tied to auth.uid() — anonymous users cannot add items.
   * DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with concrete CREATE TABLE statements for every Supabase .from("<table>") table your code uses, plus RLS policies.
   * Do NOT assume a "profiles" table exists. For user data, use supabase.auth.getUser(). Only reference tables you explicitly CREATE in schema.sql.
+  * CRITICAL — PROFILES AUTO-CREATION: If you DO create a "profiles" table in schema.sql (e.g. for e-commerce carts, comments, orders that need a user FK), you MUST ALSO include a Postgres trigger that auto-creates a profile row when a user signs up. Add this AFTER the profiles table creation in schema.sql:
+    CREATE OR REPLACE FUNCTION public.handle_new_user()
+    RETURNS trigger AS $$
+    BEGIN
+      INSERT INTO public.profiles (id, email)
+      VALUES (NEW.id, NEW.email)
+      ON CONFLICT (id) DO NOTHING;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+    CREATE OR REPLACE TRIGGER on_auth_user_created
+      AFTER INSERT ON auth.users
+      FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+    Additionally, in the client-side code, after successful signUp() or signIn(), upsert the profile row as a safety net:
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.from("profiles").upsert({ id: user.id, email: user.email }, { onConflict: "id" });
+    }
+    This ensures the profile exists before any INSERT into tables with a FK to profiles(id).
   * For .select() relation joins like .select('*, other_table(col1, col2)'), the joined table MUST exist in schema.sql with a proper foreign key. Never join to non-existent tables.
   * CRITICAL PostgREST FK rule: If code does .from("comments").select("*, profiles(...)"), then comments.user_id MUST have a FOREIGN KEY to profiles(id), NOT to auth.users(id). PostgREST resolves joins via direct foreign keys only. If you have a profiles table and other tables need to join to it, their user_id column must reference profiles(id) (not auth.users(id)).
 
