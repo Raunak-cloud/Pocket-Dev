@@ -2635,6 +2635,155 @@ function extractForeignKeysFromSql(
   return fks;
 }
 
+// ── Schema-Code Reconciliation ──────────────────────────────────────────
+// Deterministic patching: compares code references against schema SQL and
+// auto-adds missing tables, columns, RLS policies, and user-signup triggers.
+// Runs before bootstrap so the SQL is complete regardless of what Gemini generated.
+
+function reconcileSchemaWithCode(
+  schemaSql: string,
+  files: GeneratedFile[],
+): string {
+  const codeTableRefs = extractSupabaseTableReferences(files);
+  const schemaTables = extractCreatedTablesFromSql(schemaSql);
+  const codeColumns = extractColumnReferencesFromCode(files);
+  const schemaColumns = extractColumnsFromSchemaTable(schemaSql);
+
+  const patches: string[] = [];
+
+  // 1. Auto-create missing tables referenced in code but absent from schema
+  for (const table of codeTableRefs) {
+    if (schemaTables.has(table)) continue;
+
+    // Infer columns from code usage
+    const cols = codeColumns.get(table) || new Set<string>();
+    const columnDefs: string[] = [`  id uuid primary key default gen_random_uuid()`];
+
+    // If code inserts/selects user_id, add it with auth.users ref
+    if (cols.has("user_id")) {
+      columnDefs.push(`  user_id uuid references auth.users(id) on delete cascade`);
+      cols.delete("user_id");
+    }
+
+    // Common column type inference
+    for (const col of cols) {
+      if (col === "id") continue;
+      const colLower = col.toLowerCase();
+      let colType = "text"; // safe default
+      if (colLower.endsWith("_at") || colLower === "created_at" || colLower === "updated_at") {
+        colType = "timestamptz default now()";
+      } else if (colLower === "email") {
+        colType = "text";
+      } else if (colLower === "price" || colLower === "amount" || colLower === "total" || colLower === "cost") {
+        colType = "numeric(10,2) default 0";
+      } else if (colLower === "quantity" || colLower === "count" || colLower === "stock") {
+        colType = "integer default 0";
+      } else if (colLower.startsWith("is_") || colLower.startsWith("has_") || colLower === "active" || colLower === "published" || colLower === "completed") {
+        colType = "boolean default false";
+      } else if (colLower === "rating" || colLower === "score") {
+        colType = "integer";
+      } else if (colLower.endsWith("_id")) {
+        colType = "uuid";
+      } else if (colLower === "image" || colLower === "avatar" || colLower === "url" || colLower === "image_url" || colLower === "avatar_url" || colLower === "photo") {
+        colType = "text";
+      }
+      columnDefs.push(`  "${col}" ${colType}`);
+    }
+
+    // Always add created_at if not already present
+    if (!cols.has("created_at")) {
+      columnDefs.push(`  created_at timestamptz default now()`);
+    }
+
+    patches.push(`-- auto-generated: table "${table}" referenced in code but missing from schema
+create table if not exists "${table}" (
+${columnDefs.join(",\n")}
+);
+
+alter table "${table}" enable row level security;
+
+-- default RLS: authenticated users can read all, write own rows
+create policy "${table}_select_policy" on "${table}" for select using (true);
+create policy "${table}_insert_policy" on "${table}" for insert with check (auth.uid() = user_id);
+create policy "${table}_update_policy" on "${table}" for update using (auth.uid() = user_id);
+create policy "${table}_delete_policy" on "${table}" for delete using (auth.uid() = user_id);`);
+
+    // Track it so column checks below see this table
+    schemaTables.add(table);
+    schemaColumns.set(table, new Set(columnDefs.map((d) => {
+      const m = d.trim().match(/^"?(\w+)"?/);
+      return m ? m[1] : "";
+    }).filter(Boolean)));
+  }
+
+  // 2. Auto-add missing columns to existing tables
+  for (const [table, codeCols] of codeColumns) {
+    if (!schemaTables.has(table)) continue; // table was just created above or doesn't exist
+    const existingCols = schemaColumns.get(table) || new Set<string>();
+
+    for (const col of codeCols) {
+      if (col === "id" || col === "*" || existingCols.has(col)) continue;
+
+      const colLower = col.toLowerCase();
+      let colType = "text";
+      if (colLower.endsWith("_at")) colType = "timestamptz";
+      else if (colLower === "price" || colLower === "amount" || colLower === "total") colType = "numeric(10,2)";
+      else if (colLower === "quantity" || colLower === "count" || colLower === "stock") colType = "integer default 0";
+      else if (colLower.startsWith("is_") || colLower.startsWith("has_")) colType = "boolean default false";
+      else if (colLower.endsWith("_id")) colType = "uuid";
+
+      patches.push(
+        `-- auto-generated: column "${col}" used in code but missing from "${table}"\ndo $$ begin\n  alter table "${table}" add column if not exists "${col}" ${colType};\nexception when others then null;\nend $$;`,
+      );
+    }
+  }
+
+  // 3. Check for tables with user_id FK that might be missing RLS
+  const schemaLower = schemaSql.toLowerCase();
+  for (const table of schemaTables) {
+    const existingCols = schemaColumns.get(table) || new Set<string>();
+    if (!existingCols.has("user_id")) continue;
+
+    // Check if RLS is already enabled for this table in the original schema
+    const rlsPattern = new RegExp(
+      `alter\\s+table\\s+(?:public\\.)?"?${table}"?\\s+enable\\s+row\\s+level\\s+security`,
+      "i",
+    );
+    if (rlsPattern.test(schemaLower)) continue;
+
+    // Also check if we just added it in patches
+    const patchStr = patches.join("\n").toLowerCase();
+    if (patchStr.includes(`alter table "${table}" enable row level security`)) continue;
+
+    patches.push(`-- auto-generated: RLS for "${table}" (has user_id but no RLS detected)
+do $$ begin
+  alter table "${table}" enable row level security;
+exception when others then null;
+end $$;
+
+do $$ begin
+  execute 'create policy "${table}_select_policy" on "${table}" for select using (true)';
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  execute 'create policy "${table}_insert_policy" on "${table}" for insert with check (auth.uid() = user_id)';
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  execute 'create policy "${table}_update_policy" on "${table}" for update using (auth.uid() = user_id)';
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  execute 'create policy "${table}_delete_policy" on "${table}" for delete using (auth.uid() = user_id)';
+exception when duplicate_object then null;
+end $$;`);
+  }
+
+  if (patches.length === 0) return schemaSql;
+
+  return `${schemaSql}\n\n-- ═══ Auto-reconciled patches (code → schema) ═══\n${patches.join("\n\n")}`;
+}
+
 function collectSupabaseSchemaIssues(
   files: GeneratedFile[],
   requirements: IntegrationRequirements,
@@ -2940,7 +3089,75 @@ end $$;`;
       ? `\n-- phase 3: ensure foreign key constraints match schema (fixes PostgREST join errors)\n${fkRepairStatements.join("\n")}\n`
       : "";
 
-  return `${prelude}\n\n${policyPrelude}${withGuardedPolicies}\n${alterPhase}${fkPhase}`;
+  // Phase 4: Auto-inject handle_new_user() trigger for any user-linked table.
+  // Detects tables whose `id` column references auth.users(id) — these are
+  // "profiles-like" tables that need a row auto-created on signup.
+  // This is infrastructure-level, so it works regardless of what Gemini generates.
+  const userLinkedTables: string[] = [];
+  const userTableRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public)\.)?"?(\w+)"?\s*\(([\s\S]*?)\);/gi;
+  for (const tblMatch of schemaSql.matchAll(userTableRegex)) {
+    const tblName = tblMatch[1];
+    const body = tblMatch[2];
+    // Check if this table has `id` referencing auth.users(id)
+    const hasAuthUserIdRef = /\bid\b[^,]*\breferences\s+auth\.users\s*\(\s*id\s*\)/i.test(body);
+    if (hasAuthUserIdRef) {
+      userLinkedTables.push(tblName);
+    }
+  }
+
+  let triggerPhase = "";
+  if (userLinkedTables.length > 0) {
+    // Find which columns exist in these tables (for the INSERT)
+    const triggerBlocks: string[] = [];
+    for (const tblName of userLinkedTables) {
+      // Extract column names from the table definition to build the INSERT
+      const tblRegex = new RegExp(
+        `create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:(?:public)\\.)?\"?${tblName}\"?\\s*\\(([\\s\\S]*?)\\);`,
+        "i",
+      );
+      const tblBody = schemaSql.match(tblRegex);
+      const cols: string[] = ["id"];
+      if (tblBody) {
+        for (const line of tblBody[1].split("\n")) {
+          const t = line.trim();
+          if (!t || /^(constraint|primary|foreign|unique|check)\b/i.test(t)) continue;
+          const colMatch = t.match(/^"?(\w+)"?/);
+          if (!colMatch) continue;
+          const col = colMatch[1].toLowerCase();
+          if (col === "id") continue;
+          if (col === "email") cols.push("email");
+        }
+      }
+
+      const insertCols = cols.join(", ");
+      const insertVals = cols.map((c) => (c === "id" ? "NEW.id" : c === "email" ? "NEW.email" : `NULL`)).join(", ");
+
+      triggerBlocks.push(`-- auto-create row in "${tblName}" on signup
+create or replace function public.handle_new_user_${tblName}()
+returns trigger as $func$
+begin
+  insert into public."${tblName}" (${insertCols})
+  values (${insertVals})
+  on conflict (id) do nothing;
+  return NEW;
+end;
+$func$ language plpgsql security definer;
+
+do $$ begin
+  drop trigger if exists on_auth_user_created_${tblName} on auth.users;
+  create trigger on_auth_user_created_${tblName}
+    after insert on auth.users
+    for each row execute function public.handle_new_user_${tblName}();
+exception when others then
+  raise notice 'Trigger for ${tblName} could not be created: %', SQLERRM;
+end $$;`);
+    }
+
+    triggerPhase = `\n-- phase 4: auto-create user rows on signup for user-linked tables\n${triggerBlocks.join("\n\n")}\n`;
+  }
+
+  return `${prelude}\n\n${policyPrelude}${withGuardedPolicies}\n${alterPhase}${fkPhase}${triggerPhase}`;
 }
 
 function buildTableCreationPhaseSql(schemaSql: string): string {
@@ -4089,6 +4306,17 @@ NAV + MOBILE RULES:
 
       await step.run("bootstrap-managed-supabase-schema", async () => {
         await sendProgress(projectId, "[7/8] Setting up database...");
+
+        // Auto-reconcile schema with code before bootstrap.
+        // Deterministically patches missing tables, columns, RLS policies.
+        schemaFile.content = reconcileSchemaWithCode(schemaFile.content, finalFiles);
+        const reconciledIdx = finalFiles.findIndex(
+          (f) => f.path.replace(/\\/g, "/").toLowerCase() === "supabase/schema.sql",
+        );
+        if (reconciledIdx !== -1) {
+          finalFiles[reconciledIdx] = { ...finalFiles[reconciledIdx], content: schemaFile.content };
+        }
+
         for (
           let attempt = 1;
           attempt <= MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS + 1;
