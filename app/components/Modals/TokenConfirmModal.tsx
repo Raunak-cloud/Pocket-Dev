@@ -8,6 +8,7 @@ interface TokenConfirmModalProps {
   baseCost: number;
   authCost: number;
   databaseCost: number;
+  paymentCost: number;
   appBalance: number;
   skipEditTokenConfirm: boolean;
   onSkipEditTokenConfirmChange: (skip: boolean) => void;
@@ -26,6 +27,7 @@ export function TokenConfirmModal({
   baseCost,
   authCost,
   databaseCost,
+  paymentCost,
   appBalance,
   skipEditTokenConfirm,
   onSkipEditTokenConfirmChange,
@@ -137,6 +139,16 @@ export function TokenConfirmModal({
                     </div>
                   )}
                 </>
+              )}
+              {paymentCost > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">
+                    Payment integration (Stripe)
+                  </span>
+                  <span className="font-medium text-text-primary">
+                    -{fmt(paymentCost)}
+                  </span>
+                </div>
               )}
             </div>
             <div className="flex items-center justify-between text-xs text-text-tertiary pt-2 mt-2 border-t border-border-secondary/50">

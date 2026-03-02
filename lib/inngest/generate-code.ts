@@ -384,10 +384,11 @@ function getDefaultDependencies(): Record<string, string> {
     next: "^15.0.0",
     react: "^19.0.0",
     "react-dom": "^19.0.0",
-    "framer-motion": "^11.11.17",
     "lucide-react": "^0.468.0",
-    "react-scroll-parallax": "^3.4.5",
+    sonner: "^1.7.0",
     "@radix-ui/react-slot": "^1.0.2",
+    "@radix-ui/react-accordion": "^1.2.2",
+    "@radix-ui/react-dialog": "^1.1.4",
     "class-variance-authority": "^0.7.0",
     clsx: "^2.0.0",
     "tailwind-merge": "^2.2.0",
@@ -998,7 +999,12 @@ export function createClient() {
     );
   }
 
-  return createBrowserClient(supabaseUrl, supabasePublishableKey);
+  return createBrowserClient(supabaseUrl, supabasePublishableKey, {
+    cookieOptions: {
+      sameSite: "none" as const,
+      secure: true,
+    },
+  });
 }
 `;
     }
@@ -1057,7 +1063,7 @@ export async function createClient() {
         if (!cookieStore) return;
         try {
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            cookieStore.set(name, value, { ...options, sameSite: "none" as const, secure: true });
           });
         } catch {
           // setAll can be called from a Server Component where cookie mutation is not allowed.
@@ -1134,6 +1140,16 @@ ${canonicalSupabaseAnonDecl}
           (m) =>
             `${m}\n  if (!supabaseUrl || !supabaseAnonKey) {\n    return NextResponse.next();\n  }`,
         );
+    }
+
+    // Ensure middleware cookies use SameSite=None for iframe compatibility.
+    // Matches patterns like: response.cookies.set(name, value, options)
+    // and replaces with: response.cookies.set(name, value, { ...options, sameSite: "none" as const, secure: true })
+    if (!/sameSite.*none/.test(patched)) {
+      patched = patched.replace(
+        /response\.cookies\.set\(\s*name\s*,\s*value\s*,\s*options\s*\)/g,
+        'response.cookies.set(name, value, { ...options, sameSite: "none" as const, secure: true })',
+      );
     }
 
     return patched;
@@ -1402,7 +1418,7 @@ export async function GET(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
+            response.cookies.set(name, value, { ...options, sameSite: "none" as const, secure: true });
           });
         },
       },
@@ -3854,7 +3870,7 @@ NAV + MOBILE RULES:
             // 1. Create sandbox
             console.log("[E2B Typecheck] Creating E2B sandbox...");
             const sandboxStart = Date.now();
-            sandbox = await Sandbox.create("code-interpreter-v1", { timeoutMs: 5 * 60 * 1000 });
+            sandbox = await Sandbox.create("code-interpreter-v1", { timeoutMs: 30 * 60 * 1000 });
             console.log(`[E2B Typecheck] Sandbox created in ${Date.now() - sandboxStart}ms (id: ${sandbox.sandboxId})`);
 
             // 2. Build package.json + tsconfig.json

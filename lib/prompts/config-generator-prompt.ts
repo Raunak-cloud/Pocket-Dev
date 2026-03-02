@@ -122,7 +122,7 @@ SECTION TYPES — each section object must have "type" and "variant" fields, plu
 17. custom (variant: custom) — for ANYTHING not covered above (charts, animations, parallax, counters, maps, embeds, etc.)
     Required: componentName (PascalCase, e.g. "RevenueChart"), code (full React component source)
     The "code" field is a complete React/TSX component string with imports and a default export.
-    Available imports: react, next/link, next/image, framer-motion, recharts, lucide-react, react-countup, react-type-animation, react-intersection-observer, embla-carousel-react, date-fns, @radix-ui/react-accordion, @radix-ui/react-tabs, @radix-ui/react-dialog, @radix-ui/react-tooltip, @radix-ui/react-progress, class-variance-authority, clsx, tailwind-merge. Tailwind CSS for styling.
+    Available imports: react, next/link, next/image, recharts, lucide-react, sonner, react-countup, react-type-animation, react-intersection-observer, embla-carousel-react, date-fns, @radix-ui/react-accordion, @radix-ui/react-tabs, @radix-ui/react-dialog, @radix-ui/react-tooltip, @radix-ui/react-progress, class-variance-authority, clsx, tailwind-merge. Tailwind CSS for styling.
     The component must have a default export. Use "use client" directive if it uses hooks/state/effects.
     Keep code concise — under 80 lines per component.
 

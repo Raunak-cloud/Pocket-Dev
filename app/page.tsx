@@ -54,9 +54,10 @@ import type {
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
 const BASE_GENERATION_APP_COST = 2;
-const BASE_EDIT_APP_COST = 0.1;
+const BASE_EDIT_APP_COST = 0.20;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
+const PAYMENT_INTEGRATION_COST = 2;
 const DEFAULT_BACKEND_AUTH = ["username-password"];
 const DEFAULT_BACKEND_DATABASE = [
   "supabase-postgres",
@@ -1613,14 +1614,19 @@ function ReactGeneratorContent() {
   const roundToken = (value: number) => Math.round(value * 100) / 100;
   const getEditBackendAddOnCosts = () => {
     if (!project) {
-      return { authCost: 0, databaseCost: 0, total: 0 };
+      return { authCost: 0, databaseCost: 0, paymentCost: 0, total: 0 };
     }
 
     const hadBackend = inferProjectIntegrations(project).hasBackend;
     const wantsBackend = isEditBackendSelected;
 
+    // Payment cost is independent of backend add-on
+    const hadPayments = readStoredIntegrations(project).paymentsEnabled === true;
+    const paymentCost =
+      !hadPayments && paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0;
+
     if (hadBackend || !wantsBackend) {
-      return { authCost: 0, databaseCost: 0, total: 0 };
+      return { authCost: 0, databaseCost: 0, paymentCost, total: roundToken(paymentCost) };
     }
 
     const authSelection =
@@ -1635,14 +1641,16 @@ function ReactGeneratorContent() {
     return {
       authCost,
       databaseCost,
-      total: roundToken(authCost + databaseCost),
+      paymentCost,
+      total: roundToken(authCost + databaseCost + paymentCost),
     };
   };
   const getGenerationAppCost = () =>
     roundToken(
       BASE_GENERATION_APP_COST +
         getAuthAppCost(currentAppAuth) +
-        getDatabaseAppCost(currentAppDatabase),
+        getDatabaseAppCost(currentAppDatabase) +
+        (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0),
     );
   const getEditAppCost = () =>
     roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total);
@@ -4947,7 +4955,7 @@ ${pdfUrlList}
           (() => {
             const isGeneration = showTokenConfirmModal === "generation";
             const editAddOnCosts = isGeneration
-              ? { authCost: 0, databaseCost: 0 }
+              ? { authCost: 0, databaseCost: 0, paymentCost: 0 }
               : getEditBackendAddOnCosts();
             const authCost = isGeneration
               ? getAuthAppCost(currentAppAuth)
@@ -4955,10 +4963,13 @@ ${pdfUrlList}
             const databaseCost = isGeneration
               ? getDatabaseAppCost(currentAppDatabase)
               : editAddOnCosts.databaseCost;
+            const paymentCost = isGeneration
+              ? (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0)
+              : editAddOnCosts.paymentCost;
             const baseCost = isGeneration
               ? BASE_GENERATION_APP_COST
               : BASE_EDIT_APP_COST;
-            const totalCost = baseCost + authCost + databaseCost;
+            const totalCost = baseCost + authCost + databaseCost + paymentCost;
             const appBalance = userData?.appTokens || 0;
 
             const handleConfirm = () => {
@@ -4978,6 +4989,7 @@ ${pdfUrlList}
                 baseCost={baseCost}
                 authCost={authCost}
                 databaseCost={databaseCost}
+                paymentCost={paymentCost}
                 appBalance={appBalance}
                 skipEditTokenConfirm={skipEditTokenConfirm}
                 onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
@@ -5843,7 +5855,7 @@ ${pdfUrlList}
         (() => {
           const isGeneration = showTokenConfirmModal === "generation";
           const editAddOnCosts = isGeneration
-            ? { authCost: 0, databaseCost: 0 }
+            ? { authCost: 0, databaseCost: 0, paymentCost: 0 }
             : getEditBackendAddOnCosts();
           const authCost = isGeneration
             ? getAuthAppCost(currentAppAuth)
@@ -5851,10 +5863,13 @@ ${pdfUrlList}
           const databaseCost = isGeneration
             ? getDatabaseAppCost(currentAppDatabase)
             : editAddOnCosts.databaseCost;
+          const paymentCost = isGeneration
+            ? (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0)
+            : editAddOnCosts.paymentCost;
           const baseCost = isGeneration
             ? BASE_GENERATION_APP_COST
             : BASE_EDIT_APP_COST;
-          const totalCost = baseCost + authCost + databaseCost;
+          const totalCost = baseCost + authCost + databaseCost + paymentCost;
           const appBalance = userData?.appTokens || 0;
 
           const handleConfirm = () => {
@@ -5874,6 +5889,7 @@ ${pdfUrlList}
               baseCost={baseCost}
               authCost={authCost}
               databaseCost={databaseCost}
+              paymentCost={paymentCost}
               appBalance={appBalance}
               skipEditTokenConfirm={skipEditTokenConfirm}
               onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}

@@ -492,11 +492,14 @@ export async function POST(request: NextRequest) {
 
     if (!createProjectRes.ok) {
       const err = await createProjectRes.json();
+      const errCode = err.error?.code || "";
+      const errMsg = (err.error?.message || "").toLowerCase();
       // 409 / duplicate name means project already exists — fine
-      if (
-        err.error?.code !== "project_already_exists" &&
-        err.error?.code !== "duplicate-project-name"
-      ) {
+      const alreadyExists =
+        errCode === "project_already_exists" ||
+        errCode === "duplicate-project-name" ||
+        errMsg.includes("already exists");
+      if (!alreadyExists) {
         throw new Error(
           `Failed to create Vercel project: ${err.error?.message || JSON.stringify(err)}`,
         );

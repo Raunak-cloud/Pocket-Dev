@@ -69,9 +69,10 @@ CHARTS (use recharts — include "recharts": "^2.12.7" in dependencies):
 - Charts must have realistic mock data arrays matching the domain.
 
 FORMS & MODALS:
-- Create/edit forms in modal dialogs (dialog overlay, not full page unless complex).
+- Create/edit forms in modal dialogs using @radix-ui/react-dialog (Root, Trigger, Portal, Overlay, Content, Close). Add a semi-transparent overlay (fixed inset-0 bg-black/50) and centered content panel with rounded-lg and shadow.
 - Form inputs: proper labels, placeholder text, validation feedback.
-- Submit button with loading state.
+- LOADING STATES ON ALL ACTION BUTTONS: Every button that triggers an async operation (submit, save, delete, create, update, export, etc.) MUST have a loading state. Use isLoading boolean state, disable the button while loading (disabled={isLoading} + opacity-50 cursor-not-allowed), and show a spinner or "Processing..." text. This prevents double-clicks.
+- Show success/error feedback using sonner toast: import { toast } from "sonner" and call toast.success("Saved!") / toast.error("Failed"). Add <Toaster /> in layout.tsx.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VISUAL DESIGN
@@ -87,6 +88,8 @@ VISUAL DESIGN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ENGINEERING CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- CLIPBOARD: NEVER use navigator.clipboard.writeText() directly — it fails in iframes. Always use this fallback pattern:
+  async function copyToClipboard(text: string) { try { await navigator.clipboard.writeText(text); } catch { const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); } }
 - Stack: Next.js App Router + TypeScript + Tailwind utility classes.
 - Required files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/globals.css, app/loading.tsx, components/sidebar.tsx (or equivalent sidebar component).
 - Generate app/not-found.tsx — a styled 404 page matching the dashboard's design. Include sidebar/nav so auth state stays visible.
@@ -101,17 +104,20 @@ ENGINEERING CONTRACT
 AUTHENTICATION & BACKEND
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - If the user does NOT explicitly request authentication/backend: do NOT generate sign-in/sign-up/login pages, do NOT generate middleware.ts or auth API routes, do NOT import from @supabase/ssr or @supabase/supabase-js or @/lib/supabase, do NOT add "Sign In"/"Login"/"Register" buttons or links anywhere, do NOT add cart/wishlist/favorites UI. Build with NO auth and NO backend dependencies.
-- When auth IS requested: generate BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>. Generate middleware.ts for protected routes using Supabase SSR auth with process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY. CRITICAL middleware.ts pattern — use EXACTLY this setAll: cookies: { getAll() { return request.cookies.getAll(); }, setAll(cookiesToSet) { cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value)); response = NextResponse.next({ request }); cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options)); } }. Initialize response with NextResponse.next({ request }) — NOT { request: { headers: request.headers } }. When redirecting for protected routes, copy cookies: response.cookies.getAll().forEach(c => redirect.cookies.set(c.name, c.value)). Broad matcher: matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'].
+- When auth IS requested: generate BOTH sign-in (app/sign-in/page.tsx) AND sign-up (app/sign-up/page.tsx) pages — ALWAYS generate both, with links between them. Generate a verification email page (app/auth/verify/page.tsx) shown after sign-up — displays "Check your email" with the user's email, instruction to click the verification link, and a "Back to sign in" link. After supabase.auth.signUp() succeeds, redirect to /auth/verify?email=<user_email>. Generate middleware.ts for protected routes using Supabase SSR auth with process.env.NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY. CRITICAL middleware.ts pattern — use EXACTLY this setAll (note sameSite/secure for iframe compatibility): cookies: { getAll() { return request.cookies.getAll(); }, setAll(cookiesToSet) { cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value)); response = NextResponse.next({ request }); cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, { ...options, sameSite: "none" as const, secure: true })); } }. Initialize response with NextResponse.next({ request }) — NOT { request: { headers: request.headers } }. When redirecting for protected routes, copy cookies: response.cookies.getAll().forEach(c => redirect.cookies.set(c.name, c.value)). Broad matcher: matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'].
 - After successful signInWithPassword(), redirect using window.location.href (NOT router.push) so the full page re-renders with the new session cookie. Same for signOut() — use window.location.href = "/" to force a full page reload.
 - Auth-aware navbar/sidebar MUST be a "use client" component that checks auth state on mount using supabase.auth.onAuthStateChange() and supabase.auth.getUser(). Show "Sign In" when logged out. When logged in, show user email/name + "Sign Out" button. NEVER rely on server-component auth checks alone for nav UI — the client component must listen for auth changes to update immediately after login/logout.
 - PUBLIC vs PROTECTED ACCESS: Read-only/browse pages are public (no login required). All write/mutate actions (create, update, delete data) MUST require authentication — check supabase.auth.getUser() before any INSERT/UPDATE/DELETE and redirect to sign-in if unauthenticated. middleware.ts should protect write-action routes (/dashboard, /admin, /new, /create, /edit) but not public browse routes. RLS policies must enforce ownership (auth.uid() = user_id) for write operations.
 - DATABASE CONTRACT: when persistence is requested, include supabase/schema.sql with CREATE TABLE statements and RLS policies for every table the code uses.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PAYMENTS & STRIPE (PROXY PATTERN)
+PAYMENTS & CHECKOUT SYSTEM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- If NOT requested: no Stripe code, no checkout routes, no payment pages. Display-only pricing is fine.
-- If requested: Do NOT add "stripe" dependency. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code. Instead, Buy/Subscribe buttons POST to the platform proxy: \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl, cancelUrl, customerEmail? }. Redirect to the returned { url }. Generate static app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customer_email.
+- AUTO-DETECT: If the dashboard is for an e-commerce store, SaaS with pricing/subscriptions, marketplace, or any app where users purchase products/services — build the full checkout system automatically. Do NOT wait for explicit "add payments" request.
+- If purely informational (analytics dashboard, admin panel with no purchases): no payment code.
+- Do NOT add "stripe" dependency or import from "stripe". No server-side Stripe code.
+- FULL CHECKOUT FLOW: Product/plan display with prices and "Buy"/"Subscribe" buttons → Cart page or checkout summary → Payment API call → Success/Cancel pages.
+- Payment API: POST to \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }. Redirect to returned { url }. Generate app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customerEmail.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MOCK DATA QUALITY

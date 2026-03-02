@@ -70,6 +70,24 @@ export default function E2BSandboxPreview({
 
     const abortController = new AbortController();
 
+    const startSandbox = async (id: string | null, files: Record<string, string>) => {
+      const response = await fetch("/api/sandbox/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sandboxId: id, files }),
+        signal: abortController.signal,
+      });
+
+      if (abortController.signal.aborted) return null;
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Sandbox start failed (${response.status})`);
+      }
+
+      return response.json();
+    };
+
     const init = async () => {
       try {
         setLoadingState("connecting");
@@ -80,23 +98,22 @@ export default function E2BSandboxPreview({
 
         setLoadingState("installing");
 
-        const response = await fetch("/api/sandbox/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sandboxId, files }),
-          signal: abortController.signal,
-        });
-
-        if (abortController.signal.aborted) return;
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          throw new Error(data.error || `Sandbox start failed (${response.status})`);
+        let result;
+        try {
+          result = await startSandbox(sandboxId, files);
+        } catch (firstErr) {
+          // If the original sandbox expired, retry with a fresh one
+          if (sandboxId && sandboxId !== "create-new") {
+            console.warn("[E2B Preview] First attempt failed, retrying with fresh sandbox:", firstErr);
+            result = await startSandbox("create-new", files);
+          } else {
+            throw firstErr;
+          }
         }
 
-        const { previewUrl: url, sandboxId: activeSandboxId } = await response.json();
+        if (!result || abortController.signal.aborted) return;
 
-        if (abortController.signal.aborted) return;
+        const { previewUrl: url, sandboxId: activeSandboxId } = result;
 
         // Update the ref to the actual sandbox ID (may differ if a fresh one was created)
         if (activeSandboxId) {
