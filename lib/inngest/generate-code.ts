@@ -3370,7 +3370,7 @@ NAV + MOBILE RULES:
 
     // Step 3: Parse and prepare files
     await sendProgress(projectId, "[3/8] Parsing and validating code...");
-    const parsedProject = await step.run("parse-generated-code", async () => {
+    const parsedProject = await step.run("parse-and-normalize", async () => {
       console.log("Parsing AI response, length:", generatedText.length);
 
       let normalizedProject: {
@@ -3478,29 +3478,23 @@ NAV + MOBILE RULES:
         }
       }
 
-      for (
-        let attempt = 1;
-        attempt <= MAX_SYNTAX_REPAIR_ATTEMPTS + 1;
-        attempt++
-      ) {
-        const syntaxIssues = collectSyntaxIssues(files);
-        if (syntaxIssues.length === 0) {
-          break;
-        }
+      console.log(`Parsed ${files.length} files successfully`);
+      return { files, dependencies };
+    });
+    let files = parsedProject.files;
+    let dependencies = parsedProject.dependencies;
 
-        if (attempt > MAX_SYNTAX_REPAIR_ATTEMPTS) {
-          const first = syntaxIssues[0];
-          throw new Error(
-            `Syntax repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
-          );
-        }
+    // Syntax repair — each attempt gets its own step (60s budget)
+    for (let attempt = 1; attempt <= MAX_SYNTAX_REPAIR_ATTEMPTS; attempt++) {
+      const syntaxIssues = collectSyntaxIssues(files);
+      if (syntaxIssues.length === 0) break;
 
+      const repaired = await step.run(`syntax-repair-${attempt}`, async () => {
         console.warn(
           `[SyntaxRepair] Attempt ${attempt} - ${syntaxIssues.length} syntax issue(s).`,
         );
-
         try {
-          const repaired = await repairProjectFromLintFeedback({
+          const result = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
             files,
             dependencies,
@@ -3509,38 +3503,42 @@ NAV + MOBILE RULES:
             managedAuthConfig,
             systemPrompt: repairSystemPrompt,
           });
-          files = applyKnownImportSpecifierFixups(repaired.files);
-          dependencies = repaired.dependencies;
+          return {
+            files: applyKnownImportSpecifierFixups(result.files),
+            dependencies: result.dependencies,
+          };
         } catch (repairErr) {
           console.warn(
             `[SyntaxRepair] Repair attempt ${attempt} failed:`,
             repairErr instanceof Error ? repairErr.message : repairErr,
           );
+          return { files, dependencies };
         }
+      });
+      files = repaired.files;
+      dependencies = repaired.dependencies;
+    }
+    {
+      const remainingSyntax = collectSyntaxIssues(files);
+      if (remainingSyntax.length > 0) {
+        const first = remainingSyntax[0];
+        throw new Error(
+          `Syntax repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+        );
       }
+    }
 
-      for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS + 1; attempt++) {
-        const uxIssues = collectResponsiveAndNavIssues(files);
-        if (uxIssues.length === 0) {
-          break;
-        }
+    // UX repair — each attempt gets its own step
+    for (let attempt = 1; attempt <= MAX_UX_REPAIR_ATTEMPTS; attempt++) {
+      const uxIssues = collectResponsiveAndNavIssues(files);
+      if (uxIssues.length === 0) break;
 
-        if (attempt > MAX_UX_REPAIR_ATTEMPTS) {
-          const first = uxIssues[0];
-          console.warn(
-            `[UXRepair] Max attempts reached. Continuing with unresolved UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
-          );
-          // UX repair exhausted — continue silently.
-          break;
-        }
-
+      const repaired = await step.run(`ux-repair-${attempt}`, async () => {
         console.warn(
           `[UXRepair] Attempt ${attempt} - ${uxIssues.length} responsive/navigation issue(s).`,
         );
-        // UX repair in progress — no user-facing message.
-
         try {
-          const repaired = await repairProjectFromLintFeedback({
+          const result = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
             files,
             dependencies,
@@ -3549,43 +3547,45 @@ NAV + MOBILE RULES:
             managedAuthConfig,
             systemPrompt: repairSystemPrompt,
           });
-          files = applyKnownImportSpecifierFixups(repaired.files);
-          dependencies = repaired.dependencies;
+          return {
+            files: applyKnownImportSpecifierFixups(result.files),
+            dependencies: result.dependencies,
+          };
         } catch (repairErr) {
           console.warn(
             `[UXRepair] Repair attempt ${attempt} failed:`,
             repairErr instanceof Error ? repairErr.message : repairErr,
           );
+          return { files, dependencies };
         }
-      }
-
-      for (
-        let attempt = 1;
-        attempt <= MAX_SCHEMA_REPAIR_ATTEMPTS + 1;
-        attempt++
-      ) {
-        const schemaIssues = collectSupabaseSchemaIssues(
-          files,
-          integrationRequirements,
+      });
+      files = repaired.files;
+      dependencies = repaired.dependencies;
+    }
+    {
+      const remainingUx = collectResponsiveAndNavIssues(files);
+      if (remainingUx.length > 0) {
+        const first = remainingUx[0];
+        console.warn(
+          `[UXRepair] Max attempts reached. Continuing with unresolved UX issues: ${first.path}:${first.line}:${first.column} ${first.message}`,
         );
-        if (schemaIssues.length === 0) {
-          break;
-        }
+      }
+    }
 
-        if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
-          const first = schemaIssues[0];
-          throw new Error(
-            `Schema repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
-          );
-        }
+    // Schema repair — each attempt gets its own step
+    for (let attempt = 1; attempt <= MAX_SCHEMA_REPAIR_ATTEMPTS; attempt++) {
+      const schemaIssues = collectSupabaseSchemaIssues(
+        files,
+        integrationRequirements,
+      );
+      if (schemaIssues.length === 0) break;
 
+      const repaired = await step.run(`schema-repair-${attempt}`, async () => {
         console.warn(
           `[SchemaRepair] Attempt ${attempt} - ${schemaIssues.length} schema issue(s).`,
         );
-        // Schema repair in progress — no user-facing message.
-
         try {
-          const repaired = await repairProjectFromLintFeedback({
+          const result = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
             files,
             dependencies,
@@ -3594,22 +3594,35 @@ NAV + MOBILE RULES:
             managedAuthConfig,
             systemPrompt: repairSystemPrompt,
           });
-          files = applyKnownImportSpecifierFixups(repaired.files);
-          dependencies = repaired.dependencies;
+          return {
+            files: applyKnownImportSpecifierFixups(result.files),
+            dependencies: result.dependencies,
+          };
         } catch (repairErr) {
           console.warn(
             `[SchemaRepair] Repair attempt ${attempt} failed:`,
             repairErr instanceof Error ? repairErr.message : repairErr,
           );
+          return { files, dependencies };
         }
+      });
+      files = repaired.files;
+      dependencies = repaired.dependencies;
+    }
+    {
+      const remainingSchema = collectSupabaseSchemaIssues(
+        files,
+        integrationRequirements,
+      );
+      if (remainingSchema.length > 0) {
+        const first = remainingSchema[0];
+        throw new Error(
+          `Schema repair failed. First issue: ${first.path}:${first.line}:${first.column} ${first.message}`,
+        );
       }
+    }
 
-      validateSyntaxOrThrow(files);
-      console.log(`Parsed ${files.length} files successfully`);
-      return { files, dependencies };
-    });
-    let files = parsedProject.files;
-    let dependencies = parsedProject.dependencies;
+    validateSyntaxOrThrow(files);
 
     if (
       !managedAuthConfig &&
@@ -3633,148 +3646,179 @@ NAV + MOBILE RULES:
 
     // Step 4: Lint and fix code (parallel linting for all files)
     await sendProgress(projectId, "[4/8] Running code quality checks...");
-    const { fixedFiles } = await step.run("lint-and-repair", async () => {
+    // Step 4a: Initial lint check (its own step for 60s budget)
+    let lintState = await step.run("lint-check", async () => {
       console.log(`Starting linting for ${files.length} files...`);
-      let workingFiles = files;
-      let workingDependencies = dependencies;
-      let lintResult = await lintAllFiles(workingFiles);
-      let schemaIssues = collectSupabaseSchemaIssues(
-        workingFiles,
+      const lintResult = await lintAllFiles(files);
+      const schemaIssues = collectSupabaseSchemaIssues(
+        files,
         integrationRequirements,
       );
+      return {
+        files,
+        dependencies,
+        lintReport: lintResult.lintReport,
+        lintIssues: lintResult.lintIssues,
+        schemaIssues,
+        hasErrors:
+          lintResult.lintReport.errors > 0 || schemaIssues.length > 0,
+      };
+    });
 
-      for (
-        let attempt = 1;
-        (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) &&
-        attempt <= MAX_LINT_REPAIR_ATTEMPTS;
-        attempt++
-      ) {
+    // Step 4b: Repair attempts — each gets its own step
+    for (
+      let attempt = 1;
+      lintState.hasErrors && attempt <= MAX_LINT_REPAIR_ATTEMPTS;
+      attempt++
+    ) {
+      lintState = await step.run(`lint-repair-${attempt}`, async () => {
         if (await checkIfCancelled(projectId)) {
           throw new Error("Generation cancelled by user");
         }
 
         const issuesToFix =
-          lintResult.lintIssues.length > 0
-            ? [...lintResult.lintIssues, ...schemaIssues]
-            : [...schemaIssues];
+          lintState.lintIssues.length > 0
+            ? [...lintState.lintIssues, ...lintState.schemaIssues]
+            : [...lintState.schemaIssues];
         const firstIssue = issuesToFix[0];
         console.warn(
-          `[LintRepair] Attempt ${attempt} - ${lintResult.lintReport.errors} lint errors, ${schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+          `[LintRepair] Attempt ${attempt} - ${lintState.lintReport.errors} lint errors, ${lintState.schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
         );
-        // Lint repair in progress — no user-facing message.
+
+        let workingFiles = lintState.files;
+        let workingDeps = lintState.dependencies;
 
         try {
           const repaired = await repairProjectFromLintFeedback({
             originalPrompt: prompt,
             files: workingFiles,
-            dependencies: workingDependencies,
+            dependencies: workingDeps,
             lintIssues: issuesToFix,
             requirements: integrationRequirements,
             managedAuthConfig,
             systemPrompt: repairSystemPrompt,
           });
-
           workingFiles = applyKnownImportSpecifierFixups(repaired.files);
-          workingDependencies = repaired.dependencies;
+          workingDeps = repaired.dependencies;
         } catch (repairErr) {
           console.warn(
             `[LintRepair] Repair attempt ${attempt} failed:`,
             repairErr instanceof Error ? repairErr.message : repairErr,
           );
         }
-        lintResult = await lintAllFiles(workingFiles);
-        schemaIssues = collectSupabaseSchemaIssues(
+
+        const lintResult = await lintAllFiles(workingFiles);
+        const schemaIssues = collectSupabaseSchemaIssues(
           workingFiles,
           integrationRequirements,
         );
-      }
 
-      if (lintResult.lintReport.errors > 0 || schemaIssues.length > 0) {
-        const firstIssue = [
-          ...(lintResult.lintIssues || []),
-          ...schemaIssues,
-        ][0];
-        throw new Error(
-          `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
-        );
-      }
+        return {
+          files: workingFiles,
+          dependencies: workingDeps,
+          lintReport: lintResult.lintReport,
+          lintIssues: lintResult.lintIssues,
+          schemaIssues,
+          hasErrors:
+            lintResult.lintReport.errors > 0 || schemaIssues.length > 0,
+        };
+      });
+    }
 
-      dependencies = workingDependencies;
-      return {
-        fixedFiles: workingFiles,
-        lintReport: lintResult.lintReport,
-      };
-    });
+    if (lintState.hasErrors) {
+      const firstIssue = [
+        ...(lintState.lintIssues || []),
+        ...lintState.schemaIssues,
+      ][0];
+      throw new Error(
+        `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+      );
+    }
+
+    files = lintState.files;
+    dependencies = lintState.dependencies;
+    const fixedFiles = lintState.files;
 
     await sendProgress(
       projectId,
       "[5/8] Validating Next.js compatibility...",
     );
-    const { validatedFiles } = await step.run(
-      "nextjs-validate-and-repair",
-      async () => {
-        // Apply known-good templates before validation so AI-broken
-        // infra files (e.g. auth/callback/route.ts) are overwritten first.
-        let workingFiles = ensureRequiredFiles(
-          fixedFiles,
-          dependencies,
-          integrationRequirements,
-          managedAuthConfig,
-          projectId,
-        );
-        let workingDependencies = dependencies;
-        let issues = collectNextJsValidationIssues(
-          workingFiles,
-          workingDependencies,
+    // Step 5a: Initial Next.js validation (its own step)
+    let nextjsState = await step.run("nextjs-check", async () => {
+      // Apply known-good templates before validation so AI-broken
+      // infra files (e.g. auth/callback/route.ts) are overwritten first.
+      const workingFiles = ensureRequiredFiles(
+        fixedFiles,
+        dependencies,
+        integrationRequirements,
+        managedAuthConfig,
+        projectId,
+      );
+      const issues = collectNextJsValidationIssues(workingFiles, dependencies);
+      return {
+        files: workingFiles,
+        dependencies,
+        issues,
+        hasIssues: issues.length > 0,
+      };
+    });
+
+    // Step 5b: Next.js repair attempts — each gets its own step
+    for (
+      let attempt = 1;
+      nextjsState.hasIssues && attempt <= MAX_NEXTJS_REPAIR_ATTEMPTS;
+      attempt++
+    ) {
+      nextjsState = await step.run(`nextjs-repair-${attempt}`, async () => {
+        const firstIssue = nextjsState.issues[0];
+        console.warn(
+          `[NextValidation] Attempt ${attempt} - ${nextjsState.issues.length} issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
         );
 
-        for (
-          let attempt = 1;
-          issues.length > 0 && attempt <= MAX_NEXTJS_REPAIR_ATTEMPTS;
-          attempt++
-        ) {
-          const firstIssue = issues[0];
+        let workingFiles = nextjsState.files;
+        let workingDeps = nextjsState.dependencies;
+
+        try {
+          const repaired = await repairProjectFromLintFeedback({
+            originalPrompt: prompt,
+            files: workingFiles,
+            dependencies: workingDeps,
+            lintIssues: nextjsState.issues,
+            requirements: integrationRequirements,
+            managedAuthConfig,
+            systemPrompt: repairSystemPrompt,
+          });
+          workingFiles = applyKnownImportSpecifierFixups(repaired.files);
+          workingDeps = repaired.dependencies;
+        } catch (repairErr) {
           console.warn(
-            `[NextValidation] Attempt ${attempt} - ${issues.length} issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
-          );
-          // Next.js repair in progress — no user-facing message.
-
-          try {
-            const repaired = await repairProjectFromLintFeedback({
-              originalPrompt: prompt,
-              files: workingFiles,
-              dependencies: workingDependencies,
-              lintIssues: issues,
-              requirements: integrationRequirements,
-              managedAuthConfig,
-              systemPrompt: repairSystemPrompt,
-            });
-
-            workingFiles = applyKnownImportSpecifierFixups(repaired.files);
-            workingDependencies = repaired.dependencies;
-          } catch (repairErr) {
-            console.warn(
-              `[NextValidation] Repair attempt ${attempt} failed:`,
-              repairErr instanceof Error ? repairErr.message : repairErr,
-            );
-          }
-          issues = collectNextJsValidationIssues(
-            workingFiles,
-            workingDependencies,
+            `[NextValidation] Repair attempt ${attempt} failed:`,
+            repairErr instanceof Error ? repairErr.message : repairErr,
           );
         }
 
-        if (issues.length > 0) {
-          const firstIssue = issues[0];
-          throw new Error(
-            `Next.js validation failed after repair attempts. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
-          );
-        }
+        const issues = collectNextJsValidationIssues(
+          workingFiles,
+          workingDeps,
+        );
+        return {
+          files: workingFiles,
+          dependencies: workingDeps,
+          issues,
+          hasIssues: issues.length > 0,
+        };
+      });
+    }
 
-        dependencies = workingDependencies;
-        return { validatedFiles: workingFiles };
-      },
-    );
+    if (nextjsState.hasIssues) {
+      const firstIssue = nextjsState.issues[0];
+      throw new Error(
+        `Next.js validation failed after repair attempts. First issue: ${firstIssue.path}:${firstIssue.line}:${firstIssue.column} ${firstIssue.message}`,
+      );
+    }
+
+    const validatedFiles = nextjsState.files;
+    dependencies = nextjsState.dependencies;
 
     // Step 5.5: TypeScript type-checking in E2B sandbox (backend-enabled apps only)
     const hasBackend = integrationRequirements.requiresAuth || integrationRequirements.requiresDatabase;
