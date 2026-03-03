@@ -3,7 +3,7 @@
  *
  * Generates images via Replicate with global concurrency control.
  * Invoked by generate-code via step.invoke() so that all users share
- * a single throttled queue (concurrency: 6 global, 2 per-user).
+ * a single throttled queue (concurrency: 5 global, 2 per-user).
  */
 
 import { inngest } from "@/lib/inngest-client";
@@ -48,7 +48,7 @@ export const generateImagesFunction = inngest.createFunction(
     name: "Generate Images",
     retries: 2,
     concurrency: [
-      { limit: 6 },                            // Global max
+      { limit: 5 },                            // Global max
       { limit: 2, key: "event.data.userId" },  // Per-user fairness
     ],
   },
