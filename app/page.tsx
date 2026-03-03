@@ -325,6 +325,9 @@ function ReactGeneratorContent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [isMobileEditPanelOpen, setIsMobileEditPanelOpen] = useState(false);
+  const [isMobileToolsDropdownOpen, setIsMobileToolsDropdownOpen] =
+    useState(false);
   const [previewKey, setPreviewKey] = useState(0);
   const [previewSandboxId, setPreviewSandboxId] = useState<string | null>(null);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
@@ -868,6 +871,24 @@ function ReactGeneratorContent() {
     }
   }, [isMobileViewport, isMobileMenuOpen]);
 
+  useEffect(() => {
+    if (!isMobileViewport && isMobileEditPanelOpen) {
+      setIsMobileEditPanelOpen(false);
+    }
+  }, [isMobileViewport, isMobileEditPanelOpen]);
+
+  useEffect(() => {
+    if (!isMobileViewport && isMobileToolsDropdownOpen) {
+      setIsMobileToolsDropdownOpen(false);
+    }
+  }, [isMobileViewport, isMobileToolsDropdownOpen]);
+
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    if (previewMode !== "mobile") setPreviewMode("mobile");
+    if (!isFullPreview) setIsFullPreview(true);
+  }, [isMobileViewport, previewMode, isFullPreview]);
+
   // Close edit/export dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -875,11 +896,17 @@ function ReactGeneratorContent() {
       if (showExportDropdown && !target.closest(".export-dropdown")) {
         setShowExportDropdown(false);
       }
+      if (
+        isMobileToolsDropdownOpen &&
+        !target.closest(".mobile-tools-dropdown")
+      ) {
+        setIsMobileToolsDropdownOpen(false);
+      }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showExportDropdown]);
+  }, [showExportDropdown, isMobileToolsDropdownOpen]);
 
   // Handle token payment success redirect
   useEffect(() => {
@@ -3375,7 +3402,11 @@ ${pdfUrlList}
           <header className="flex-shrink-0 border-b border-border-primary bg-bg-secondary/70 backdrop-blur-lg z-10">
             <div className="px-3 sm:px-4 py-3 space-y-2.5">
               <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+                <div
+                  className={`flex items-center gap-2 pb-1 sm:pb-0 ${
+                    isMobileViewport ? "overflow-visible" : "overflow-x-auto"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => setIsMobileMenuOpen(true)}
@@ -3398,173 +3429,197 @@ ${pdfUrlList}
                     Menu
                   </button>
 
-                  <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
-                    <svg
-                      className="w-3 h-3 text-violet-500"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
-                      />
-                    </svg>
-                    <span className="font-semibold">App Tokens</span>
-                    <span>{formatTokens(userData?.appTokens || 0)}</span>
-                    <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
-                      Edits and integrations use app tokens.
+                  {!isMobileViewport && (
+                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
+                      <svg
+                        className="w-3 h-3 text-violet-500"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
+                        />
+                      </svg>
+                      <span className="font-semibold">App Tokens</span>
+                      <span>{formatTokens(userData?.appTokens || 0)}</span>
+                      <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
+                        Edits and integrations use app tokens.
+                      </span>
                     </span>
-                  </span>
+                  )}
 
-                  <button
-                    onClick={() => setShowCodeViewer(true)}
-                    className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
-                    title="View project code"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-                      />
-                    </svg>
-                    Code
-                  </button>
+                  {isMobileViewport && (
+                    <>
+                      <button
+                        onClick={() => setIsMobileEditPanelOpen(true)}
+                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-blue-100 bg-blue-600/25 hover:bg-blue-600/35 border border-blue-500/40 rounded-lg transition"
+                        title="Edit website with prompts"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
+                        Edit
+                      </button>
 
-                  <div className="hidden sm:block h-5 w-px bg-border-secondary/70 mx-0.5" />
+                      <div className="mobile-tools-dropdown relative">
+                        <button
+                          onClick={() =>
+                            setIsMobileToolsDropdownOpen((prev) => !prev)
+                          }
+                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                          title="Editing tools"
+                        >
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M4 6h16M4 12h16M4 18h16"
+                            />
+                          </svg>
+                          Tools
+                          <svg
+                            className={`w-3 h-3 transition-transform ${isMobileToolsDropdownOpen ? "rotate-180" : ""}`}
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M19 9l-7 7-7-7"
+                            />
+                          </svg>
+                        </button>
+                      </div>
 
-                  <button
-                    onClick={() =>
-                      setTextEditMode((v) => {
-                        const next = !v;
-                        if (next) {
-                          setImageSelectMode(false);
-                          setLinkSelectMode(false);
-                          setSelectedButton(null);
-                          setSelectedPreviewImage(null);
-                          setImageRegenerationPrompt("");
-                        }
-                        return next;
-                      })
-                    }
-                    className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
-                      textEditMode
-                        ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
-                        : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
-                    }`}
-                    title="Edit text directly inside preview"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M8 10h8M8 14h5M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H9l-4 4V8a2 2 0 012-2z"
-                      />
-                    </svg>
-                    <span className="hidden sm:inline">Text Edit</span>
-                  </button>
+                      <div className="ml-auto flex items-center gap-2 pl-1">
+                        {publishedUrl ? (
+                          hasUnpublishedChanges ? (
+                            <button
+                              onClick={publishProject}
+                              disabled={isPublishing}
+                              className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {isPublishing ? (
+                                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              ) : (
+                                <>
+                                  <svg
+                                    className="w-3.5 h-3.5"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                    />
+                                  </svg>
+                                  Publish
+                                </>
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setShowDomainModal(true)}
+                              className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                                />
+                              </svg>
+                              Published
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            onClick={publishProject}
+                            disabled={isPublishing || !currentProjectId}
+                            className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isPublishing ? (
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                              <>
+                                <svg
+                                  className="w-3.5 h-3.5"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={2}
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                                  />
+                                </svg>
+                                Publish
+                              </>
+                            )}
+                          </button>
+                        )}
 
-                  <button
-                    onClick={() =>
-                      setImageSelectMode((v) => {
-                        const next = !v;
-                        if (next) {
-                          setTextEditMode(false);
-                          setLinkSelectMode(false);
-                          setSelectedButton(null);
-                        } else {
-                          setSelectedPreviewImage(null);
-                          setImageRegenerationPrompt("");
-                        }
-                        return next;
-                      })
-                    }
-                    className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
-                      imageSelectMode
-                        ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
-                        : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
-                    }`}
-                    title="Select a specific image from preview and replace only that image"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M3 16.5V6a3 3 0 013-3h12a3 3 0 013 3v10.5m-18 0l4.5-4.5a2.25 2.25 0 013.182 0L15 16.5m-12 0h18M15 10.5h.008v.008H15V10.5z"
-                      />
-                    </svg>
-                    <span className="hidden sm:inline">Image Replace</span>
-                  </button>
+                        <button
+                          onClick={handleNewProjectClick}
+                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                        >
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M12 4v16m8-8H4"
+                            />
+                          </svg>
+                          New
+                        </button>
+                      </div>
+                    </>
+                  )}
 
-                  <button
-                    onClick={() =>
-                      setLinkSelectMode((v) => {
-                        const next = !v;
-                        if (next) {
-                          setTextEditMode(false);
-                          setImageSelectMode(false);
-                          setSelectedButton(null);
-                          setSelectedPreviewImage(null);
-                          setImageRegenerationPrompt("");
-                        } else {
-                          setSelectedButton(null);
-                        }
-                        return next;
-                      })
-                    }
-                    className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
-                      linkSelectMode
-                        ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
-                        : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
-                    }`}
-                    title="Add links to buttons in preview"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                      />
-                    </svg>
-                    <span className="hidden sm:inline">Link Feature</span>
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Export Dropdown */}
-                  <div className="relative export-dropdown">
+                  {!isMobileViewport && (
                     <button
-                      onClick={() => setShowExportDropdown(!showExportDropdown)}
-                      disabled={isExporting}
-                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Export project"
+                      onClick={() => setShowCodeViewer(true)}
+                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                      title="View project code"
                     >
                       <svg
                         className="w-3.5 h-3.5"
@@ -3576,85 +3631,293 @@ ${pdfUrlList}
                         <path
                           strokeLinecap="round"
                           strokeLinejoin="round"
-                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                          d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
                         />
                       </svg>
-                      <span className="hidden sm:inline">Export</span>
-                      <svg
-                        className={`w-3 h-3 transition-transform ${showExportDropdown ? "rotate-180" : ""}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
+                      Code
                     </button>
+                  )}
 
-                    {/* Dropdown Menu */}
-                    {showExportDropdown && (
-                      <div className="absolute right-0 mt-2 w-48 bg-bg-tertiary border border-border-secondary rounded-lg shadow-xl z-50">
-                        <button
-                          onClick={exportToGitHub}
-                          disabled={isExporting}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-t-lg"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-                          </svg>
-                          Export to GitHub
-                        </button>
-                        <button
-                          onClick={exportToVSCode}
-                          disabled={isExporting}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z" />
-                          </svg>
-                          Export to VS Code
-                        </button>
-                        <button
-                          onClick={exportToCursor}
-                          disabled={isExporting}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-b-lg"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm-1 4v12l8-6-8-6z" />
-                          </svg>
-                          Export to Cursor
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                  {!isMobileViewport && (
+                    <>
+                      <div className="hidden sm:block h-5 w-px bg-border-secondary/70 mx-0.5" />
 
-                  {publishedUrl ? (
-                    hasUnpublishedChanges ? (
+                      <button
+                        onClick={() =>
+                          setTextEditMode((v) => {
+                            const next = !v;
+                            if (next) {
+                              setImageSelectMode(false);
+                              setLinkSelectMode(false);
+                              setSelectedButton(null);
+                              setSelectedPreviewImage(null);
+                              setImageRegenerationPrompt("");
+                            }
+                            return next;
+                          })
+                        }
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                          textEditMode
+                            ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
+                            : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                        }`}
+                        title="Edit text directly inside preview"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M8 10h8M8 14h5M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H9l-4 4V8a2 2 0 012-2z"
+                          />
+                        </svg>
+                        <span className="hidden sm:inline">Text Edit</span>
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          setImageSelectMode((v) => {
+                            const next = !v;
+                            if (next) {
+                              setTextEditMode(false);
+                              setLinkSelectMode(false);
+                              setSelectedButton(null);
+                            } else {
+                              setSelectedPreviewImage(null);
+                              setImageRegenerationPrompt("");
+                            }
+                            return next;
+                          })
+                        }
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                          imageSelectMode
+                            ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
+                            : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                        }`}
+                        title="Select a specific image from preview and replace only that image"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M3 16.5V6a3 3 0 013-3h12a3 3 0 013 3v10.5m-18 0l4.5-4.5a2.25 2.25 0 013.182 0L15 16.5m-12 0h18M15 10.5h.008v.008H15V10.5z"
+                          />
+                        </svg>
+                        <span className="hidden sm:inline">Image Replace</span>
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          setLinkSelectMode((v) => {
+                            const next = !v;
+                            if (next) {
+                              setTextEditMode(false);
+                              setImageSelectMode(false);
+                              setSelectedButton(null);
+                              setSelectedPreviewImage(null);
+                              setImageRegenerationPrompt("");
+                            } else {
+                              setSelectedButton(null);
+                            }
+                            return next;
+                          })
+                        }
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                          linkSelectMode
+                            ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
+                            : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                        }`}
+                        title="Add links to buttons in preview"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+                          />
+                        </svg>
+                        <span className="hidden sm:inline">Link Feature</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {!isMobileViewport && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Export Dropdown */}
+                    <div className="relative export-dropdown">
+                      <button
+                        onClick={() =>
+                          setShowExportDropdown(!showExportDropdown)
+                        }
+                        disabled={isExporting}
+                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Export project"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                          />
+                        </svg>
+                        <span className="hidden sm:inline">Export</span>
+                        <svg
+                          className={`w-3 h-3 transition-transform ${showExportDropdown ? "rotate-180" : ""}`}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M19 9l-7 7-7-7"
+                          />
+                        </svg>
+                      </button>
+
+                      {/* Dropdown Menu */}
+                      {showExportDropdown && (
+                        <div className="absolute right-0 mt-2 w-48 bg-bg-tertiary border border-border-secondary rounded-lg shadow-xl z-50">
+                          <button
+                            onClick={exportToGitHub}
+                            disabled={isExporting}
+                            className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-t-lg"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+                            </svg>
+                            Export to GitHub
+                          </button>
+                          <button
+                            onClick={exportToVSCode}
+                            disabled={isExporting}
+                            className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z" />
+                            </svg>
+                            Export to VS Code
+                          </button>
+                          <button
+                            onClick={exportToCursor}
+                            disabled={isExporting}
+                            className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-text-secondary hover:bg-border-secondary transition disabled:opacity-50 disabled:cursor-not-allowed rounded-b-lg"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm0 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2zm-1 4v12l8-6-8-6z" />
+                            </svg>
+                            Export to Cursor
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {publishedUrl ? (
+                      hasUnpublishedChanges ? (
+                        <button
+                          onClick={publishProject}
+                          disabled={isPublishing}
+                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isPublishing ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span className="hidden sm:inline">
+                                Publishing...
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <svg
+                                className="w-3.5 h-3.5"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                />
+                              </svg>
+                              <span className="hidden sm:inline">
+                                Publish Changes
+                              </span>
+                              <span className="sm:hidden">Publish</span>
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setShowDomainModal(true)}
+                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                        >
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                          />
+                        </svg>
+                        Published
+                      </button>
+                    )
+                    ) : (
                       <button
                         onClick={publishProject}
-                        disabled={isPublishing}
-                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isPublishing || !currentProjectId}
+                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {isPublishing ? (
                           <>
                             <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span className="hidden sm:inline">Publishing...</span>
+                            <span className="hidden sm:inline">
+                              Publishing...
+                            </span>
                           </>
                         ) : (
                           <>
@@ -3668,21 +3931,131 @@ ${pdfUrlList}
                               <path
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
-                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                               />
                             </svg>
-                            <span className="hidden sm:inline">Publish Changes</span>
-                            <span className="sm:hidden">Publish</span>
+                            Publish
                           </>
                         )}
                       </button>
-                    ) : (
+                    )}
+
+                    <button
+                      onClick={handleNewProjectClick}
+                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M12 4v16m8-8H4"
+                        />
+                      </svg>
+                      New
+                    </button>
+                  </div>
+                )}
+
+                {isMobileViewport && isMobileToolsDropdownOpen && (
+                  <div className="mobile-tools-dropdown rounded-lg border border-border-secondary bg-bg-tertiary/80 p-2 flex flex-col gap-1.5">
+                    <button
+                      onClick={() => {
+                        setTextEditMode((v) => {
+                          const next = !v;
+                          if (next) {
+                            setImageSelectMode(false);
+                            setLinkSelectMode(false);
+                            setSelectedButton(null);
+                            setSelectedPreviewImage(null);
+                            setImageRegenerationPrompt("");
+                          }
+                          return next;
+                        });
+                        setIsMobileToolsDropdownOpen(false);
+                      }}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                        textEditMode
+                          ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
+                          : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
+                      }`}
+                    >
+                      Text Replace
+                    </button>
+                    <button
+                      onClick={() => {
+                        setImageSelectMode((v) => {
+                          const next = !v;
+                          if (next) {
+                            setTextEditMode(false);
+                            setLinkSelectMode(false);
+                            setSelectedButton(null);
+                          } else {
+                            setSelectedPreviewImage(null);
+                            setImageRegenerationPrompt("");
+                          }
+                          return next;
+                        });
+                        setIsMobileToolsDropdownOpen(false);
+                      }}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                        imageSelectMode
+                          ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
+                          : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
+                      }`}
+                    >
+                      Image Replace
+                    </button>
+                    <button
+                      onClick={() => {
+                        setLinkSelectMode((v) => {
+                          const next = !v;
+                          if (next) {
+                            setTextEditMode(false);
+                            setImageSelectMode(false);
+                            setSelectedButton(null);
+                            setSelectedPreviewImage(null);
+                            setImageRegenerationPrompt("");
+                          } else {
+                            setSelectedButton(null);
+                          }
+                          return next;
+                        });
+                        setIsMobileToolsDropdownOpen(false);
+                      }}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                        linkSelectMode
+                          ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
+                          : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
+                      }`}
+                    >
+                      Link Feature
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Device + Preview Controls */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {!isMobileViewport && (
+                  <>
+                    <div className="inline-flex items-center gap-1 bg-bg-tertiary/50 rounded-lg p-1">
                       <button
-                        onClick={() => setShowDomainModal(true)}
-                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                        onClick={() => setPreviewMode("mobile")}
+                        className={`p-1.5 rounded-md transition ${
+                          previewMode === "mobile"
+                            ? "bg-blue-600 text-white"
+                            : "text-text-tertiary hover:text-text-secondary"
+                        }`}
+                        title="Mobile view (375px)"
                       >
                         <svg
-                          className="w-3.5 h-3.5"
+                          className="w-4 h-4"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -3691,180 +4064,100 @@ ${pdfUrlList}
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
-                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                            d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
                           />
                         </svg>
-                        Published
                       </button>
-                    )
-                  ) : (
-                    <button
-                      onClick={publishProject}
-                      disabled={isPublishing || !currentProjectId}
-                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isPublishing ? (
-                        <>
-                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          <span className="hidden sm:inline">Publishing...</span>
-                        </>
-                      ) : (
-                        <>
-                          <svg
-                            className="w-3.5 h-3.5"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
+                      <button
+                        onClick={() => setPreviewMode("tablet")}
+                        className={`p-1.5 rounded-md transition ${
+                          previewMode === "tablet"
+                            ? "bg-blue-600 text-white"
+                            : "text-text-tertiary hover:text-text-secondary"
+                        }`}
+                        title="Tablet view (768px)"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => setPreviewMode("desktop")}
+                        className={`p-1.5 rounded-md transition ${
+                          previewMode === "desktop"
+                            ? "bg-blue-600 text-white"
+                            : "text-text-tertiary hover:text-text-secondary"
+                        }`}
+                        title="Desktop view (full width)"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setIsFullPreview((prev) => !prev)}
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                          isFullPreview
+                            ? "text-blue-300 bg-blue-600/20 border border-blue-500/30"
+                            : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                        }`}
+                        title={
+                          isFullPreview
+                            ? "Show edit panel"
+                            : "Hide edit panel for full preview"
+                        }
+                      >
+                        <svg
+                          className="w-3.5 h-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          {isFullPreview ? (
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                              d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
                             />
-                          </svg>
-                          Publish
-                        </>
-                      )}
-                    </button>
-                  )}
-
-                  <button
-                    onClick={handleNewProjectClick}
-                    className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 4v16m8-8H4"
-                      />
-                    </svg>
-                    New
-                  </button>
-                </div>
-              </div>
-
-              {/* Device + Preview Controls */}
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-1 bg-bg-tertiary/50 rounded-lg p-1">
-                  <button
-                    onClick={() => setPreviewMode("mobile")}
-                    className={`p-1.5 rounded-md transition ${
-                      previewMode === "mobile"
-                        ? "bg-blue-600 text-white"
-                        : "text-text-tertiary hover:text-text-secondary"
-                    }`}
-                    title="Mobile view (375px)"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => setPreviewMode("tablet")}
-                    className={`p-1.5 rounded-md transition ${
-                      previewMode === "tablet"
-                        ? "bg-blue-600 text-white"
-                        : "text-text-tertiary hover:text-text-secondary"
-                    }`}
-                    title="Tablet view (768px)"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 18h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => setPreviewMode("desktop")}
-                    className={`p-1.5 rounded-md transition ${
-                      previewMode === "desktop"
-                        ? "bg-blue-600 text-white"
-                        : "text-text-tertiary hover:text-text-secondary"
-                    }`}
-                    title="Desktop view (full width)"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setIsFullPreview((prev) => !prev)}
-                    className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
-                      isFullPreview
-                        ? "text-blue-300 bg-blue-600/20 border border-blue-500/30"
-                        : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
-                    }`}
-                    title={
-                      isFullPreview
-                        ? "Show edit panel"
-                        : "Hide edit panel for full preview"
-                    }
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      {isFullPreview ? (
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"
-                        />
-                      ) : (
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"
-                        />
-                      )}
-                    </svg>
-                    <span className="hidden sm:inline">
-                      {isFullPreview ? "Exit Full Preview" : "Full Preview"}
-                    </span>
-                  </button>
-                </div>
+                          ) : (
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"
+                            />
+                          )}
+                        </svg>
+                        <span className="hidden sm:inline">
+                          {isFullPreview ? "Exit Full Preview" : "Full Preview"}
+                        </span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </header>
@@ -4137,15 +4430,21 @@ ${pdfUrlList}
 
               {/* Device Frame Container */}
               <div
-                className={`h-full flex items-center justify-center p-2 sm:p-4 ${
-                  previewMode === "desktop"
+                className={`h-full flex items-center justify-center ${
+                  isMobileViewport
+                    ? "p-0"
+                    : "p-2 sm:p-4"
+                } ${
+                  previewMode === "desktop" || isMobileViewport
                     ? ""
                     : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-700/20 to-transparent"
                 }`}
               >
                 <div
                   className={`h-full transition-all duration-300 ${
-                    previewMode === "mobile"
+                    isMobileViewport
+                      ? "w-full"
+                      : previewMode === "mobile"
                       ? "w-full max-w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
                       : previewMode === "tablet"
                         ? "w-full max-w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
@@ -4153,7 +4452,7 @@ ${pdfUrlList}
                   }`}
                 >
                   {/* Device Notch for Mobile */}
-                  {previewMode === "mobile" && (
+                  {!isMobileViewport && previewMode === "mobile" && (
                     <div className="bg-slate-700 h-6 flex items-center justify-center">
                       <div className="w-20 h-4 bg-slate-800 rounded-full" />
                     </div>
@@ -4162,7 +4461,7 @@ ${pdfUrlList}
                   {/* Preview — E2B cloud sandbox for backend apps, WebContainer for others */}
                   <div
                     className={
-                      previewMode !== "desktop"
+                      !isMobileViewport && previewMode !== "desktop"
                         ? "h-[calc(100%-24px)]"
                         : "h-full"
                     }
@@ -4197,10 +4496,40 @@ ${pdfUrlList}
               </div>
             </div>
 
+            {isMobileViewport && isMobileEditPanelOpen && (
+              <button
+                type="button"
+                onClick={() => setIsMobileEditPanelOpen(false)}
+                className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[1px]"
+                aria-label="Close edit panel"
+              />
+            )}
+
             {/* Edit Panel - Right on desktop, Bottom on mobile/tablet */}
-            {!isFullPreview && (
-              <div className="flex-shrink-0 lg:w-[clamp(14rem,22vw,18.5rem)] border-t lg:border-t-0 lg:border-l border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col min-h-0 overflow-hidden">
+            {(!isMobileViewport && !isFullPreview) ||
+            (isMobileViewport && isMobileEditPanelOpen) ? (
+              <div
+                className={`flex-shrink-0 border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col min-h-0 overflow-hidden ${
+                  isMobileViewport
+                    ? "fixed inset-x-0 bottom-0 z-50 h-[70vh] rounded-t-2xl border-t shadow-2xl"
+                    : "lg:w-[clamp(14rem,22vw,18.5rem)] border-t lg:border-t-0 lg:border-l"
+                }`}
+              >
                 {/* Panel Header - Desktop only */}
+                {isMobileViewport && (
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
+                    <h3 className="text-sm font-semibold text-text-primary">
+                      Edit Website
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setIsMobileEditPanelOpen(false)}
+                      className="inline-flex items-center h-8 gap-1 px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
 
                 {/* Low token balance indicator */}
                 {(userData?.appTokens || 0) < 10 && (
@@ -4941,7 +5270,7 @@ ${pdfUrlList}
                   </div>
                 </form>
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 interface LogoProps {
   size?: number;
   animate?: boolean;
@@ -7,7 +9,8 @@ interface LogoProps {
 }
 
 export default function Logo({ size = 48, animate = false, className = "" }: LogoProps) {
-  const uid = `logo-${size}`;
+  const instanceId = useId().replace(/:/g, "");
+  const uid = `logo-${instanceId}-${size}`;
   return (
     <svg
       width={size}
