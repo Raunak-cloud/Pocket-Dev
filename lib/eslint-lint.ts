@@ -2,7 +2,7 @@ import { ESLint } from "eslint";
 import type { CustomSection, ConfigSection } from "./website-config-types";
 
 /**
- * Rules kept in sync with mcp/eslint-server.ts.
+ * Shared lint rules for project code validation.
  * Errors block generation; warnings pass through.
  */
 const LINT_RULES = {

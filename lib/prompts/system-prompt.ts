@@ -183,8 +183,8 @@ AUTHENTICATION & BACKEND-DEPENDENT UI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PAYMENTS & CHECKOUT SYSTEM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  * AUTO-DETECT: If the project is an e-commerce store, marketplace, SaaS with pricing tiers, booking/reservation system, food ordering app, or any app where users buy products/services/subscriptions — you MUST build the full payment and checkout system automatically. Do NOT wait for the user to explicitly say "add payments". If products have prices, the app needs checkout.
-  * If the project is purely informational (blog, portfolio, landing page with no purchasable items) — do NOT add payment code. Static pricing sections with display-only prices are fine.
+  * Only generate payment/checkout flows when payment integration is explicitly requested by the user/instructions.
+  * If payment integration is NOT explicitly requested, do NOT add payment code. Static pricing sections with display-only prices are fine.
   * TECHNICAL RULES:
     - Do NOT add "stripe" to dependencies. Do NOT import from "stripe". Do NOT generate app/api/checkout/route.ts or any server-side Stripe code.
     - Payments are handled via the Pocket Dev platform proxy (details below).

@@ -7,15 +7,10 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "eslint",
-    "mcp:eslint": "tsx mcp/eslint-server.ts",
-    "mcp:ui-libraries": "tsx mcp/ui-libraries-server.ts",
-    "mcp:test": "tsx mcp/test-eslint.ts",
-    "mcp:test-ui": "tsx mcp/test-ui-libraries.ts"
+    "lint": "eslint"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@modelcontextprotocol/sdk": "^1.25.3",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "5.22.0",
     "@radix-ui/react-slot": "^1.2.4",

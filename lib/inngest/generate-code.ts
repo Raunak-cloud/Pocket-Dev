@@ -3650,6 +3650,193 @@ function collectSupabaseSchemaIssues(
   return issues;
 }
 
+function collectNonBackendTransactionalIssues(
+  files: GeneratedFile[],
+  requirements: IntegrationRequirements,
+): LintIssue[] {
+  if (requirements.requiresAuth || requirements.requiresDatabase) return [];
+
+  const issues: LintIssue[] = [];
+
+  for (const file of files) {
+    const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
+    const isCodeFile = /\.(tsx|ts|jsx|js)$/.test(normalizedPath);
+
+    if (
+      normalizedPath.startsWith("app/api/") &&
+      normalizedPath !== "app/api/image-proxy/route.ts"
+    ) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-server-api-routes",
+        message:
+          "Backend is disabled, so app-level API routes are not allowed. Convert this interaction to a read-only/public UX without server mutation endpoints.",
+      });
+    }
+
+    if (!isCodeFile) continue;
+
+    const writeNetworkPattern =
+      /\bfetch\s*\(\s*(?:["'`](?:\/|\.\/|\.\.\/)[^"'`]*["'`]|`?\$\{window\.location\.origin\}\/[^`]+`?)[\s\S]{0,320}\{[\s\S]{0,320}\bmethod\s*:\s*["'`](POST|PUT|PATCH|DELETE)["'`][\s\S]{0,320}\}/i;
+    const axiosWritePattern =
+      /\baxios\.(post|put|patch|delete)\s*\(\s*["'`](?:\/|\.\/|\.\.\/)[^"'`]*["'`]/i;
+    const persistentWritePattern =
+      /\b(?:localStorage|sessionStorage)\.setItem\s*\(|\bindexedDB\.open\s*\(|\bidb(?:Keyval)?\.(?:set|update)\s*\(/i;
+    const collectionMutationPattern =
+      /\bset[A-Z][A-Za-z0-9_]*\s*\(\s*(?:\(\s*)?(?:prev|prevState)\s*=>[\s\S]{0,220}(?:\[\s*\.\.\.\s*(?:prev|prevState)|(?:prev|prevState)\.(?:filter|map|concat)\s*\(|splice\s*\()/i;
+    const directArrayMutationPattern =
+      /\bset[A-Z][A-Za-z0-9_]*\s*\(\s*\[\s*\.\.\.\s*[A-Za-z0-9_]+\s*,/i;
+    const transactionalSignalPattern =
+      /\b(price|amount|subtotal|total|quantity|lineItems?|currency|inventory|stock)\b/i;
+
+    const hasWriteNetwork =
+      writeNetworkPattern.test(file.content) || axiosWritePattern.test(file.content);
+    const hasPersistentWrite = persistentWritePattern.test(file.content);
+    const hasCollectionMutation =
+      collectionMutationPattern.test(file.content) ||
+      directArrayMutationPattern.test(file.content);
+    const hasTransactionalSignals = transactionalSignalPattern.test(file.content);
+
+    if (
+      hasWriteNetwork &&
+      (hasTransactionalSignals || hasCollectionMutation || hasPersistentWrite)
+    ) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-write-network-actions",
+        message:
+          "Backend is disabled, but this file performs write-oriented network actions. Replace with read-only/public behavior or enable backend integration.",
+      });
+    }
+
+    if (hasPersistentWrite && hasCollectionMutation) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-persistent-client-transaction-state",
+        message:
+          "Backend is disabled, but this file writes persistent client transaction state. Remove persistent transactional mutations for public/static mode.",
+      });
+    }
+
+    if (hasCollectionMutation && (hasTransactionalSignals || hasPersistentWrite)) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-transactional-mutation-flows",
+        message:
+          "Backend is disabled, but this file implements transactional mutation flows. Convert to read-only/public presentation or enable backend.",
+      });
+    }
+
+    const normalizeUiSnippet = (snippet: string): string =>
+      snippet
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\{[^}]+\}/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+
+    const authUiTextPattern =
+      /\b(sign[\s-]?in|log[\s-]?in|sign[\s-]?up|register|create account|my account|account|profile|my orders?|order history)\b/i;
+    const transactionalUiTextPattern =
+      /\b(add(?:\s+to)?\s+(?:cart|bag|basket)|buy(?:\s+now)?|checkout|place order|order now|save for later|wishlist|favorite|favourite|payment|billing|subscribe)\b/i;
+    const authUiAttrPattern =
+      /\b(?:aria-label|title)\s*=\s*["'`][^"'`]*(sign[\s-]?in|log[\s-]?in|sign[\s-]?up|register|account|profile|orders?)\b[^"'`]*["'`]/i;
+    const transactionalUiAttrPattern =
+      /\b(?:aria-label|title)\s*=\s*["'`][^"'`]*(cart|basket|bag|checkout|wishlist|favorite|favourite|payment|billing|subscribe)\b[^"'`]*["'`]/i;
+    const protectedRouteHrefPattern =
+      /\bhref\s*=\s*["'`](\/(?:sign[-]?in|log[-]?in|sign[-]?up|register|account|profile|orders?|checkout|cart|bag|basket|wishlist|favorites?|billing|payment)(?:[/"'`?#]|$))/i;
+    const protectedRouteNavPattern =
+      /\b(?:router\.push|router\.replace|window\.location(?:\.href)?)\s*\(\s*["'`](\/(?:sign[-]?in|log[-]?in|sign[-]?up|register|account|profile|orders?|checkout|cart|bag|basket|wishlist|favorites?|billing|payment)(?:[/"'`?#]|$))/i;
+    const authIconPattern =
+      /<(?:LogIn|LogOut|UserPlus|UserCheck|UserRound|UserCircle|UserCog|KeyRound|Lock|Unlock)\b/;
+    const transactionalIconPattern =
+      /<(?:ShoppingCart|ShoppingBag|ShoppingBasket|Basket|CreditCard|Wallet|Receipt(?:Text)?)\b/;
+    const heartIconPattern = /<Heart\b/;
+
+    let hasAuthUiAffordance = false;
+    let hasTransactionalUiAffordance = false;
+
+    const interactiveElementRe =
+      /<(button|a|Link)\b([^>]*)>([\s\S]{0,260}?)<\/\1>/gi;
+    for (const match of file.content.matchAll(interactiveElementRe)) {
+      const attrs = String(match[2] || "");
+      const inner = String(match[3] || "");
+      const normalizedText = normalizeUiSnippet(inner);
+      const normalizedContext = normalizeUiSnippet(`${attrs} ${inner}`);
+
+      if (
+        authUiTextPattern.test(normalizedText) ||
+        authUiAttrPattern.test(attrs) ||
+        authIconPattern.test(inner)
+      ) {
+        hasAuthUiAffordance = true;
+      }
+
+      if (
+        transactionalUiTextPattern.test(normalizedText) ||
+        transactionalUiAttrPattern.test(attrs) ||
+        transactionalIconPattern.test(inner) ||
+        (heartIconPattern.test(inner) &&
+          /\b(wish|favorite|favourite|save)\b/i.test(normalizedContext))
+      ) {
+        hasTransactionalUiAffordance = true;
+      }
+    }
+
+    const inputActionRe = /<input\b([^>]*)\/?>/gi;
+    for (const match of file.content.matchAll(inputActionRe)) {
+      const attrs = String(match[1] || "");
+      const normalizedAttrs = normalizeUiSnippet(attrs);
+      if (authUiTextPattern.test(normalizedAttrs)) {
+        hasAuthUiAffordance = true;
+      }
+      if (transactionalUiTextPattern.test(normalizedAttrs)) {
+        hasTransactionalUiAffordance = true;
+      }
+    }
+
+    if (
+      protectedRouteHrefPattern.test(file.content) ||
+      protectedRouteNavPattern.test(file.content)
+    ) {
+      hasAuthUiAffordance = true;
+      hasTransactionalUiAffordance = true;
+    }
+
+    if (hasAuthUiAffordance) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-auth-ui-affordances",
+        message:
+          "Backend is disabled, but this file exposes authentication/account-related UI affordances. Remove account/protected-action controls in public/static mode.",
+      });
+    }
+
+    if (hasTransactionalUiAffordance) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "public-site/no-transactional-ui-affordances",
+        message:
+          "Backend is disabled, but this file exposes transactional UI affordances. Remove mutation-oriented controls in public/static mode.",
+      });
+    }
+  }
+
+  return issues;
+}
+
 function buildSchemaBootstrapSql(schemaSql: string): string {
   const trimmed = schemaSql.trim();
   const prelude = `create extension if not exists "pgcrypto";`;
@@ -4643,14 +4830,21 @@ NAV + MOBILE RULES:
         files,
         integrationRequirements,
       );
+      const nonBackendPolicyIssues = collectNonBackendTransactionalIssues(
+        files,
+        integrationRequirements,
+      );
       return {
         files,
         dependencies,
         lintReport: lintResult.lintReport,
         lintIssues: lintResult.lintIssues,
         schemaIssues,
+        nonBackendPolicyIssues,
         hasErrors:
-          lintResult.lintReport.errors > 0 || schemaIssues.length > 0,
+          lintResult.lintReport.errors > 0 ||
+          schemaIssues.length > 0 ||
+          nonBackendPolicyIssues.length > 0,
       };
     });
 
@@ -4667,11 +4861,15 @@ NAV + MOBILE RULES:
 
         const issuesToFix =
           lintState.lintIssues.length > 0
-            ? [...lintState.lintIssues, ...lintState.schemaIssues]
-            : [...lintState.schemaIssues];
+            ? [
+              ...lintState.lintIssues,
+              ...lintState.schemaIssues,
+              ...lintState.nonBackendPolicyIssues,
+            ]
+            : [...lintState.schemaIssues, ...lintState.nonBackendPolicyIssues];
         const firstIssue = issuesToFix[0];
         console.warn(
-          `[LintRepair] Attempt ${attempt} - ${lintState.lintReport.errors} lint errors, ${lintState.schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+          `[LintRepair] Attempt ${attempt} - ${lintState.lintReport.errors} lint errors, ${lintState.schemaIssues.length} schema issue(s), ${lintState.nonBackendPolicyIssues.length} public-mode policy issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
         );
 
         let workingFiles = lintState.files;
@@ -4701,6 +4899,10 @@ NAV + MOBILE RULES:
           workingFiles,
           integrationRequirements,
         );
+        const nonBackendPolicyIssues = collectNonBackendTransactionalIssues(
+          workingFiles,
+          integrationRequirements,
+        );
 
         return {
           files: workingFiles,
@@ -4708,8 +4910,11 @@ NAV + MOBILE RULES:
           lintReport: lintResult.lintReport,
           lintIssues: lintResult.lintIssues,
           schemaIssues,
+          nonBackendPolicyIssues,
           hasErrors:
-            lintResult.lintReport.errors > 0 || schemaIssues.length > 0,
+            lintResult.lintReport.errors > 0 ||
+            schemaIssues.length > 0 ||
+            nonBackendPolicyIssues.length > 0,
         };
       });
     }
@@ -4718,6 +4923,7 @@ NAV + MOBILE RULES:
       const firstIssue = [
         ...(lintState.lintIssues || []),
         ...lintState.schemaIssues,
+        ...(lintState.nonBackendPolicyIssues || []),
       ][0];
       throw new Error(
         `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,

@@ -119,8 +119,8 @@ AUTHENTICATION & BACKEND
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PAYMENTS & CHECKOUT SYSTEM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- AUTO-DETECT: If the dashboard is for an e-commerce store, SaaS with pricing/subscriptions, marketplace, or any app where users purchase products/services — build the full checkout system automatically. Do NOT wait for explicit "add payments" request.
-- If purely informational (analytics dashboard, admin panel with no purchases): no payment code.
+- Only generate payment/checkout flows when payment integration is explicitly requested by the user/instructions.
+- If payment integration is NOT explicitly requested, do not generate payment code.
 - Do NOT add "stripe" dependency or import from "stripe". No server-side Stripe code.
 - FULL CHECKOUT FLOW: Product/plan display with prices and "Buy"/"Subscribe" buttons → Cart page or checkout summary → Payment API call → Success/Cancel pages.
 - Payment API: POST to \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }. Redirect to returned { url }. Generate app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customerEmail.
