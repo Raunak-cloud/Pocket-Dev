@@ -3410,7 +3410,7 @@ ${pdfUrlList}
                   <button
                     type="button"
                     onClick={() => setIsMobileMenuOpen(true)}
-                    className="lg:hidden inline-flex items-center h-8 gap-1.5 px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                    className="lg:hidden inline-flex items-center h-8 gap-1.5 px-2.5 max-[380px]:px-2 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
                     title="Open menu"
                   >
                     <svg
@@ -3426,7 +3426,7 @@ ${pdfUrlList}
                         d="M3.75 6.75h16.5m-16.5 5.25h16.5m-16.5 5.25h16.5"
                       />
                     </svg>
-                    Menu
+                    <span className="max-[380px]:hidden">Menu</span>
                   </button>
 
                   {!isMobileViewport && (
@@ -3456,7 +3456,7 @@ ${pdfUrlList}
                     <>
                       <button
                         onClick={() => setIsMobileEditPanelOpen(true)}
-                        className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-blue-100 bg-blue-600/25 hover:bg-blue-600/35 border border-blue-500/40 rounded-lg transition"
+                        className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-blue-100 bg-blue-600/25 hover:bg-blue-600/35 border border-blue-500/40 rounded-lg transition"
                         title="Edit website with prompts"
                       >
                         <svg
@@ -3472,7 +3472,7 @@ ${pdfUrlList}
                             d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
                           />
                         </svg>
-                        Edit
+                        <span className="max-[380px]:hidden">Edit</span>
                       </button>
 
                       <div className="mobile-tools-dropdown relative">
@@ -3480,7 +3480,7 @@ ${pdfUrlList}
                           onClick={() =>
                             setIsMobileToolsDropdownOpen((prev) => !prev)
                           }
-                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
                           title="Editing tools"
                         >
                           <svg
@@ -3496,7 +3496,7 @@ ${pdfUrlList}
                               d="M4 6h16M4 12h16M4 18h16"
                             />
                           </svg>
-                          Tools
+                          <span className="max-[380px]:hidden">Tools</span>
                           <svg
                             className={`w-3 h-3 transition-transform ${isMobileToolsDropdownOpen ? "rotate-180" : ""}`}
                             fill="none"
@@ -3513,13 +3513,13 @@ ${pdfUrlList}
                         </button>
                       </div>
 
-                      <div className="ml-auto flex items-center gap-2 pl-1">
+                      <div className="ml-auto flex items-center gap-2 max-[380px]:gap-1 pl-2 max-[380px]:pl-1">
                         {publishedUrl ? (
                           hasUnpublishedChanges ? (
                             <button
                               onClick={publishProject}
                               disabled={isPublishing}
-                              className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               {isPublishing ? (
                                 <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -3535,18 +3535,20 @@ ${pdfUrlList}
                                     <path
                                       strokeLinecap="round"
                                       strokeLinejoin="round"
-                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                                    />
-                                  </svg>
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                  />
+                                </svg>
+                                <span className="max-[380px]:hidden">
                                   Publish
-                                </>
-                              )}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => setShowDomainModal(true)}
-                              className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
-                            >
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setShowDomainModal(true)}
+                            className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                          >
                               <svg
                                 className="w-3.5 h-3.5"
                                 fill="none"
@@ -3557,20 +3559,22 @@ ${pdfUrlList}
                                 <path
                                   strokeLinecap="round"
                                   strokeLinejoin="round"
-                                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                                />
-                              </svg>
+                                d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                              />
+                            </svg>
+                            <span className="max-[380px]:hidden">
                               Published
-                            </button>
-                          )
-                        ) : (
-                          <button
-                            onClick={publishProject}
-                            disabled={isPublishing || !currentProjectId}
-                            className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isPublishing ? (
-                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            </span>
+                          </button>
+                        )
+                      ) : (
+                        <button
+                          onClick={publishProject}
+                          disabled={isPublishing || !currentProjectId}
+                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isPublishing ? (
+                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                             ) : (
                               <>
                                 <svg
@@ -3586,7 +3590,9 @@ ${pdfUrlList}
                                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                                   />
                                 </svg>
-                                Publish
+                                <span className="max-[380px]:hidden">
+                                  Publish
+                                </span>
                               </>
                             )}
                           </button>
@@ -3594,7 +3600,7 @@ ${pdfUrlList}
 
                         <button
                           onClick={handleNewProjectClick}
-                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
                         >
                           <svg
                             className="w-3.5 h-3.5"
@@ -3609,7 +3615,7 @@ ${pdfUrlList}
                               d="M12 4v16m8-8H4"
                             />
                           </svg>
-                          New
+                          <span className="max-[380px]:hidden">New</span>
                         </button>
                       </div>
                     </>

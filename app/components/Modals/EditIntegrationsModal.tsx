@@ -20,9 +20,9 @@ export function EditIntegrationsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
-        <div className="px-6 py-5 border-b border-border-primary flex items-center justify-between">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-bg-secondary border border-border-secondary rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-xl max-h-[92dvh] sm:max-h-[85dvh] overflow-hidden flex flex-col">
+        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-border-primary flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/20 to-blue-500/20 border border-violet-500/30 flex items-center justify-center">
               <svg
@@ -68,7 +68,7 @@ export function EditIntegrationsModal({
           </button>
         </div>
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
           <div className="space-y-3">
             <button
               type="button"
@@ -211,7 +211,7 @@ export function EditIntegrationsModal({
           </div>
         </div>
 
-        <div className="px-6 pb-6">
+        <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-2 border-t border-border-primary/60">
           <button
             onClick={onClose}
             className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white rounded-lg text-sm font-medium transition"
