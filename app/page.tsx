@@ -323,6 +323,8 @@ function ReactGeneratorContent() {
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
   const [previewSandboxId, setPreviewSandboxId] = useState<string | null>(null);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
@@ -849,6 +851,22 @@ function ReactGeneratorContent() {
       setIsSidebarCollapsed(false);
     }
   }, [project, activeSection]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(max-width: 1023px)");
+    const onChange = () => setIsMobileViewport(mediaQuery.matches);
+
+    onChange();
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileViewport && isMobileMenuOpen) {
+      setIsMobileMenuOpen(false);
+    }
+  }, [isMobileViewport, isMobileMenuOpen]);
 
   // Close edit/export dropdowns when clicking outside
   useEffect(() => {
@@ -3288,43 +3306,98 @@ ${pdfUrlList}
   const selectedButtonKey = selectedButton
     ? getSelectedButtonKey(selectedButton)
     : null;
+  const handleSuccessSectionChange = (section: string) => {
+    setActiveSection(section);
+    setIsMobileMenuOpen(false);
+    if (section !== "create" && !isEditing) {
+      setStatus("idle");
+      setEditPrompt("");
+      clearEditClarificationState();
+    }
+    if (section === "support") loadSupportTickets();
+    if (section === "admin") loadAdminTickets();
+  };
+  const handleDefaultSectionChange = (section: string) => {
+    setActiveSection(section);
+    setIsMobileMenuOpen(false);
+    if (section === "support") loadSupportTickets();
+    if (section === "admin") loadAdminTickets();
+  };
 
   // SUCCESS STATE
   if (status === "success" && project) {
     return (
-      <div className="h-screen bg-bg-primary flex">
-        {/* Sidebar - only show when logged in */}
+      <div className="h-[100dvh] bg-bg-primary flex overflow-hidden">
+        {/* Sidebar - desktop */}
         {user && (
-          <DashboardSidebar
-            activeSection={activeSection}
-            onSectionChange={(section) => {
-              setActiveSection(section);
-              if (section !== "create" && !isEditing) {
-                // Don't reset status if currently editing
-                setStatus("idle");
-                setEditPrompt("");
-                clearEditClarificationState();
-              }
-              if (section === "support") loadSupportTickets();
-              if (section === "admin") loadAdminTickets();
-            }}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={setIsSidebarCollapsed}
-            onBuyTokens={() => {
-              setTokenPurchaseAmount(0);
-              setShowTokenPurchaseModal(true);
-            }}
-            unreadTicketCount={unreadTicketCount}
-          />
+          <div className="hidden lg:flex">
+            <DashboardSidebar
+              activeSection={activeSection}
+              onSectionChange={handleSuccessSectionChange}
+              isCollapsed={isSidebarCollapsed}
+              onToggleCollapse={setIsSidebarCollapsed}
+              onBuyTokens={() => {
+                setTokenPurchaseAmount(0);
+                setShowTokenPurchaseModal(true);
+              }}
+              unreadTicketCount={unreadTicketCount}
+            />
+          </div>
+        )}
+
+        {/* Mobile sidebar drawer */}
+        {user && isMobileMenuOpen && (
+          <div className="fixed inset-0 z-[80] lg:hidden">
+            <button
+              type="button"
+              aria-label="Close navigation menu"
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+            <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw]">
+              <DashboardSidebar
+                activeSection={activeSection}
+                onSectionChange={handleSuccessSectionChange}
+                isCollapsed={false}
+                onBuyTokens={() => {
+                  setTokenPurchaseAmount(0);
+                  setShowTokenPurchaseModal(true);
+                }}
+                unreadTicketCount={unreadTicketCount}
+              />
+            </div>
+          </div>
         )}
 
         {/* Main Content */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Header */}
           <header className="flex-shrink-0 border-b border-border-primary bg-bg-secondary/70 backdrop-blur-lg z-10">
             <div className="px-3 sm:px-4 py-3 space-y-2.5">
               <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileMenuOpen(true)}
+                    className="lg:hidden inline-flex items-center h-8 gap-1.5 px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                    title="Open menu"
+                  >
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M3.75 6.75h16.5m-16.5 5.25h16.5m-16.5 5.25h16.5"
+                      />
+                    </svg>
+                    Menu
+                  </button>
+
                   <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
                     <svg
                       className="w-3 h-3 text-violet-500"
@@ -3403,7 +3476,7 @@ ${pdfUrlList}
                         d="M8 10h8M8 14h5M5 6h14a2 2 0 012 2v8a2 2 0 01-2 2H9l-4 4V8a2 2 0 012-2z"
                       />
                     </svg>
-                    Text Edit
+                    <span className="hidden sm:inline">Text Edit</span>
                   </button>
 
                   <button
@@ -3441,7 +3514,7 @@ ${pdfUrlList}
                         d="M3 16.5V6a3 3 0 013-3h12a3 3 0 013 3v10.5m-18 0l4.5-4.5a2.25 2.25 0 013.182 0L15 16.5m-12 0h18M15 10.5h.008v.008H15V10.5z"
                       />
                     </svg>
-                    Image Replace
+                    <span className="hidden sm:inline">Image Replace</span>
                   </button>
 
                   <button
@@ -3480,7 +3553,7 @@ ${pdfUrlList}
                         d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
                       />
                     </svg>
-                    Link Feature
+                    <span className="hidden sm:inline">Link Feature</span>
                   </button>
                 </div>
 
@@ -3506,7 +3579,7 @@ ${pdfUrlList}
                           d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                         />
                       </svg>
-                      Export
+                      <span className="hidden sm:inline">Export</span>
                       <svg
                         className={`w-3 h-3 transition-transform ${showExportDropdown ? "rotate-180" : ""}`}
                         fill="none"
@@ -3581,7 +3654,7 @@ ${pdfUrlList}
                         {isPublishing ? (
                           <>
                             <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            Publishing...
+                            <span className="hidden sm:inline">Publishing...</span>
                           </>
                         ) : (
                           <>
@@ -3598,7 +3671,8 @@ ${pdfUrlList}
                                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
                               />
                             </svg>
-                            Publish Changes
+                            <span className="hidden sm:inline">Publish Changes</span>
+                            <span className="sm:hidden">Publish</span>
                           </>
                         )}
                       </button>
@@ -3632,7 +3706,7 @@ ${pdfUrlList}
                       {isPublishing ? (
                         <>
                           <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Publishing...
+                          <span className="hidden sm:inline">Publishing...</span>
                         </>
                       ) : (
                         <>
@@ -4063,7 +4137,7 @@ ${pdfUrlList}
 
               {/* Device Frame Container */}
               <div
-                className={`h-full flex items-center justify-center p-4 ${
+                className={`h-full flex items-center justify-center p-2 sm:p-4 ${
                   previewMode === "desktop"
                     ? ""
                     : "bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-700/20 to-transparent"
@@ -4072,9 +4146,9 @@ ${pdfUrlList}
                 <div
                   className={`h-full transition-all duration-300 ${
                     previewMode === "mobile"
-                      ? "w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
+                      ? "w-full max-w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
                       : previewMode === "tablet"
-                        ? "w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
+                        ? "w-full max-w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
                         : "w-full"
                   }`}
                 >
@@ -5737,24 +5811,46 @@ ${pdfUrlList}
 
   // IDLE/ERROR STATE
   return (
-    <div className="min-h-screen bg-bg-primary flex">
-      {/* Sidebar - only show when logged in */}
+    <div className="min-h-[100dvh] bg-bg-primary flex overflow-hidden">
+      {/* Sidebar - desktop */}
       {user && (
-        <DashboardSidebar
-          activeSection={activeSection}
-          onSectionChange={(section) => {
-            setActiveSection(section);
-            if (section === "support") loadSupportTickets();
-            if (section === "admin") loadAdminTickets();
-          }}
-          isCollapsed={isSidebarCollapsed}
-          onToggleCollapse={setIsSidebarCollapsed}
-          onBuyTokens={() => {
-            setTokenPurchaseAmount(0);
-            setShowTokenPurchaseModal(true);
-          }}
-          unreadTicketCount={unreadTicketCount}
-        />
+        <div className="hidden lg:flex">
+          <DashboardSidebar
+            activeSection={activeSection}
+            onSectionChange={handleDefaultSectionChange}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={setIsSidebarCollapsed}
+            onBuyTokens={() => {
+              setTokenPurchaseAmount(0);
+              setShowTokenPurchaseModal(true);
+            }}
+            unreadTicketCount={unreadTicketCount}
+          />
+        </div>
+      )}
+
+      {/* Mobile sidebar drawer */}
+      {user && isMobileMenuOpen && (
+        <div className="fixed inset-0 z-[80] lg:hidden">
+          <button
+            type="button"
+            aria-label="Close navigation menu"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+          <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw]">
+            <DashboardSidebar
+              activeSection={activeSection}
+              onSectionChange={handleDefaultSectionChange}
+              isCollapsed={false}
+              onBuyTokens={() => {
+                setTokenPurchaseAmount(0);
+                setShowTokenPurchaseModal(true);
+              }}
+              unreadTicketCount={unreadTicketCount}
+            />
+          </div>
+        </div>
       )}
 
       {/* Floating theme toggle for non-logged-in users */}
@@ -5765,8 +5861,47 @@ ${pdfUrlList}
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex flex-col min-h-screen">
+      <div className="flex-1 flex flex-col min-h-0">
         <BackgroundEffects />
+
+        {user && (
+          <div className="lg:hidden relative z-20 flex items-center justify-between border-b border-border-primary bg-bg-secondary/80 backdrop-blur-lg px-3 py-2.5">
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary transition"
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3.75 6.75h16.5m-16.5 5.25h16.5m-16.5 5.25h16.5"
+                />
+              </svg>
+              Menu
+            </button>
+            <span className="text-xs font-semibold capitalize text-text-secondary">
+              {activeSection}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setTokenPurchaseAmount(0);
+                setShowTokenPurchaseModal(true);
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-violet-300 bg-violet-500/15 border border-violet-500/30"
+              title="Buy app tokens"
+            >
+              {formatTokens(userData?.appTokens || 0)}
+            </button>
+          </div>
+        )}
 
         {/* Main content */}
         <main

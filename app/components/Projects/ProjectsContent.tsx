@@ -36,7 +36,7 @@ export default function ProjectsContent({
 
   if (savedProjects.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-center">
+      <div className="flex flex-col items-center justify-center h-full text-center px-4 py-8">
         <div className="w-16 h-16 mb-4 bg-bg-tertiary rounded-2xl flex items-center justify-center">
           <svg
             className="w-8 h-8 text-text-muted"
@@ -68,12 +68,12 @@ export default function ProjectsContent({
   }
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-text-primary">My Projects</h2>
+    <div className="w-full max-w-4xl mx-auto p-4 sm:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 sm:mb-6">
+        <h2 className="text-xl sm:text-2xl font-semibold text-text-primary">My Projects</h2>
         <button
           onClick={() => onSectionChange("create")}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition"
+          className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition"
         >
           <svg
             className="w-4 h-4"
@@ -95,23 +95,21 @@ export default function ProjectsContent({
         {savedProjects.map((savedProject) => (
           <div
             key={savedProject.id}
-            className="bg-bg-tertiary/50 border border-border-secondary rounded-xl p-4 hover:border-text-faint transition cursor-pointer group"
+            className="bg-bg-tertiary/50 border border-border-secondary rounded-xl p-3.5 sm:p-4 hover:border-text-faint transition cursor-pointer group"
             onClick={() => onOpenProject(savedProject)}
           >
-            <div className="flex items-start justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <h3 className="text-text-primary font-medium truncate mb-1 group-hover:text-blue-400 transition">
-                  {savedProject.prompt.length > 60
-                    ? savedProject.prompt.substring(0, 60) + "..."
-                    : savedProject.prompt}
+                <h3 className="text-text-primary font-medium mb-1 group-hover:text-blue-400 transition break-words [overflow-wrap:anywhere]">
+                  {savedProject.prompt}
                 </h3>
-                <div className="flex items-center gap-3 text-xs text-text-muted">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-text-muted">
                   <span>{savedProject.files.length} files</span>
                   <span>•</span>
                   <span>{formatProjectDate(savedProject.createdAt)}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+              <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0 sm:ml-4">
                 {savedProject.isPublished && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-teal-400 bg-teal-500/10 rounded-full">
                     <svg
@@ -153,7 +151,7 @@ export default function ProjectsContent({
                   </svg>
                 </button>
                 <svg
-                  className="w-5 h-5 text-text-muted group-hover:text-blue-400 transition"
+                  className="w-5 h-5 text-text-muted group-hover:text-blue-400 transition ml-auto sm:ml-0"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"

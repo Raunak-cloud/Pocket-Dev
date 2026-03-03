@@ -80,7 +80,7 @@ export default function SupportContent({
   );
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col min-h-0 overflow-hidden">
       {/* 12-hour notice banner */}
       {ticketSubmittedNotice && (
         <div className="flex-shrink-0 mx-4 mt-3 px-4 py-2.5 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-center gap-2">
@@ -104,16 +104,16 @@ export default function SupportContent({
         </div>
       )}
 
-      <div className="flex-1 flex gap-4 p-4 min-h-0">
+      <div className="flex-1 flex flex-col lg:flex-row gap-4 p-3 sm:p-4 min-h-0 overflow-y-auto lg:overflow-hidden">
         {/* Left: Create Ticket + Ticket List */}
-        <div className="w-[60%] flex-shrink-0 flex flex-col gap-3 min-h-0">
+        <div className="w-full lg:w-[60%] flex-shrink-0 flex flex-col gap-3 min-h-0">
           {/* Create Ticket */}
           <div className="bg-bg-secondary/50 border border-border-primary rounded-xl p-4 flex-shrink-0">
             <h3 className="text-base font-semibold text-text-primary mb-3">
               New Ticket
             </h3>
             <div className="space-y-3">
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {(
                   [
                     {
@@ -211,7 +211,7 @@ export default function SupportContent({
           </div>
 
           {/* Ticket List */}
-          <div className="flex-1 bg-bg-secondary/50 border border-border-primary rounded-xl flex flex-col min-h-0">
+          <div className="flex-1 bg-bg-secondary/50 border border-border-primary rounded-xl flex flex-col min-h-[240px] lg:min-h-0">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-primary">
               <h3 className="text-sm font-semibold text-text-secondary">
                 My Tickets
@@ -244,7 +244,7 @@ export default function SupportContent({
                           : ""
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-start sm:items-center justify-between gap-2">
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <h4 className="text-sm font-medium text-text-primary truncate">
                             {ticket.subject}
@@ -255,7 +255,7 @@ export default function SupportContent({
                             )}
                         </div>
                         <span
-                          className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                          className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${
                             ticket.status === "resolved"
                               ? "bg-emerald-500/15 text-emerald-400"
                               : ticket.status === "in-progress"
@@ -269,7 +269,7 @@ export default function SupportContent({
                               ticket.status.slice(1)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                         <span className="text-xs text-text-muted">
                           {formatDate(ticket.createdAt, {
                             month: "short",
@@ -290,7 +290,7 @@ export default function SupportContent({
         </div>
 
         {/* Right: Selected Ticket Detail / Conversation */}
-        <div className="w-[40%] bg-bg-secondary/50 border border-border-primary rounded-xl flex flex-col min-h-0">
+        <div className="w-full lg:w-[40%] bg-bg-secondary/50 border border-border-primary rounded-xl flex flex-col min-h-[280px] lg:min-h-0">
           {selectedTicket ? (
             <>
               {/* Ticket Header */}
@@ -339,7 +339,7 @@ export default function SupportContent({
                 ) ? (
                   <>
                     <div className="flex justify-end">
-                      <div className="max-w-[80%] px-3 py-2 bg-blue-600/20 border border-blue-500/20 rounded-xl rounded-tr-sm">
+                      <div className="max-w-[92%] sm:max-w-[80%] px-3 py-2 bg-blue-600/20 border border-blue-500/20 rounded-xl rounded-tr-sm">
                         <p className="text-sm text-text-secondary whitespace-pre-wrap">
                           {selectedTicket.description}
                         </p>
@@ -353,7 +353,7 @@ export default function SupportContent({
                     </div>
                     {selectedTicket.adminResponse && (
                       <div className="flex justify-start">
-                        <div className="max-w-[80%] px-3 py-2 bg-bg-tertiary/80 border border-border-secondary rounded-xl rounded-tl-sm">
+                        <div className="max-w-[92%] sm:max-w-[80%] px-3 py-2 bg-bg-tertiary/80 border border-border-secondary rounded-xl rounded-tl-sm">
                           <p className="text-xs font-medium text-emerald-400 mb-0.5">
                             Admin
                           </p>
@@ -379,7 +379,7 @@ export default function SupportContent({
                       className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[80%] px-3 py-2 rounded-xl ${
+                        className={`max-w-[92%] sm:max-w-[80%] px-3 py-2 rounded-xl ${
                           msg.sender === "user"
                             ? "bg-blue-600/20 border border-blue-500/20 rounded-tr-sm"
                             : "bg-bg-tertiary/80 border border-border-secondary rounded-tl-sm"
@@ -410,7 +410,7 @@ export default function SupportContent({
               {/* Reply input (if not resolved) */}
               {selectedTicket.status !== "resolved" ? (
                 <div className="flex-shrink-0 px-4 py-3 border-t border-border-primary">
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="text"
                       value={
@@ -460,7 +460,7 @@ export default function SupportContent({
               )}
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center">
+            <div className="hidden lg:flex flex-1 items-center justify-center">
               <div className="text-center">
                 <svg
                   className="w-10 h-10 text-border-secondary mx-auto mb-3"

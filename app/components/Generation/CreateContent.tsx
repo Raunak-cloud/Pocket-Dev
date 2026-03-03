@@ -401,7 +401,7 @@ export default function CreateContent({
       )}
 
       <form onSubmit={handleGenerate} className="w-full max-w-3xl">
-        <div className="relative bg-bg-secondary/80 backdrop-blur-xl border border-border-primary rounded-2xl shadow-2xl shadow-black/30 overflow-hidden focus-within:border-border-secondary transition-colors w-full">
+        <div className="bg-bg-secondary/80 backdrop-blur-xl border border-border-primary rounded-2xl shadow-2xl shadow-black/30 overflow-hidden focus-within:border-border-secondary transition-colors w-full">
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -415,13 +415,13 @@ export default function CreateContent({
               }
             }}
             rows={1}
-            className="w-full px-4 pt-4 pb-14 bg-transparent text-text-primary focus:outline-none resize-none text-base relative z-[1]"
+            className="w-full px-4 pt-4 pb-4 bg-transparent text-text-primary focus:outline-none resize-none text-base"
             style={{ minHeight: "52px", maxHeight: "150px" }}
             placeholder="Describe your app..."
           />
 
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2.5 bg-bg-secondary/50 z-[2]">
-            <div className="flex items-center gap-1">
+          <div className="flex flex-col gap-2 px-3 py-2.5 bg-bg-secondary/50 border-t border-border-primary/60 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center flex-wrap gap-1">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -486,7 +486,7 @@ export default function CreateContent({
               <select
                 value={projectType}
                 onChange={(e) => onSetProjectType(e.target.value as "website" | "dashboard")}
-                className={`px-2 py-1.5 rounded-lg transition text-[11px] font-medium bg-transparent border-none outline-none cursor-pointer appearance-none pr-5 ${
+                className={`px-2 py-1.5 rounded-lg transition text-[11px] font-medium bg-transparent border-none outline-none cursor-pointer appearance-none pr-5 max-w-[110px] sm:max-w-none ${
                   projectType === "dashboard"
                     ? "text-blue-300 bg-blue-500/10"
                     : "text-text-muted hover:text-text-secondary"
@@ -551,7 +551,7 @@ export default function CreateContent({
             <button
               type="submit"
               disabled={!prompt.trim() || checkingAuthIntent}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {checkingAuthIntent ? (
                 <svg

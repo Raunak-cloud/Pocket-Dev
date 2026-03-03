@@ -277,16 +277,16 @@ export default function AnalyticsContent() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-[1400px] mx-auto p-6 space-y-6">
+      <div className="max-w-[1400px] mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-text-primary tracking-tight">Analytics</h1>
             <p className="text-sm text-text-muted mt-0.5">
               Track your published projects&apos; performance
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -303,7 +303,7 @@ export default function AnalyticsContent() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.016 4.656v4.992" />
               </svg>
             </button>
-            <div className="flex gap-1 bg-bg-tertiary/60 rounded-xl p-1 border border-border-primary/30">
+            <div className="flex gap-1 bg-bg-tertiary/60 rounded-xl p-1 border border-border-primary/30 overflow-x-auto">
               {(["7d", "30d", "90d"] as Range[]).map((r) => (
                 <button
                   key={r}
@@ -322,7 +322,7 @@ export default function AnalyticsContent() {
         </div>
 
         {/* Stat Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <MetricCard
             label="Visitors"
             value={formatCompact(overview.totalVisitors)}
@@ -529,7 +529,7 @@ export default function AnalyticsContent() {
                 <button
                   key={p.id}
                   onClick={() => setSelectedProject(selectedProject === p.id ? null : p.id)}
-                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl text-left transition-all ${
+                  className={`w-full flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-3 sm:px-4 py-3 rounded-xl text-left transition-all ${
                     selectedProject === p.id
                       ? "bg-indigo-500/8 ring-1 ring-indigo-500/20"
                       : "hover:bg-bg-tertiary/40"
@@ -544,7 +544,7 @@ export default function AnalyticsContent() {
                       <p className="text-xs text-text-muted truncate mt-0.5">{p.publishedUrl}</p>
                     )}
                   </div>
-                  <div className="flex gap-6 text-right shrink-0">
+                  <div className="flex gap-4 sm:gap-6 text-right shrink-0 w-full sm:w-auto justify-end">
                     <div>
                       <p className="text-sm font-semibold text-text-primary tabular-nums">{p.visitors.toLocaleString()}</p>
                       <p className="text-[10px] text-text-muted uppercase tracking-wide">visitors</p>
@@ -555,7 +555,7 @@ export default function AnalyticsContent() {
                     </div>
                   </div>
                   <svg
-                    className={`w-4 h-4 text-text-muted transition-transform duration-200 ${selectedProject === p.id ? "rotate-180" : ""}`}
+                    className={`w-4 h-4 text-text-muted transition-transform duration-200 self-end sm:self-center ${selectedProject === p.id ? "rotate-180" : ""}`}
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -592,8 +592,8 @@ function ChartCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-5">
-      <div className="flex items-start justify-between mb-5">
+    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-5">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
           {subtitle && <p className="text-xs text-text-muted mt-0.5">{subtitle}</p>}
@@ -648,7 +648,7 @@ function MetricCard({
   const c = colorMap[color] || colorMap.indigo;
 
   return (
-    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-4 relative overflow-hidden">
+    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-4 relative overflow-hidden">
       {/* Sparkline background */}
       {sparkData && sparkData.length > 2 && (
         <div className="absolute bottom-0 left-0 right-0 h-12 opacity-30">
@@ -787,8 +787,8 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
       {/* Devices */}
       {detail.devices.length > 0 && (
         <ChartCard title="Devices" subtitle="Visitor device breakdown">
-          <div className="flex items-center gap-6">
-            <div className="w-[160px] h-[160px] shrink-0">
+          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+            <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -830,8 +830,8 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
       {/* Browsers */}
       {detail.browsers.length > 0 && (
         <ChartCard title="Browsers" subtitle="Browser distribution">
-          <div className="flex items-center gap-6">
-            <div className="w-[160px] h-[160px] shrink-0">
+          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+            <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
