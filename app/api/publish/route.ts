@@ -2221,8 +2221,9 @@ export async function POST(request: NextRequest) {
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
       NEXT_PUBLIC_POCKET_DEV_URL:
         parsedFileEnv.NEXT_PUBLIC_POCKET_DEV_URL ||
+        process.env.NEXT_PUBLIC_POCKET_DEV_URL ||
         process.env.NEXT_PUBLIC_PRODUCTION_URL ||
-        process.env.NEXT_PUBLIC_APP_URL ||
+        (process.env.NEXT_PUBLIC_APP_URL?.includes("localhost") ? "" : process.env.NEXT_PUBLIC_APP_URL) ||
         "",
       NEXT_PUBLIC_POCKET_PROJECT_ID:
         parsedFileEnv.NEXT_PUBLIC_POCKET_PROJECT_ID ||

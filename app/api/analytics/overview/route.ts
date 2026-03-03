@@ -46,12 +46,20 @@ export async function GET(request: NextRequest) {
         orderBy: { publishedAt: "desc" },
       });
 
-      const projectIds = publishedProjects.map((p) => p.id);
+      const publishedIds = new Set(publishedProjects.map((p) => p.id));
 
-      // Get analytics events for all projects
-      const events = projectIds.length > 0
+      // Also find user projects that have analytics events but may not be
+      // marked as isPublished (e.g. if the publish-state call failed).
+      const allUserProjects = await prisma.project.findMany({
+        where: { userId: user.id, deleted: false },
+        select: { id: true, prompt: true, publishedUrl: true, publishedAt: true },
+      });
+      const allUserProjectIds = allUserProjects.map((p) => p.id);
+
+      // Get analytics events for ALL user projects (not just published ones)
+      const events = allUserProjectIds.length > 0
         ? await prisma.analyticsEvent.findMany({
-            where: { projectId: { in: projectIds }, createdAt: { gte: since } },
+            where: { projectId: { in: allUserProjectIds }, createdAt: { gte: since } },
             select: {
               projectId: true,
               sessionId: true,
@@ -60,6 +68,14 @@ export async function GET(request: NextRequest) {
             orderBy: { createdAt: "asc" },
           })
         : [];
+
+      // Include unpublished projects that have events (tracking works but
+      // isPublished flag was never set — e.g. Cloudflare publish-state failed)
+      const projectsWithEvents = new Set(events.map((e) => e.projectId));
+      const extraProjects = allUserProjects.filter(
+        (p) => !publishedIds.has(p.id) && projectsWithEvents.has(p.id),
+      );
+      const effectiveProjects = [...publishedProjects, ...extraProjects];
 
       // Global aggregation
       const totalPageviews = events.length;
@@ -90,7 +106,7 @@ export async function GET(request: NextRequest) {
         if (e.sessionId) d.sessions.add(e.sessionId);
       }
 
-      const projects = publishedProjects.map((p) => {
+      const projects = effectiveProjects.map((p) => {
         const stats = projectMap.get(p.id);
         return {
           id: p.id,
@@ -219,7 +235,7 @@ export async function GET(request: NextRequest) {
       return {
         totalPageviews,
         totalVisitors,
-        publishedProjects: publishedProjects.length,
+        publishedProjects: effectiveProjects.length,
         projects,
         daily,
         tokenUsage,
