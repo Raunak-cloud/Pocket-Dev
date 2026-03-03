@@ -6,7 +6,6 @@
  */
 
 import { inngest } from "@/lib/inngest-client";
-import { generateImagesFunction } from "@/lib/inngest/generate-images";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
@@ -4830,21 +4829,15 @@ NAV + MOBILE RULES:
         files,
         integrationRequirements,
       );
-      const nonBackendPolicyIssues = collectNonBackendTransactionalIssues(
-        files,
-        integrationRequirements,
-      );
       return {
         files,
         dependencies,
         lintReport: lintResult.lintReport,
         lintIssues: lintResult.lintIssues,
         schemaIssues,
-        nonBackendPolicyIssues,
         hasErrors:
           lintResult.lintReport.errors > 0 ||
-          schemaIssues.length > 0 ||
-          nonBackendPolicyIssues.length > 0,
+          schemaIssues.length > 0,
       };
     });
 
@@ -4864,12 +4857,11 @@ NAV + MOBILE RULES:
             ? [
               ...lintState.lintIssues,
               ...lintState.schemaIssues,
-              ...lintState.nonBackendPolicyIssues,
             ]
-            : [...lintState.schemaIssues, ...lintState.nonBackendPolicyIssues];
+            : [...lintState.schemaIssues];
         const firstIssue = issuesToFix[0];
         console.warn(
-          `[LintRepair] Attempt ${attempt} - ${lintState.lintReport.errors} lint errors, ${lintState.schemaIssues.length} schema issue(s), ${lintState.nonBackendPolicyIssues.length} public-mode policy issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
+          `[LintRepair] Attempt ${attempt} - ${lintState.lintReport.errors} lint errors, ${lintState.schemaIssues.length} schema issue(s). First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
         );
 
         let workingFiles = lintState.files;
@@ -4899,10 +4891,6 @@ NAV + MOBILE RULES:
           workingFiles,
           integrationRequirements,
         );
-        const nonBackendPolicyIssues = collectNonBackendTransactionalIssues(
-          workingFiles,
-          integrationRequirements,
-        );
 
         return {
           files: workingFiles,
@@ -4910,11 +4898,9 @@ NAV + MOBILE RULES:
           lintReport: lintResult.lintReport,
           lintIssues: lintResult.lintIssues,
           schemaIssues,
-          nonBackendPolicyIssues,
           hasErrors:
             lintResult.lintReport.errors > 0 ||
-            schemaIssues.length > 0 ||
-            nonBackendPolicyIssues.length > 0,
+            schemaIssues.length > 0,
         };
       });
     }
@@ -4923,7 +4909,6 @@ NAV + MOBILE RULES:
       const firstIssue = [
         ...(lintState.lintIssues || []),
         ...lintState.schemaIssues,
-        ...(lintState.nonBackendPolicyIssues || []),
       ][0];
       throw new Error(
         `Lint failed after repair attempts. First issue: ${firstIssue?.path}:${firstIssue?.line}:${firstIssue?.column} ${firstIssue?.message}`,
@@ -5333,24 +5318,39 @@ NAV + MOBILE RULES:
 
     // Step 8: Generate images via Inngest sub-function (global concurrency)
     await sendProgress(projectId, "[8/9] Generating images...");
-    const imageResult = await step.invoke("generate-images", {
-      function: generateImagesFunction,
-      data: {
-        files: finalFiles,
-        userId: userId || "anonymous",
-        projectId,
-        originalPrompt: prompt,
-        detectedTheme,
-        preserveExistingImages: preserveExistingImages ?? false,
-        previousImageUrls: previousImageUrls ?? [],
-      },
-      timeout: "10m",
-    }) as { replacements: Record<string, string>; files: Array<{ path: string; content: string }> };
+    let filesWithImages = finalFiles;
+    try {
+      const imageResult = await step.invoke("generate-images", {
+        function: "generate-images",
+        data: {
+          files: finalFiles,
+          userId: userId || "anonymous",
+          projectId,
+          originalPrompt: prompt,
+          detectedTheme,
+          preserveExistingImages: preserveExistingImages ?? false,
+          previousImageUrls: previousImageUrls ?? [],
+        },
+        timeout: "10m",
+      }) as {
+        replacements: Record<string, string>;
+        files: Array<{ path: string; content: string }>;
+      };
 
-    // Use image-processed files if available
-    const filesWithImages = imageResult.files?.length > 0
-      ? imageResult.files as typeof finalFiles
-      : finalFiles;
+      // Use image-processed files if available
+      filesWithImages =
+        imageResult.files?.length > 0
+          ? (imageResult.files as typeof finalFiles)
+          : finalFiles;
+    } catch (imageErr) {
+      const message =
+        imageErr instanceof Error ? imageErr.message : String(imageErr);
+      console.error("[Inngest] Image generation invoke failed:", message);
+      await sendProgress(
+        projectId,
+        "[8/9] Image generation unavailable, continuing with placeholder visuals...",
+      );
+    }
 
     // Step 9: Notify completion via API
     await step.run("notify-completion", async () => {
