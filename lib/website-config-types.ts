@@ -16,22 +16,9 @@ export interface CustomSection {
 
 export type ConfigSection = CustomSection | Record<string, any>;
 
-export type TemplateId =
-  | "restaurant"
-  | "ecommerce"
-  | "saas"
-  | "portfolio"
-  | "blog"
-  | "fitness";
-
-export interface UploadedImage {
-  url: string;
-  alt?: string;
-}
-
 export interface WebsiteConfig {
   version: number;
-  templateId: TemplateId;
+  templateId: "restaurant" | "ecommerce" | "saas" | "portfolio" | "blog" | "fitness";
   business: {
     name: string;
     tagline: string;
@@ -67,5 +54,5 @@ export interface WebsiteConfig {
   content?: {
     [key: string]: any;
   };
-  images?: UploadedImage[];
+  images?: { url: string; alt?: string }[];
 }

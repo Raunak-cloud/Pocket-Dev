@@ -6,12 +6,12 @@ import type { SiteTheme } from "@/app/types";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface GeneratedFile {
+export interface GeneratedFile {
   path: string;
   content: string;
 }
 
-interface PersistImageOptions {
+export interface PersistImageOptions {
   previousFiles?: GeneratedFile[];
   preserveExistingImages?: boolean;
   isUserProvidedPrompt?: boolean;
@@ -27,9 +27,9 @@ type ReplicateModelName =
   | `${string}/${string}`
   | `${string}/${string}:${string}`;
 
-type AspectRatio = "square" | "landscape" | "portrait" | "wide";
+export type AspectRatio = "square" | "landscape" | "portrait" | "wide";
 
-interface ImageReference {
+export interface ImageReference {
   source: string;
   altText: string | null;
   filePath: string;
@@ -38,13 +38,13 @@ interface ImageReference {
   index: number;
 }
 
-interface ImagePromptResult {
+export interface ImagePromptResult {
   source: string;
   prompt: string;
   aspectRatio: AspectRatio;
 }
 
-interface ImageGenConfig {
+export interface ImageGenConfig {
   replicateModel: ReplicateModelName;
   defaultWidth: number;
   defaultHeight: number;
@@ -71,7 +71,7 @@ const KNOWN_IMAGE_HOSTS = new Set([
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-function resolveImageGenConfig(): ImageGenConfig {
+export function resolveImageGenConfig(): ImageGenConfig {
   return {
     replicateModel: (process.env.REPLICATE_IMAGE_MODEL ||
       "prunaai/z-image-turbo") as ReplicateModelName,
@@ -88,7 +88,7 @@ function resolveImageGenConfig(): ImageGenConfig {
   };
 }
 
-function getAspectRatioDimensions(
+export function getAspectRatioDimensions(
   aspectRatio: AspectRatio,
   config: ImageGenConfig,
 ): { width: number; height: number } {
@@ -189,7 +189,7 @@ function extractSurroundingContext(
   return content.slice(from, to);
 }
 
-function collectImageReferences(files: GeneratedFile[]): ImageReference[] {
+export function collectImageReferences(files: GeneratedFile[]): ImageReference[] {
   const refs: ImageReference[] = [];
   const seenSources = new Set<string>();
   const supabaseHost = getSupabaseHost();
@@ -351,7 +351,7 @@ Return a JSON array. Each element must have exactly these fields:
 
 Return ONLY the JSON array, no other text.`;
 
-function buildSiteContentSample(files: GeneratedFile[]): string {
+export function buildSiteContentSample(files: GeneratedFile[]): string {
   const prioritized = [...files].sort((a, b) => {
     const priority = (path: string) => {
       if (path.includes("page.tsx") || path.includes("page.jsx")) return 0;
@@ -425,7 +425,7 @@ ${imageDescriptions}
 Generate optimized prompts for each image. Return JSON array only.`;
 }
 
-function fallbackPromptGeneration(
+export function fallbackPromptGeneration(
   refs: ImageReference[],
 ): ImagePromptResult[] {
   return refs.map((ref) => ({
@@ -438,7 +438,7 @@ function fallbackPromptGeneration(
   }));
 }
 
-async function generateImagePrompts(
+export async function generateImagePrompts(
   refs: ImageReference[],
   options: {
     originalPrompt: string;
@@ -702,7 +702,7 @@ async function generateReplicateImage(
   return getReplicateOutputUrl(output);
 }
 
-async function generateReplicateImageWithRetry(args: {
+export async function generateReplicateImageWithRetry(args: {
   replicate: Replicate;
   prompt: string;
   source: string;
@@ -728,10 +728,11 @@ async function generateReplicateImageWithRetry(args: {
       }
 
       attempt++;
+      const backoffMs = retryDelayMs * Math.pow(1.5, attempt) + Math.random() * 3000;
       console.warn(
-        `[Image Pipeline] Rate limited for "${source}" (retry ${attempt}/${maxRetries}) - waiting ${retryDelayMs / 1000}s...`,
+        `[Image Pipeline] Rate limited for "${source}" (retry ${attempt}/${maxRetries}) - waiting ${Math.round(backoffMs / 1000)}s...`,
       );
-      await sleep(retryDelayMs);
+      await sleep(backoffMs);
     }
   }
 }
@@ -821,7 +822,7 @@ function extensionFromContentType(contentType: string): string {
   return "jpg";
 }
 
-async function ensureBucketExists(bucket: string) {
+export async function ensureBucketExists(bucket: string) {
   const supabase = createAdminClient();
   const { data, error } = await supabase.storage.listBuckets();
   if (error) {
@@ -841,7 +842,7 @@ async function ensureBucketExists(bucket: string) {
   }
 }
 
-async function uploadImageFromUrl(args: {
+export async function uploadImageFromUrl(args: {
   imageUrl: string;
   userId: string;
   bucket: string;
@@ -878,7 +879,7 @@ async function uploadImageFromUrl(args: {
 
 // ─── Fallback SVG ────────────────────────────────────────────────────────────
 
-function createFallbackImageDataUri(
+export function createFallbackImageDataUri(
   source: string,
   prompt: string,
   index: number,
@@ -956,7 +957,7 @@ function extractStablePreviousImageSources(
   return result;
 }
 
-function lockExistingImageSourcesOnEdit(
+export function lockExistingImageSourcesOnEdit(
   nextFiles: GeneratedFile[],
   previousFiles: GeneratedFile[],
 ): GeneratedFile[] {
@@ -1003,9 +1004,60 @@ function lockExistingImageSourcesOnEdit(
   });
 }
 
+/**
+ * Variant of lockExistingImageSourcesOnEdit that accepts pre-extracted URLs
+ * instead of full GeneratedFile[]. Used when previous URLs are extracted
+ * client-side and passed through the Inngest event.
+ */
+export function lockExistingImageSourcesFromUrls(
+  nextFiles: GeneratedFile[],
+  previousImageUrls: string[],
+): GeneratedFile[] {
+  if (previousImageUrls.length === 0) return nextFiles;
+  const supabaseHost = getSupabaseHost();
+
+  let rollingIndex = 0;
+  const replaceToken = (source: string): string => {
+    const placeholderMatch = source.match(/^REPLICATE_IMG_(\d+)$/i);
+    if (placeholderMatch) {
+      const idx = Number.parseInt(placeholderMatch[1], 10) - 1;
+      if (idx >= 0 && idx < previousImageUrls.length) {
+        return previousImageUrls[idx];
+      }
+      const fallback =
+        previousImageUrls[Math.min(rollingIndex, previousImageUrls.length - 1)];
+      rollingIndex++;
+      return fallback;
+    }
+
+    if (shouldReplaceSource(source, supabaseHost)) {
+      const fallback =
+        previousImageUrls[Math.min(rollingIndex, previousImageUrls.length - 1)];
+      rollingIndex++;
+      return fallback;
+    }
+
+    return source;
+  };
+
+  return nextFiles.map((file) => {
+    const nextContent = file.content.replace(
+      /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/gi,
+      (match, source: string) => {
+        const replacement = replaceToken(source.trim());
+        if (!replacement || replacement === source.trim()) return match;
+        return match.replace(source, replacement);
+      },
+    );
+
+    if (nextContent === file.content) return file;
+    return { ...file, content: nextContent };
+  });
+}
+
 // ─── File Replacement ────────────────────────────────────────────────────────
 
-function applyReplacements(
+export function applyReplacements(
   files: GeneratedFile[],
   replacements: Map<string, string>,
 ): GeneratedFile[] {

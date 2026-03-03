@@ -30,7 +30,8 @@
       "mcp__ide__getDiagnostics",
       "WebFetch(domain:supabase.com)",
       "Bash(npx prisma:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(done)"
     ]
   }
 }

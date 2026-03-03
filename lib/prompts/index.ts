@@ -9,7 +9,6 @@ export {
   buildLintRepairPrompt,
   buildSchemaBootstrapRepairPrompt,
 } from "./repair-prompts";
-export { CONFIG_GENERATOR_SYSTEM_PROMPT } from "./config-generator-prompt";
 export {
   buildEditPrompt,
   buildImageUploadSection,

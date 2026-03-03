@@ -246,6 +246,41 @@ const inferProjectIntegrations = (
   };
 };
 
+/**
+ * Extract stable image URLs (Supabase storage URLs) from generated files.
+ * Scans <img>/<Image> tags for HTTP URLs that aren't placeholders or data URIs.
+ */
+function extractStableImageUrls(
+  files: { path: string; content: string }[],
+): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const file of files) {
+    const tagRe = /<(?:img|Image)\b[^>]*>/gim;
+    let tagMatch: RegExpExecArray | null = tagRe.exec(file.content);
+    while (tagMatch) {
+      const tag = tagMatch[0];
+      const srcMatch = tag.match(
+        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
+      );
+      if (srcMatch) {
+        const src = srcMatch[1].trim();
+        if (
+          src.startsWith("http") &&
+          !src.match(/^REPLICATE_IMG_\d+$/i) &&
+          !src.startsWith("data:") &&
+          !seen.has(src)
+        ) {
+          seen.add(src);
+          urls.push(src);
+        }
+      }
+      tagMatch = tagRe.exec(file.content);
+    }
+  }
+  return urls;
+}
+
 // Main content component
 function ReactGeneratorContent() {
   const {
@@ -2153,6 +2188,11 @@ ${schemaContext}
       const allowImageChanges =
         hasUploadedEditImages || isExplicitImageChangeRequest(editPrompt);
 
+      // Extract previous image URLs for preservation in the Inngest pipeline
+      const previousImageUrls = !allowImageChanges
+        ? extractStableImageUrls(project.files)
+        : undefined;
+
       const result = await generateCodeWithInngest(
         editFullPrompt,
         user?.uid || "anonymous",
@@ -2170,6 +2210,11 @@ ${schemaContext}
           requiresPasswordAuth: backendSelectedForEdit,
           requiresPayments: paymentsEnabledForEdit || false,
         },
+        undefined, // projectType
+        {
+          preserveExistingImages: !allowImageChanges,
+          previousImageUrls,
+        },
       );
 
       setEditProgressMessages((prev) => [
@@ -2177,15 +2222,9 @@ ${schemaContext}
         "Finalizing and saving edited project files...",
       ]);
 
-      // AI code generation: persist images and use generated files
-      const persistedFiles = await persistGeneratedImages(result.files, {
-        previousFiles: project.files,
-        preserveExistingImages: !allowImageChanges,
-        originalPrompt: project.originalPrompt || result.originalPrompt,
-        detectedTheme: project.detectedTheme || result.detectedTheme,
-      });
+      // Images are now generated in the Inngest pipeline — result.files already has real URLs
       const mergedProjectBase = applyEditHistoryToProject(
-        { ...result, files: persistedFiles },
+        result,
         currentEditHistory,
       );
       const mergedProject = withStoredIntegrations(mergedProjectBase, {
@@ -2304,7 +2343,7 @@ ${pdfUrlList}
       const runProjectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
       setCurrentGenerationProjectId(runProjectId);
       // Real-time progress from Inngest
-      let result = await generateCodeWithInngest(
+      const result = await generateCodeWithInngest(
         fullPrompt,
         user?.uid || "anonymous",
         (message) => {
@@ -2335,18 +2374,7 @@ ${pdfUrlList}
         "Finalizing and saving generated project...",
       ]);
 
-      // Check if authentication was generated
-      // Auth stack is Supabase-based.
-      // Persist generated images to Supabase Storage for stable URLs.
-      setProgressMessages((prev) => [
-        ...prev,
-        "Persisting generated images...",
-      ]);
-      const persistedFiles = await persistGeneratedImages(result.files, {
-        originalPrompt: result.originalPrompt,
-        detectedTheme: result.detectedTheme,
-      });
-      result = { ...result, files: persistedFiles };
+      // Images are now generated in the Inngest pipeline — result.files already has real URLs
       const projectWithIntegrations = withStoredIntegrations(result, {
         backendEnabled: isGenerationBackendSelected,
         paymentsEnabled,

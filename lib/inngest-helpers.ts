@@ -8,7 +8,6 @@
 
 import {
   triggerCodeGeneration as triggerCodeGenerationAction,
-  triggerImageProcessing as triggerImageProcessingAction,
 } from "@/app/inngest-actions";
 
 import type { SiteTheme } from "@/app/types";
@@ -169,6 +168,10 @@ export async function generateCodeWithInngest(
     requiresPayments?: boolean;
   },
   projectType?: "website" | "dashboard",
+  imageOptions?: {
+    preserveExistingImages?: boolean;
+    previousImageUrls?: string[];
+  },
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -176,7 +179,7 @@ export async function generateCodeWithInngest(
       : `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   onRunStart?.(projectId);
 
-  onProgress?.("[0/7] Queueing generation job...");
+  onProgress?.("[0/9] Queueing generation job...");
 
   // Clear any stale completion/progress state for this project before triggering a new run.
   await fetch("/api/inngest/status", {
@@ -197,9 +200,10 @@ export async function generateCodeWithInngest(
     projectId,
     integrationRequirements,
     projectType,
+    imageOptions,
   );
 
-  onProgress?.("[0/7] Generation started. Waiting for first update...");
+  onProgress?.("[0/9] Generation started. Waiting for first update...");
 
   // Poll for completion — no timeout, fails only if Inngest fails
   const result = await pollForCompletion<GenerateCodeResult>(
@@ -208,35 +212,9 @@ export async function generateCodeWithInngest(
     onProgress
   );
 
-  onProgress?.("[7/7] Generation complete.");
+  onProgress?.("[9/9] Generation complete.");
 
   // Include projectId in result for tracking
   return { ...result, projectId };
 }
 
-/**
- * Trigger image processing workflow
- */
-export async function processImagesWithInngest(
-  files: GeneratedFile[],
-  userId: string,
-  onProgress?: (message: string) => void
-): Promise<{ files: GeneratedFile[] }> {
-  const projectId = `images_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  onProgress?.("Processing images...");
-
-  // Trigger workflow
-  await triggerImageProcessingAction(files, userId, projectId);
-
-  // Poll for completion
-  const result = await pollForCompletion<{ files: GeneratedFile[] }>(
-    projectId,
-    "images.processed",
-    onProgress
-  );
-
-  onProgress?.("Images processed!");
-
-  return result;
-}

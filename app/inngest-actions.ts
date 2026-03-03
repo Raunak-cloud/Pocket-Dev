@@ -23,6 +23,10 @@ export async function triggerCodeGeneration(
     requiresPayments?: boolean;
   },
   projectType?: "website" | "dashboard",
+  imageOptions?: {
+    preserveExistingImages?: boolean;
+    previousImageUrls?: string[];
+  },
 ) {
   const sendResult = await inngest.send({
     name: "app/generate.code",
@@ -32,30 +36,12 @@ export async function triggerCodeGeneration(
       projectId,
       integrationRequirements,
       projectType,
+      preserveExistingImages: imageOptions?.preserveExistingImages,
+      previousImageUrls: imageOptions?.previousImageUrls,
     },
   });
 
   return { success: true, projectId, eventIds: sendResult.ids ?? [] };
-}
-
-/**
- * Trigger image processing workflow
- */
-export async function triggerImageProcessing(
-  files: Array<{ path: string; content: string }>,
-  userId: string,
-  projectId: string
-) {
-  await inngest.send({
-    name: "app/images.process",
-    data: {
-      files,
-      userId,
-      projectId,
-    },
-  });
-
-  return { success: true, projectId };
 }
 
 /**

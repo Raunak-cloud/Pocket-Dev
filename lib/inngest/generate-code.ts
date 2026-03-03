@@ -6,6 +6,7 @@
  */
 
 import { inngest } from "@/lib/inngest-client";
+import { generateImagesFunction } from "@/lib/inngest/generate-images";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
@@ -4115,6 +4116,9 @@ export const generateCodeFunction = inngest.createFunction(
   { event: "app/generate.code" },
   async ({ event, step }) => {
     const { prompt, projectId } = event.data;
+    const userId = (event.data as Record<string, unknown>)?.userId as string | undefined;
+    const preserveExistingImages = (event.data as Record<string, unknown>)?.preserveExistingImages as boolean | undefined;
+    const previousImageUrls = (event.data as Record<string, unknown>)?.previousImageUrls as string[] | undefined;
 
     try {
     const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
@@ -4146,7 +4150,7 @@ export const generateCodeFunction = inngest.createFunction(
       if (await checkIfCancelled(projectId)) {
         throw new Error("Generation cancelled by user");
       }
-      await sendProgress(projectId, "[1/8] Understanding your request...");
+      await sendProgress(projectId, "[1/9] Understanding your request...");
     });
 
     // Detect project type in a dedicated step so edit requests skip it cheaply.
@@ -4315,7 +4319,7 @@ NAV + MOBILE RULES:
     // Step 2: Generate with Gemini
     const generatedText = await step.run("generate-with-gemini", async () => {
       // Progress + cancel check inside the step so they don't eat into replay overhead
-      await sendProgress(projectId, "[2/8] Generating your app...");
+      await sendProgress(projectId, "[2/9] Generating your app...");
       if (await checkIfCancelled(projectId)) {
         throw new Error("Generation cancelled by user");
       }
@@ -4352,7 +4356,7 @@ NAV + MOBILE RULES:
 
     // Step 3: Parse and prepare files
     const parsedProject = await step.run("parse-and-normalize", async () => {
-      await sendProgress(projectId, "[3/8] Parsing and validating code...");
+      await sendProgress(projectId, "[3/9] Parsing and validating code...");
       if (await checkIfCancelled(projectId)) {
         throw new Error("Generation cancelled by user");
       }
@@ -4632,7 +4636,7 @@ NAV + MOBILE RULES:
     // Step 4: Lint and fix code (parallel linting for all files)
     // Step 4a: Initial lint check (its own step for 60s budget)
     let lintState = await step.run("lint-check", async () => {
-      await sendProgress(projectId, "[4/8] Running code quality checks...");
+      await sendProgress(projectId, "[4/9] Running code quality checks...");
       console.log(`Starting linting for ${files.length} files...`);
       const lintResult = await lintAllFiles(files);
       const schemaIssues = collectSupabaseSchemaIssues(
@@ -4726,7 +4730,7 @@ NAV + MOBILE RULES:
 
     // Step 5a: Initial Next.js validation (its own step)
     let nextjsState = await step.run("nextjs-check", async () => {
-      await sendProgress(projectId, "[5/8] Validating Next.js compatibility...");
+      await sendProgress(projectId, "[5/9] Validating Next.js compatibility...");
       // Apply known-good templates before validation so AI-broken
       // infra files (e.g. auth/callback/route.ts) are overwritten first.
       let workingFiles = ensureRequiredFiles(
@@ -4832,7 +4836,7 @@ NAV + MOBILE RULES:
       const typecheckResult = await step.run(
         "typecheck-and-repair",
         async () => {
-          await sendProgress(projectId, "[6/8] Running TypeScript type checks...");
+          await sendProgress(projectId, "[6/9] Running TypeScript type checks...");
           const { Sandbox } = await import("e2b");
           let sandbox: InstanceType<typeof Sandbox> | null = null;
 
@@ -5058,7 +5062,7 @@ NAV + MOBILE RULES:
       }
 
       await step.run("bootstrap-managed-supabase-schema", async () => {
-        await sendProgress(projectId, "[7/8] Setting up database...");
+        await sendProgress(projectId, "[7/9] Setting up database...");
 
         // Auto-reconcile schema with code before bootstrap.
         // Deterministically patches missing tables, columns, RLS policies.
@@ -5121,9 +5125,30 @@ NAV + MOBILE RULES:
       });
     }
 
-    // Step 6: Notify completion via API
+    // Step 8: Generate images via Inngest sub-function (global concurrency)
+    await sendProgress(projectId, "[8/9] Generating images...");
+    const imageResult = await step.invoke("generate-images", {
+      function: generateImagesFunction,
+      data: {
+        files: finalFiles,
+        userId: userId || "anonymous",
+        projectId,
+        originalPrompt: prompt,
+        detectedTheme,
+        preserveExistingImages: preserveExistingImages ?? false,
+        previousImageUrls: previousImageUrls ?? [],
+      },
+      timeout: "10m",
+    }) as { replacements: Record<string, string>; files: Array<{ path: string; content: string }> };
+
+    // Use image-processed files if available
+    const filesWithImages = imageResult.files?.length > 0
+      ? imageResult.files as typeof finalFiles
+      : finalFiles;
+
+    // Step 9: Notify completion via API
     await step.run("notify-completion", async () => {
-      await sendProgress(projectId, "[8/8] Finalizing your app...");
+      await sendProgress(projectId, "[9/9] Finalizing your app...");
       const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
       console.log("[Inngest] Notifying completion:", {
         url,
@@ -5138,7 +5163,7 @@ NAV + MOBILE RULES:
           projectId,
           event: "generate.completed",
           data: {
-            files: finalFiles,
+            files: filesWithImages,
             dependencies,
             lintReport: finalLint.lintReport,
             model: "gemini",
@@ -5165,7 +5190,7 @@ NAV + MOBILE RULES:
     await sendProgress(projectId, "Ready to preview!");
 
     return {
-      files: finalFiles,
+      files: filesWithImages,
       dependencies,
       lintReport: finalLint.lintReport,
       model: "gemini",
