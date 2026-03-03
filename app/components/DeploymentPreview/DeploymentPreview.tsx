@@ -98,7 +98,7 @@ export default function DeploymentPreview({
               No Live Preview Yet
             </h3>
             <p className="text-sm text-text-tertiary mb-4">
-              Publish this project to Cloudflare Pages to render production-accurate
+              Publish this project to Vercel to render production-accurate
               preview.
             </p>
             {onPublish && (
@@ -139,7 +139,7 @@ export default function DeploymentPreview({
           <div className="flex items-center gap-3 rounded-xl border border-border-primary bg-bg-secondary px-4 py-3 shadow-2xl">
             <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
             <span className="text-sm text-text-secondary">
-              Publishing latest preview to Cloudflare Pages...
+              Publishing latest preview to Vercel...
             </span>
           </div>
         </div>

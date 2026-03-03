@@ -11,7 +11,6 @@ interface UsePublishingProps {
   generationPrompt: string;
   setError: (error: string) => void;
   loadSavedProjects: () => Promise<void>;
-  backendEnabled: boolean;
 }
 
 export function usePublishing({
@@ -21,7 +20,6 @@ export function usePublishing({
   generationPrompt,
   setError,
   loadSavedProjects,
-  backendEnabled,
 }: UsePublishingProps) {
   const [isPublishing, setIsPublishing] = useState(false);
   const [isUnpublishing, setIsUnpublishing] = useState(false);
@@ -48,9 +46,7 @@ export function usePublishing({
     setIsPublishing(true);
     setError("");
     try {
-      // Route to Vercel for backend-enabled projects, Cloudflare for static sites
-      const publishEndpoint = backendEnabled ? "/api/publish/vercel" : "/api/publish";
-      const response = await fetch(publishEndpoint, {
+      const response = await fetch("/api/publish/vercel", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -99,7 +95,7 @@ export function usePublishing({
     } finally {
       setIsPublishing(false);
     }
-  }, [project, currentProjectId, user, generationPrompt, setError, loadSavedProjects, backendEnabled]);
+  }, [project, currentProjectId, user, generationPrompt, setError, loadSavedProjects]);
 
   const unpublishProject = useCallback(async () => {
     if (!currentProjectId || !user) return;
@@ -107,14 +103,9 @@ export function usePublishing({
     setIsUnpublishing(true);
     setError("");
     try {
-      // Delete the deployed project — detect provider from URL
       if (deploymentId) {
-        const isVercelDeployment = publishedUrl?.includes(".vercel.app");
-        const deleteEndpoint = isVercelDeployment
-          ? "/api/publish/vercel"
-          : "/api/publish";
         try {
-          await fetch(deleteEndpoint, {
+          await fetch("/api/publish/vercel", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ projectName: deploymentId }),
@@ -150,7 +141,7 @@ export function usePublishing({
     } finally {
       setIsUnpublishing(false);
     }
-  }, [currentProjectId, user, deploymentId, publishedUrl, setError, loadSavedProjects]);
+  }, [currentProjectId, user, deploymentId, setError, loadSavedProjects]);
 
   const connectDomain = useCallback(
     async (domain: string) => {
@@ -182,7 +173,7 @@ export function usePublishing({
         const connectData = await connectRes.json();
         if (!connectRes.ok || connectData?.success !== true) {
           throw new Error(
-            connectData?.error || "Failed to connect custom domain on Cloudflare",
+            connectData?.error || "Failed to connect custom domain on Vercel",
           );
         }
 

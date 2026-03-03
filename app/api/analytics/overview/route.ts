@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
         : [];
 
       // Include unpublished projects that have events (tracking works but
-      // isPublished flag was never set — e.g. Cloudflare publish-state failed)
+      // publish-state metadata was never persisted for an older deployment)
       const projectsWithEvents = new Set(events.map((e) => e.projectId));
       const extraProjects = allUserProjects.filter(
         (p) => !publishedIds.has(p.id) && projectsWithEvents.has(p.id),

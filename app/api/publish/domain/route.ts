@@ -11,18 +11,43 @@ function sanitizeDomain(input: string): string {
     .replace(/\.+$/, "");
 }
 
-type CloudflareApiError = {
-  code?: number;
-  message?: string;
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN || "";
+const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || "";
+
+function vercelHeaders() {
+  return {
+    Authorization: `Bearer ${VERCEL_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+}
+
+function teamQuery() {
+  return VERCEL_TEAM_ID ? `?teamId=${VERCEL_TEAM_ID}` : "";
+}
+
+type VercelErrorResponse = {
+  error?: {
+    message?: string;
+    code?: string;
+  };
+};
+
+type VercelDomainResponse = {
+  name?: string;
+  verified?: boolean;
+  verification?: Array<{
+    type?: string;
+    domain?: string;
+    value?: string;
+    reason?: string;
+  }>;
 };
 
 export async function POST(request: NextRequest) {
   try {
-    const token = process.env.CLOUDFLARE_API_TOKEN;
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-    if (!token || !accountId) {
+    if (!VERCEL_TOKEN) {
       return NextResponse.json(
-        { error: "Cloudflare credentials are not configured" },
+        { error: "VERCEL_TOKEN is not configured" },
         { status: 500 },
       );
     }
@@ -77,47 +102,51 @@ export async function POST(request: NextRequest) {
 
     const projectName = project.deploymentId;
 
-    const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/domains`;
-    const cfRes = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+    const connectRes = await fetch(
+      `https://api.vercel.com/v10/projects/${encodeURIComponent(projectName)}/domains${teamQuery()}`,
+      {
+        method: "POST",
+        headers: vercelHeaders(),
+        body: JSON.stringify({ name: domain }),
+        cache: "no-store",
       },
-      body: JSON.stringify({ name: domain }),
-      cache: "no-store",
-    });
+    );
 
-    const cfData = (await cfRes.json()) as {
-      success?: boolean;
-      errors?: CloudflareApiError[];
-      messages?: Array<{ message?: string }>;
-      result?: unknown;
-    };
+    const connectData = (await connectRes.json().catch(() => ({}))) as
+      | VercelDomainResponse
+      | VercelErrorResponse;
 
-    if (!cfRes.ok || cfData.success !== true) {
-      const errors = cfData.errors || [];
-      const firstMessage =
-        errors[0]?.message ||
-        cfData.messages?.[0]?.message ||
-        "Cloudflare rejected the domain connection request.";
-      const alreadyExists = errors.some((e) =>
-        String(e.message || "")
-          .toLowerCase()
-          .includes("already"),
-      );
+    if (!connectRes.ok) {
+      const message =
+        (connectData as VercelErrorResponse)?.error?.message ||
+        "Vercel rejected the domain connection request.";
+      const alreadyExists =
+        connectRes.status === 409 || /already/i.test(message);
 
       if (!alreadyExists) {
-        return NextResponse.json({ error: firstMessage }, { status: 400 });
+        return NextResponse.json({ error: message }, { status: 400 });
       }
     }
+
+    const detailsRes = await fetch(
+      `https://api.vercel.com/v9/projects/${encodeURIComponent(projectName)}/domains/${encodeURIComponent(domain)}${teamQuery()}`,
+      {
+        headers: vercelHeaders(),
+        cache: "no-store",
+      },
+    );
+
+    const details = detailsRes.ok
+      ? ((await detailsRes.json()) as VercelDomainResponse)
+      : null;
 
     return NextResponse.json({
       success: true,
       domain,
       projectName,
-      cnameTarget: `${projectName}.pages.dev`,
-      status: "initializing",
+      cnameTarget: "cname.vercel-dns.com",
+      status: details?.verified ? "verified" : "pending_verification",
+      verification: details?.verification || [],
     });
   } catch (error) {
     console.error("[POST /api/publish/domain] Error:", error);

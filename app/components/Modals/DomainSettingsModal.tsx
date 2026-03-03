@@ -46,17 +46,10 @@ export function DomainSettingsModal({
     [customDomain],
   );
 
-  const cloudflareProjectHost = useMemo(() => {
-    if (!publishedUrl) return "";
-    try {
-      return new URL(publishedUrl).host;
-    } catch {
-      return publishedUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-    }
-  }, [publishedUrl]);
+  const vercelCnameTarget = useMemo(() => "cname.vercel-dns.com", []);
 
   const cnameHost = "www";
-  const cnameValue = cloudflareProjectHost;
+  const cnameValue = vercelCnameTarget;
   const fqdn = sanitizedDomain ? `${cnameHost}.${sanitizedDomain}` : "";
   const canConnectDomain = Boolean(publishedUrl && customDomain.trim());
   const registrarQuery = (
@@ -191,12 +184,12 @@ export function DomainSettingsModal({
             )}
             <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3">
               <p className="text-xs text-blue-200 font-medium">
-                Cloudflare status
+                Vercel status
               </p>
               <p className="text-sm text-blue-300 mt-0.5">initializing</p>
               <p className="text-xs text-text-muted mt-2">
                 Add the DNS records below at your registrar, then wait for
-                Cloudflare verification.
+                Vercel verification.
               </p>
             </div>
             {sanitizedDomain && cnameValue && (
@@ -312,14 +305,14 @@ export function DomainSettingsModal({
                   <button
                     onClick={() =>
                       window.open(
-                        `https://dash.cloudflare.com/?to=/:account/domains/register/${encodeURIComponent(registrarQuery)}`,
+                        `https://domains.google.com/registrar/search?searchTerm=${encodeURIComponent(registrarQuery)}`,
                         "_blank",
                         "noopener,noreferrer",
                       )
                     }
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium rounded-lg transition"
                   >
-                    Cloudflare Registrar
+                    Google Domains
                   </button>
                   <button
                     onClick={() =>
