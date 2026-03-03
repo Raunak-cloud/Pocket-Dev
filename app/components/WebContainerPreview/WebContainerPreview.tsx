@@ -105,6 +105,7 @@ export default function WebContainerPreview({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const containerRef = useRef<WebContainer | null>(null);
   const serverProcessRef = useRef<{ kill: () => void } | null>(null);
+  const bridgeReadyRef = useRef(false);
 
   useEffect(() => {
     latestProjectRef.current = project;
@@ -138,6 +139,16 @@ export default function WebContainerPreview({
 
         // Prepare and mount files
         const files = prepareSandboxFiles(currentProject);
+
+        // Downgrade Next.js for WebContainer compatibility —
+        // Next.js 16 requires native Turbopack binaries that can't run in WASM.
+        // Use 15.0.4 which uses webpack by default and supports React 19.
+        try {
+          const pkg = JSON.parse(files["package.json"]);
+          pkg.dependencies.next = "~15.2.0";
+          files["package.json"] = JSON.stringify(pkg, null, 2);
+        } catch {}
+
         const fileTree = toFileTree(files);
 
         addLog(`Mounting ${Object.keys(files).length} files...`);
@@ -279,6 +290,7 @@ export default function WebContainerPreview({
       // When the bridge (re)mounts after HMR or iframe remount, re-send
       // the current text-edit / image-select mode so it stays in sync.
       if (data.type === "pocket:bridge-ready") {
+        bridgeReadyRef.current = true;
         const iframe = iframeRef.current;
         if (!iframe?.contentWindow) return;
         iframe.contentWindow.postMessage(
@@ -352,6 +364,29 @@ export default function WebContainerPreview({
     imageSelectMode,
     linkSelectMode,
   ]);
+
+  // Effect: Retry iframe if page hasn't loaded (compilation may be slow in WebContainer)
+  useEffect(() => {
+    if (loadingState !== "ready" || !previewUrl) return;
+
+    bridgeReadyRef.current = false;
+    const maxRetries = 8;
+    let retryCount = 0;
+
+    const retryInterval = setInterval(() => {
+      if (bridgeReadyRef.current || retryCount >= maxRetries) {
+        clearInterval(retryInterval);
+        return;
+      }
+      retryCount++;
+      console.log(
+        `[WC Preview] No bridge-ready received, retrying iframe (${retryCount}/${maxRetries})...`,
+      );
+      setPreviewVersion((prev) => prev + 1);
+    }, 6000);
+
+    return () => clearInterval(retryInterval);
+  }, [loadingState, previewUrl]);
 
   // Effect: Update files when project changes (HMR-style sync)
   useEffect(() => {
@@ -601,6 +636,7 @@ export default function WebContainerPreview({
           className="w-full h-full border-0"
           style={{ colorScheme: "normal", backgroundColor: "transparent" }}
           title="Next.js Preview"
+          allow="cross-origin-isolated"
         />
       )}
     </div>

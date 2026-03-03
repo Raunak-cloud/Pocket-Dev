@@ -55,7 +55,7 @@ import type {
 
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
 const BASE_GENERATION_APP_COST = 2;
-const BASE_EDIT_APP_COST = 0.20;
+const BASE_EDIT_APP_COST = 0.2;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
 const PAYMENT_INTEGRATION_COST = 2;
@@ -382,9 +382,13 @@ function ReactGeneratorContent() {
     null,
   );
   const [blockedPromptWords, setBlockedPromptWords] = useState<string[]>([]);
-  const [generationProjectType, setGenerationProjectType] = useState<"website" | "dashboard">("website");
+  const [generationProjectType, setGenerationProjectType] = useState<
+    "website" | "dashboard"
+  >("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
-  const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<string | null>(null);
+  const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<
+    string | null
+  >(null);
   const [showStripeConnectModal, setShowStripeConnectModal] = useState(false);
   const [checkingAuthIntent, setCheckingAuthIntent] = useState(false);
   const [checkingEditClarity, setCheckingEditClarity] = useState(false);
@@ -412,7 +416,10 @@ function ReactGeneratorContent() {
   // Handle return from Stripe onboarding
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("stripe_onboarding") === "complete" || params.get("stripe_refresh") === "true") {
+    if (
+      params.get("stripe_onboarding") === "complete" ||
+      params.get("stripe_refresh") === "true"
+    ) {
       // Re-fetch status
       fetch("/api/stripe/connect/status")
         .then((res) => (res.ok ? res.json() : null))
@@ -548,9 +555,12 @@ function ReactGeneratorContent() {
     setBackendSelection(!isGenerationBackendSelected);
   }, [isGenerationBackendSelected, setBackendSelection]);
 
-  const handleSetGenerationProjectType = useCallback((type: "website" | "dashboard") => {
-    setGenerationProjectType(type);
-  }, []);
+  const handleSetGenerationProjectType = useCallback(
+    (type: "website" | "dashboard") => {
+      setGenerationProjectType(type);
+    },
+    [],
+  );
 
   const togglePayments = useCallback(() => {
     // If enabling payments, check if Stripe Connect is active
@@ -558,7 +568,7 @@ function ReactGeneratorContent() {
       setShowStripeConnectModal(true);
       return;
     }
-    setPaymentsEnabled(prev => {
+    setPaymentsEnabled((prev) => {
       const next = !prev;
       // Payments require backend — auto-enable it
       if (next && !isGenerationBackendSelected) {
@@ -566,7 +576,12 @@ function ReactGeneratorContent() {
       }
       return next;
     });
-  }, [paymentsEnabled, userStripeConnectStatus, isGenerationBackendSelected, setBackendSelection]);
+  }, [
+    paymentsEnabled,
+    userStripeConnectStatus,
+    isGenerationBackendSelected,
+    setBackendSelection,
+  ]);
 
   const AUTH_INTENT_PATTERNS = [
     /\bauth\b/i,
@@ -1001,7 +1016,9 @@ function ReactGeneratorContent() {
     const maxRetries = 2;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const response = await fetch("/api/projects/list", { cache: "no-store" });
+        const response = await fetch("/api/projects/list", {
+          cache: "no-store",
+        });
         if (response.status === 503 && attempt < maxRetries) {
           // Transient connection error — wait briefly and retry
           await new Promise((r) => setTimeout(r, 1500));
@@ -1290,7 +1307,11 @@ function ReactGeneratorContent() {
     const restoredProject: ReactProject = {
       files: savedProject.files,
       dependencies: savedProject.dependencies || {},
-      lintReport: savedProject.lintReport || { passed: true, errors: 0, warnings: 0 },
+      lintReport: savedProject.lintReport || {
+        passed: true,
+        errors: 0,
+        warnings: 0,
+      },
     };
     const isBackend = inferProjectIntegrations(restoredProject).hasBackend;
     setPreviewSandboxId(isBackend ? "create-new" : null);
@@ -1622,12 +1643,18 @@ function ReactGeneratorContent() {
     const wantsBackend = isEditBackendSelected;
 
     // Payment cost is independent of backend add-on
-    const hadPayments = readStoredIntegrations(project).paymentsEnabled === true;
+    const hadPayments =
+      readStoredIntegrations(project).paymentsEnabled === true;
     const paymentCost =
       !hadPayments && paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0;
 
     if (hadBackend || !wantsBackend) {
-      return { authCost: 0, databaseCost: 0, paymentCost, total: roundToken(paymentCost) };
+      return {
+        authCost: 0,
+        databaseCost: 0,
+        paymentCost,
+        total: roundToken(paymentCost),
+      };
     }
 
     const authSelection =
@@ -1807,9 +1834,7 @@ ${schemaContext}
 
   const buildPaymentRequirementPrompt = (mode: "new" | "existing") => {
     const scope =
-      mode === "new"
-        ? "for this new app"
-        : "into this existing app";
+      mode === "new" ? "for this new app" : "into this existing app";
 
     return `\n\n💳 PAYMENT REQUIREMENT (PROXY PATTERN):
 1. Add payment functionality ${scope} using the Pocket Dev platform proxy. Do NOT add "stripe" to dependencies. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code.
@@ -2075,7 +2100,8 @@ ${schemaContext}
     }
 
     // Check if payments are enabled for this project (from stored integrations or current toggle)
-    const paymentsEnabledForEdit = paymentsEnabled || readStoredIntegrations(project).paymentsEnabled;
+    const paymentsEnabledForEdit =
+      paymentsEnabled || readStoredIntegrations(project).paymentsEnabled;
     if (paymentsEnabledForEdit) {
       editFullPrompt += buildPaymentRequirementPrompt("existing");
     }
@@ -4040,7 +4066,8 @@ ${pdfUrlList}
                         : "h-full"
                     }
                   >
-                    {previewSandboxId && inferProjectIntegrations(project).hasBackend ? (
+                    {previewSandboxId &&
+                    inferProjectIntegrations(project).hasBackend ? (
                       <E2BSandboxPreview
                         project={project}
                         sandboxId={previewSandboxId}
@@ -4417,7 +4444,7 @@ ${pdfUrlList}
                       />
                       <div className="flex items-center justify-between px-4 py-2.5 bg-bg-tertiary/20 border-t border-border-primary">
                         <p className="text-xs text-text-muted">
-                          0.10 token cost per edit
+                          0.20 token cost per edit
                         </p>
                       </div>
                     </div>
@@ -4804,7 +4831,7 @@ ${pdfUrlList}
                     </div>
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[11px] text-text-muted">
-                        0.10 token cost per edit
+                        0.20 token cost per edit
                       </p>
                       <p className="text-[11px] text-text-muted">
                         {editPromptCount} / 2000
@@ -4965,7 +4992,9 @@ ${pdfUrlList}
               ? getDatabaseAppCost(currentAppDatabase)
               : editAddOnCosts.databaseCost;
             const paymentCost = isGeneration
-              ? (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0)
+              ? paymentsEnabled
+                ? PAYMENT_INTEGRATION_COST
+                : 0
               : editAddOnCosts.paymentCost;
             const baseCost = isGeneration
               ? BASE_GENERATION_APP_COST
@@ -5023,7 +5052,7 @@ ${pdfUrlList}
             backendEnabled={isEditBackendSelected}
             onBackendChange={setBackendSelection}
             paymentsEnabled={paymentsEnabled}
-        onTogglePayments={togglePayments}
+            onTogglePayments={togglePayments}
           />
         )}
 
@@ -5867,7 +5896,9 @@ ${pdfUrlList}
             ? getDatabaseAppCost(currentAppDatabase)
             : editAddOnCosts.databaseCost;
           const paymentCost = isGeneration
-            ? (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0)
+            ? paymentsEnabled
+              ? PAYMENT_INTEGRATION_COST
+              : 0
             : editAddOnCosts.paymentCost;
           const baseCost = isGeneration
             ? BASE_GENERATION_APP_COST
@@ -5954,7 +5985,7 @@ ${pdfUrlList}
           backendEnabled={isEditBackendSelected}
           onBackendChange={setBackendSelection}
           paymentsEnabled={paymentsEnabled}
-        onTogglePayments={togglePayments}
+          onTogglePayments={togglePayments}
         />
       )}
 
