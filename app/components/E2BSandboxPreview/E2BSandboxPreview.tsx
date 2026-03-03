@@ -30,6 +30,14 @@ interface E2BSandboxPreviewProps {
   onSyncStateChange?: (isSyncing: boolean) => void;
 }
 
+const SESSION_EXPIRED_MESSAGE =
+  "Sandbox session expired. Please refresh to start a new session.";
+
+const isSessionExpiredError = (message: string): boolean =>
+  /expired|not found|does not exist|invalid sandbox|could not reconnect|terminated|failed to connect/i.test(
+    message,
+  );
+
 export default function E2BSandboxPreview({
   project,
   sandboxId,
@@ -52,7 +60,6 @@ export default function E2BSandboxPreview({
   const prevFilesRef = useRef<Record<string, string> | null>(null);
   const latestProjectRef = useRef<ReactProject | null>(project);
   const sandboxIdRef = useRef(sandboxId);
-  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bridgeReadyRef = useRef(false);
 
   useEffect(() => {
@@ -70,7 +77,10 @@ export default function E2BSandboxPreview({
 
     const abortController = new AbortController();
 
-    const startSandbox = async (id: string | null, files: Record<string, string>) => {
+    const startSandbox = async (
+      id: string | null,
+      files: Record<string, string>,
+    ) => {
       const response = await fetch("/api/sandbox/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,7 +92,11 @@ export default function E2BSandboxPreview({
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `Sandbox start failed (${response.status})`);
+        const message = data.error || `Sandbox start failed (${response.status})`;
+        if (response.status === 410 || isSessionExpiredError(message)) {
+          throw new Error(SESSION_EXPIRED_MESSAGE);
+        }
+        throw new Error(message);
       }
 
       return response.json();
@@ -98,18 +112,7 @@ export default function E2BSandboxPreview({
 
         setLoadingState("installing");
 
-        let result;
-        try {
-          result = await startSandbox(sandboxId, files);
-        } catch (firstErr) {
-          // If the original sandbox expired, retry with a fresh one
-          if (sandboxId && sandboxId !== "create-new") {
-            console.warn("[E2B Preview] First attempt failed, retrying with fresh sandbox:", firstErr);
-            result = await startSandbox("create-new", files);
-          } else {
-            throw firstErr;
-          }
-        }
+        const result = await startSandbox(sandboxId, files);
 
         if (!result || abortController.signal.aborted) return;
 
@@ -129,7 +132,9 @@ export default function E2BSandboxPreview({
         if (abortController.signal.aborted) return;
         setLoadingState("error");
         setError(
-          err instanceof Error ? err.message : "Failed to start cloud sandbox",
+          err instanceof Error
+            ? err.message
+            : "Failed to start cloud sandbox",
         );
       }
     };
@@ -140,30 +145,6 @@ export default function E2BSandboxPreview({
       abortController.abort();
     };
   }, [previewKey, sandboxId]);
-
-  // Effect: Keepalive every 2 minutes
-  useEffect(() => {
-    if (loadingState !== "ready") return;
-
-    keepaliveRef.current = setInterval(async () => {
-      try {
-        await fetch("/api/sandbox/keepalive", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sandboxId: sandboxIdRef.current }),
-        });
-      } catch {
-        console.warn("[E2B Preview] Keepalive failed");
-      }
-    }, 2 * 60 * 1000);
-
-    return () => {
-      if (keepaliveRef.current) {
-        clearInterval(keepaliveRef.current);
-        keepaliveRef.current = null;
-      }
-    };
-  }, [loadingState]);
 
   // Effect: Kill sandbox on unmount
   useEffect(() => {
@@ -334,7 +315,7 @@ export default function E2BSandboxPreview({
           content: data,
         }));
 
-        await fetch("/api/sandbox/write-files", {
+        const response = await fetch("/api/sandbox/write-files", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -343,9 +324,26 @@ export default function E2BSandboxPreview({
           }),
         });
 
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          const message =
+            data.error || `Failed to sync files (${response.status})`;
+          if (response.status === 410 || isSessionExpiredError(message)) {
+            setLoadingState("error");
+            setError(SESSION_EXPIRED_MESSAGE);
+            return;
+          }
+          throw new Error(message);
+        }
+
         prevFilesRef.current = newFiles;
       } catch (err) {
         console.error("[E2B Preview] Error updating files:", err);
+        const message = err instanceof Error ? err.message : String(err);
+        if (isSessionExpiredError(message)) {
+          setLoadingState("error");
+          setError(SESSION_EXPIRED_MESSAGE);
+        }
       } finally {
         onSyncStateChange?.(false);
       }

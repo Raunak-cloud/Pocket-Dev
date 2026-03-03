@@ -55,11 +55,16 @@ async function handleStart(
         console.log(`[Sandbox Start] Reconnected to existing sandbox ${sandboxId}`);
       } catch (connectErr) {
         console.warn(
-          `[Sandbox Start] Could not reconnect to sandbox ${sandboxId}. Creating fresh.`,
+          `[Sandbox Start] Could not reconnect to sandbox ${sandboxId}. Session expired.`,
           connectErr instanceof Error ? connectErr.message : connectErr,
         );
-        sandbox = await Sandbox.create("code-interpreter-v1", { timeoutMs: 30 * 60 * 1000 });
-        console.log(`[Sandbox Start] Created fresh sandbox ${sandbox.sandboxId}`);
+        return NextResponse.json(
+          {
+            error:
+              "Sandbox session expired. Please refresh to start a new session.",
+          },
+          { status: 410 },
+        );
       }
     } else {
       sandbox = await Sandbox.create("code-interpreter-v1", { timeoutMs: 30 * 60 * 1000 });
