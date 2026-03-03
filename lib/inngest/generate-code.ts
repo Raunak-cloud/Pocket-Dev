@@ -9,6 +9,7 @@ import { inngest } from "@/lib/inngest-client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
+import { generateImagesFunction } from "@/lib/inngest/generate-images";
 import {
   acquireAuthConfigForBindingKey,
   applySqlToManagedProject,
@@ -5321,7 +5322,7 @@ NAV + MOBILE RULES:
     let filesWithImages = finalFiles;
     try {
       const imageResult = await step.invoke("generate-images", {
-        function: "generate-images",
+        function: generateImagesFunction,
         data: {
           files: finalFiles,
           userId: userId || "anonymous",
