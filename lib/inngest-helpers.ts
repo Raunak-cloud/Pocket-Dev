@@ -44,7 +44,8 @@ async function pollForCompletion<T>(
 ): Promise<T> {
   const fetchStatus = async () => {
     const response = await fetch(
-      `/api/inngest/status?projectId=${projectId}&event=${event}`
+      `/api/inngest/status?projectId=${projectId}&event=${event}`,
+      { cache: "no-store" }
     );
     if (!response.ok) return null;
     return response.json();
@@ -55,17 +56,40 @@ async function pollForCompletion<T>(
     let lastForwardedMessage = "";
     let consecutiveFetchErrors = 0;
     const MAX_CONSECUTIVE_ERRORS = 10;
+    let pollingStopped = false;
+    let inFlight = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    const interval = setInterval(async () => {
+    const stopPolling = () => {
+      pollingStopped = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    const scheduleNext = () => {
+      if (pollingStopped) return;
+      timeoutId = setTimeout(tick, 1000);
+    };
+
+    const tick = async () => {
+      if (pollingStopped || inFlight) {
+        scheduleNext();
+        return;
+      }
+      inFlight = true;
       try {
         const data = await fetchStatus();
         if (!data) {
           consecutiveFetchErrors++;
           if (consecutiveFetchErrors >= MAX_CONSECUTIVE_ERRORS) {
             console.error(`[Inngest Poll] ${MAX_CONSECUTIVE_ERRORS} consecutive fetch failures — giving up`);
-            clearInterval(interval);
+            stopPolling();
             reject(new Error('Lost connection to generation server. Please try again.'));
+            return;
           }
+          scheduleNext();
           return;
         }
 
@@ -77,7 +101,7 @@ async function pollForCompletion<T>(
         // Job cancelled by user
         if (data.cancelled) {
           console.log('[Inngest Poll] Job cancelled by user');
-          clearInterval(interval);
+          stopPolling();
           reject(new Error('Generation cancelled by user'));
           return;
         }
@@ -85,7 +109,7 @@ async function pollForCompletion<T>(
         // Job failed in Inngest after all retries exhausted
         if (data.failed) {
           console.log('[Inngest Poll] Job failed:', data.error);
-          clearInterval(interval);
+          stopPolling();
           reject(new Error(data.error ?? 'Generation failed'));
           return;
         }
@@ -105,19 +129,26 @@ async function pollForCompletion<T>(
         // Completed
         if (data.completed !== false) {
           console.log('[Inngest Poll] Workflow completed!', data);
-          clearInterval(interval);
+          stopPolling();
           resolve(data as T);
+          return;
         }
       } catch (err) {
         console.error('[Inngest Poll] Error:', err);
         consecutiveFetchErrors++;
         if (consecutiveFetchErrors >= MAX_CONSECUTIVE_ERRORS) {
           console.error(`[Inngest Poll] ${MAX_CONSECUTIVE_ERRORS} consecutive errors — giving up`);
-          clearInterval(interval);
+          stopPolling();
           reject(new Error('Lost connection to generation server. Please try again.'));
+          return;
         }
+      } finally {
+        inFlight = false;
       }
-    }, 1000);
+      scheduleNext();
+    };
+
+    void tick();
   });
 }
 

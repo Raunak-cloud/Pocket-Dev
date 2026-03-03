@@ -951,6 +951,260 @@ function ensureRequiredFiles(
     });
   }
 
+  function findRoutePageIndex(routePath: string): number {
+    const normalizedRoute = routePath.replace(/\\/g, "/").toLowerCase();
+    return files.findIndex((file) => {
+      const normalized = file.path.replace(/\\/g, "/").toLowerCase();
+      return normalized === `${normalizedRoute}/page.tsx` ||
+        normalized === `${normalizedRoute}/page.ts` ||
+        normalized === `${normalizedRoute}/page.jsx` ||
+        normalized === `${normalizedRoute}/page.js`;
+    });
+  }
+
+  function buildCheckoutPageContent(includeAuthEmail: boolean): string {
+    const hooksImport = includeAuthEmail
+      ? "{ useEffect, useMemo, useState }"
+      : "{ useMemo, useState }";
+    const authImport = includeAuthEmail
+      ? '\nimport { createClient } from "@/lib/supabase/client";'
+      : "";
+    const authEmailEffect = includeAuthEmail
+      ? `
+  useEffect(() => {
+    let active = true;
+    const supabase = createClient();
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (active) {
+          setCustomerEmail(data.user?.email ?? undefined);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setCustomerEmail(undefined);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+`
+      : "";
+
+    return `"use client";
+
+import Link from "next/link";
+import { ${hooksImport} } from "react";${authImport}
+
+type CheckoutLineItem = {
+  name: string;
+  description?: string;
+  amount: number;
+  currency?: string;
+  quantity?: number;
+};
+
+export default function CheckoutPage() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [customerEmail, setCustomerEmail] = useState<string | undefined>(
+    undefined,
+  );
+${authEmailEffect}
+  const lineItems = useMemo<CheckoutLineItem[]>(
+    () => [
+      {
+        name: "Starter Plan",
+        description: "One-time purchase",
+        amount: 2900,
+        currency: "usd",
+        quantity: 1,
+      },
+    ],
+    [],
+  );
+
+  const subtotal = useMemo(
+    () =>
+      lineItems.reduce(
+        (sum, item) => sum + item.amount * (item.quantity ?? 1),
+        0,
+      ),
+    [lineItems],
+  );
+
+  const handleCheckout = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const pocketDevUrl = process.env.NEXT_PUBLIC_POCKET_DEV_URL;
+      const pocketProjectId = process.env.NEXT_PUBLIC_POCKET_PROJECT_ID;
+
+      if (!pocketDevUrl || !pocketProjectId) {
+        throw new Error(
+          "Missing NEXT_PUBLIC_POCKET_DEV_URL or NEXT_PUBLIC_POCKET_PROJECT_ID",
+        );
+      }
+
+      const response = await fetch(
+        \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID,
+            lineItems,
+            successUrl: window.location.origin + "/payment/success",
+            cancelUrl: window.location.origin + "/payment/cancel",
+            ...(customerEmail ? { customerEmail } : {}),
+          }),
+        },
+      );
+
+      const data = (await response.json()) as { url?: string; error?: string };
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || "Failed to create checkout session");
+      }
+
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Checkout failed");
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-50">
+      <div className="max-w-3xl mx-auto px-6 py-16">
+        <h1 className="text-3xl font-bold text-slate-900 mb-2">Checkout</h1>
+        <p className="text-slate-600 mb-8">
+          Review your order and continue to secure payment.
+        </p>
+
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+          <div className="space-y-4">
+            {lineItems.map((item) => {
+              const qty = item.quantity ?? 1;
+              const amount = (item.amount * qty) / 100;
+              return (
+                <div
+                  key={item.name}
+                  className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4"
+                >
+                  <div>
+                    <p className="font-semibold text-slate-900">{item.name}</p>
+                    {item.description ? (
+                      <p className="text-sm text-slate-500 mt-1">
+                        {item.description}
+                      </p>
+                    ) : null}
+                    <p className="text-xs text-slate-400 mt-1">Qty: {qty}</p>
+                  </div>
+                  <p className="font-semibold text-slate-900">
+                    {"$"}{amount.toFixed(2)}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-6 flex items-center justify-between">
+            <p className="text-slate-600">Total</p>
+            <p className="text-2xl font-bold text-slate-900">
+              {"$"}{(subtotal / 100).toFixed(2)}
+            </p>
+          </div>
+
+          {error ? (
+            <p className="mt-4 text-sm text-red-600">{error}</p>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={handleCheckout}
+            disabled={isLoading}
+            className="mt-6 w-full rounded-xl bg-slate-900 text-white py-3 font-semibold hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? "Processing..." : "Pay Now"}
+          </button>
+
+          <Link
+            href="/"
+            className="mt-4 inline-flex text-sm text-slate-600 hover:text-slate-900"
+          >
+            Continue browsing
+          </Link>
+        </div>
+      </div>
+    </main>
+  );
+}
+`;
+  }
+
+  function buildPaymentSuccessPageContent(): string {
+    return `import Link from "next/link";
+
+export default function PaymentSuccessPage() {
+  return (
+    <main className="min-h-screen bg-emerald-50 flex items-center justify-center px-6">
+      <section className="max-w-xl w-full bg-white border border-emerald-100 rounded-2xl p-8 text-center shadow-sm">
+        <div className="mx-auto mb-4 h-14 w-14 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-2xl">
+          ✓
+        </div>
+        <h1 className="text-3xl font-bold text-slate-900">Payment successful</h1>
+        <p className="mt-3 text-slate-600">
+          Thanks for your purchase. Your order has been confirmed.
+        </p>
+        <Link
+          href="/"
+          className="mt-6 inline-flex rounded-lg bg-slate-900 text-white px-5 py-2.5 font-medium hover:bg-slate-800 transition"
+        >
+          Back to home
+        </Link>
+      </section>
+    </main>
+  );
+}
+`;
+  }
+
+  function buildPaymentCancelPageContent(): string {
+    return `import Link from "next/link";
+
+export default function PaymentCancelPage() {
+  return (
+    <main className="min-h-screen bg-amber-50 flex items-center justify-center px-6">
+      <section className="max-w-xl w-full bg-white border border-amber-100 rounded-2xl p-8 text-center shadow-sm">
+        <h1 className="text-3xl font-bold text-slate-900">Payment cancelled</h1>
+        <p className="mt-3 text-slate-600">
+          Your checkout was cancelled. You can try again whenever you're ready.
+        </p>
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <Link
+            href="/checkout"
+            className="inline-flex rounded-lg bg-slate-900 text-white px-5 py-2.5 font-medium hover:bg-slate-800 transition"
+          >
+            Try again
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex rounded-lg border border-slate-300 text-slate-700 px-5 py-2.5 font-medium hover:bg-slate-100 transition"
+          >
+            Continue browsing
+          </Link>
+        </div>
+      </section>
+    </main>
+  );
+}
+`;
+  }
+
   function stripSupabaseDepsForPublicApps(
     deps: Record<string, string>,
   ): Record<string, string> {
@@ -1198,6 +1452,71 @@ ${canonicalSupabaseAnonDecl}
       missing.length === 0 ? content : `${missing.join("\n")}\n\n${content}`;
     return ensureMobileOverflowGuard(
       stripUnsupportedApplyUtilities(normalized),
+    );
+  }
+
+  const CART_CONFLICT_MARKER =
+    "-- pocket-dev: enforce cart_items upsert conflict target";
+  const CART_CONFLICT_TARGET = "user_id,product_id";
+
+  function hasCartTable(schemaSql: string): boolean {
+    return /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?cart_items"?\b/i.test(
+      schemaSql || "",
+    );
+  }
+
+  function ensureCartConflictConstraintInSchema(schemaSql: string): string {
+    const current = schemaSql || "";
+    if (!hasCartTable(current)) return current;
+    if (schemaHasCartConflictUniqueConstraint(current)) return current;
+    if (current.includes(CART_CONFLICT_MARKER)) return current;
+
+    const block = `${CART_CONFLICT_MARKER}
+do $$ begin
+  if to_regclass('public.cart_items') is not null then
+    if not exists (
+      select 1
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      join pg_namespace n on n.oid = t.relnamespace
+      where c.contype = 'u'
+        and n.nspname = 'public'
+        and t.relname = 'cart_items'
+        and (
+          pg_get_constraintdef(c.oid) ilike '%(user_id, product_id)%'
+          or pg_get_constraintdef(c.oid) ilike '%(product_id, user_id)%'
+        )
+    )
+    and not exists (
+      select 1
+      from pg_indexes
+      where schemaname = 'public'
+        and tablename = 'cart_items'
+        and (
+          indexdef ilike 'create unique index%(%user_id%,%product_id%)'
+          or indexdef ilike 'create unique index%(%product_id%,%user_id%)'
+        )
+    ) then
+      create unique index if not exists cart_items_user_id_product_id_uidx
+        on public.cart_items (user_id, product_id);
+    end if;
+  end if;
+end $$;`;
+
+    const trimmed = current.trim();
+    if (!trimmed) return `${block}\n`;
+    return `${trimmed}\n\n${block}\n`;
+  }
+
+  function normalizeCartUpsertConflictTarget(content: string): string {
+    if (!/\.from\(\s*["'`]cart_items["'`]\s*\)/i.test(content)) {
+      return content;
+    }
+
+    return content.replace(
+      /(\.from\(\s*["'`]cart_items["'`]\s*\)[\s\S]{0,1200}?\bonConflict\s*:\s*)(["'`])([^"'`]*)(\2)/gi,
+      (_match, prefix: string, quote: string) =>
+        `${prefix}${quote}${CART_CONFLICT_TARGET}${quote}`,
     );
   }
 
@@ -1587,7 +1906,59 @@ export async function GET(request: NextRequest) {
         content: buildEnvContent("", paymentEnvValues),
       });
     }
+
+    // Deterministic fallback: ensure a complete checkout flow exists even when
+    // the model partially follows payment instructions.
+    const hasProxyCheckoutCall = files.some((file) =>
+      /\/api\/stripe\/connect\/create-checkout/.test(file.content),
+    );
+
+    const checkoutRouteIndex = findRoutePageIndex("app/checkout");
+    if (checkoutRouteIndex === -1 || !hasProxyCheckoutCall) {
+      const checkoutContent = buildCheckoutPageContent(hasAuthIntegration);
+      if (checkoutRouteIndex === -1) {
+        files.push({ path: "app/checkout/page.tsx", content: checkoutContent });
+      } else {
+        files[checkoutRouteIndex] = {
+          ...files[checkoutRouteIndex],
+          content: checkoutContent,
+        };
+      }
+    }
+
+    if (findRoutePageIndex("app/payment/success") === -1) {
+      files.push({
+        path: "app/payment/success/page.tsx",
+        content: buildPaymentSuccessPageContent(),
+      });
+    }
+
+    if (findRoutePageIndex("app/payment/cancel") === -1) {
+      files.push({
+        path: "app/payment/cancel/page.tsx",
+        content: buildPaymentCancelPageContent(),
+      });
+    }
   }
+
+  files = files.map((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
+    if (normalizedPath === "supabase/schema.sql") {
+      return {
+        ...file,
+        content: ensureCartConflictConstraintInSchema(file.content),
+      };
+    }
+
+    if (/\.(ts|tsx|js|jsx)$/.test(normalizedPath)) {
+      const normalizedContent = normalizeCartUpsertConflictTarget(file.content);
+      if (normalizedContent !== file.content) {
+        return { ...file, content: normalizedContent };
+      }
+    }
+
+    return file;
+  });
 
   files = ensureProviderGuardsForGeneratedFiles(files);
 
@@ -1740,6 +2111,283 @@ function applyKnownImportSpecifierFixups(files: GeneratedFile[]): GeneratedFile[
     if (nextContent === file.content) return file;
     return { ...file, content: nextContent };
   });
+}
+
+function normalizeCodeFilePath(pathValue: string): string {
+  return pathValue.replace(/\\/g, "/");
+}
+
+function stripCodeExtension(pathValue: string): string {
+  return pathValue.replace(/\.(tsx|ts|jsx|js)$/i, "");
+}
+
+function toKebabCaseIdentifier(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[_\s]+/g, "-")
+    .toLowerCase();
+}
+
+function buildRelativeImportPath(fromFilePath: string, toFilePathNoExt: string): string {
+  const fromParts = normalizeCodeFilePath(fromFilePath).split("/");
+  fromParts.pop(); // remove filename
+  const toParts = normalizeCodeFilePath(toFilePathNoExt).split("/");
+
+  let common = 0;
+  while (
+    common < fromParts.length &&
+    common < toParts.length &&
+    fromParts[common] === toParts[common]
+  ) {
+    common += 1;
+  }
+
+  const upSegments = fromParts.length - common;
+  const downSegments = toParts.slice(common).join("/");
+  const upPrefix = upSegments > 0 ? "../".repeat(upSegments) : "./";
+  const combined = `${upPrefix}${downSegments}`.replace(/\/+/g, "/");
+  return combined.startsWith(".") ? combined : `./${combined}`;
+}
+
+function parseUndefinedReferenceIdentifier(message: string): string | null {
+  const singleQuoteMatch = message.match(
+    /^'([A-Za-z_$][A-Za-z0-9_$]*)'\s+is used but never imported or declared/i,
+  );
+  if (singleQuoteMatch) return singleQuoteMatch[1];
+
+  const doubleQuoteMatch = message.match(
+    /^"([A-Za-z_$][A-Za-z0-9_$]*)"\s+is used but never imported or declared/i,
+  );
+  if (doubleQuoteMatch) return doubleQuoteMatch[1];
+
+  return null;
+}
+
+function isRouteEntryOrSpecialFile(pathValue: string): boolean {
+  return /(?:^|\/)(?:page|layout|route|loading|error|global-error|not-found|template|default)\.(tsx|ts|jsx|js)$/i.test(
+    normalizeCodeFilePath(pathValue),
+  );
+}
+
+function fileImportsIdentifier(content: string, identifier: string): boolean {
+  const sf = ts.createSourceFile(
+    "file.tsx",
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause) continue;
+    const clause = stmt.importClause;
+
+    if (clause.name?.text === identifier) {
+      return true;
+    }
+
+    const namedBindings = clause.namedBindings;
+    if (namedBindings && ts.isNamedImports(namedBindings)) {
+      for (const element of namedBindings.elements) {
+        if (element.name.text === identifier) {
+          return true;
+        }
+      }
+    }
+
+    if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+      if (namedBindings.name.text === identifier) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function insertImportStatement(content: string, statement: string): string {
+  const sf = ts.createSourceFile(
+    "file.tsx",
+    content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  let lastImportEnd = -1;
+  for (const stmt of sf.statements) {
+    if (ts.isImportDeclaration(stmt)) {
+      lastImportEnd = stmt.end;
+    }
+  }
+
+  if (lastImportEnd >= 0) {
+    const before = content.slice(0, lastImportEnd);
+    const after = content.slice(lastImportEnd);
+    const prefix = before.endsWith("\n") ? before : `${before}\n`;
+    const suffix = after.startsWith("\n") || after.length === 0
+      ? after
+      : `\n${after}`;
+    return `${prefix}${statement}${suffix}`;
+  }
+
+  const directiveMatch = content.match(
+    /^\s*(?:(?:"use (?:client|server)"|'use (?:client|server)')\s*;\s*\n)+/,
+  );
+  if (directiveMatch) {
+    const idx = directiveMatch[0].length;
+    return `${content.slice(0, idx)}${statement}\n${content.slice(idx)}`;
+  }
+
+  return `${statement}\n${content}`;
+}
+
+type LocalImportCandidate = {
+  sourcePathNoExt: string;
+  hasNamed: boolean;
+  hasDefault: boolean;
+  score: number;
+};
+
+function resolveLocalImportCandidate(
+  identifier: string,
+  sourceFilePath: string,
+  files: GeneratedFile[],
+): { importPath: string; importKind: "named" | "default" } | null {
+  const normalizedSourceFile = normalizeCodeFilePath(sourceFilePath);
+  const sourceNoExt = stripCodeExtension(normalizedSourceFile);
+  const idLower = identifier.toLowerCase();
+  const idKebab = toKebabCaseIdentifier(identifier);
+  const idSnake = identifier
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+
+  const candidates: LocalImportCandidate[] = [];
+
+  for (const file of files) {
+    const normalizedPath = normalizeCodeFilePath(file.path);
+    if (!/\.(tsx|ts|jsx|js)$/i.test(normalizedPath)) continue;
+    if (isRouteEntryOrSpecialFile(normalizedPath)) continue;
+
+    const candidateNoExt = stripCodeExtension(normalizedPath);
+    if (candidateNoExt === sourceNoExt) continue;
+
+    const parts = candidateNoExt.split("/");
+    const base = parts[parts.length - 1] || "";
+    const parentBase = parts.length > 1 ? parts[parts.length - 2] : "";
+    const baseLower = base.toLowerCase();
+    const parentLower = parentBase.toLowerCase();
+
+    let score = 0;
+    if (baseLower === idLower) score += 8;
+    if (baseLower === idKebab) score += 7;
+    if (baseLower === idSnake) score += 6;
+    if (baseLower === "index" && parentLower === idLower) score += 7;
+    if (baseLower === "index" && parentLower === idKebab) score += 6;
+    if (/(?:^|\/)(?:app\/)?components\//i.test(candidateNoExt)) score += 3;
+    if (/(?:^|\/)lib\//i.test(candidateNoExt)) score += 1;
+    if (score <= 0) continue;
+
+    const hasNamed = new RegExp(
+      `\\bexport\\s+(?:const|function|class|type|interface|enum)\\s+${identifier}\\b`,
+    ).test(file.content) ||
+      new RegExp(`\\bexport\\s*\\{[^}]*\\b${identifier}\\b[^}]*\\}`).test(
+        file.content,
+      );
+    const hasDefault = /\bexport\s+default\b/.test(file.content);
+
+    if (!hasNamed && !hasDefault) continue;
+    if (hasNamed) score += 2;
+    if (hasDefault) score += 1;
+
+    candidates.push({
+      sourcePathNoExt: candidateNoExt,
+      hasNamed,
+      hasDefault,
+      score,
+    });
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.sourcePathNoExt.localeCompare(b.sourcePathNoExt);
+  });
+
+  if (
+    candidates.length > 1 &&
+    candidates[0].score === candidates[1].score
+  ) {
+    return null;
+  }
+
+  const best = candidates[0];
+  const importPath = buildRelativeImportPath(
+    normalizedSourceFile,
+    best.sourcePathNoExt,
+  );
+  const importKind = best.hasNamed ? "named" : "default";
+  return { importPath, importKind };
+}
+
+function applyDeterministicUndefinedReferenceImportFixes(
+  files: GeneratedFile[],
+  issues: LintIssue[],
+): GeneratedFile[] {
+  const unresolved = issues.filter((issue) => issue.rule === "undefined-reference");
+  if (unresolved.length === 0) return files;
+
+  const nextFiles = [...files];
+  const indexByPath = new Map<string, number>();
+  for (let i = 0; i < nextFiles.length; i++) {
+    indexByPath.set(normalizeCodeFilePath(nextFiles[i].path), i);
+  }
+
+  const targets = new Map<string, Set<string>>();
+  for (const issue of unresolved) {
+    const identifier = parseUndefinedReferenceIdentifier(issue.message);
+    if (!identifier) continue;
+    const normalizedIssuePath = normalizeCodeFilePath(issue.path);
+    if (!indexByPath.has(normalizedIssuePath)) continue;
+
+    if (!targets.has(normalizedIssuePath)) {
+      targets.set(normalizedIssuePath, new Set<string>());
+    }
+    targets.get(normalizedIssuePath)!.add(identifier);
+  }
+
+  for (const [targetPath, identifiers] of targets) {
+    const index = indexByPath.get(targetPath);
+    if (index === undefined) continue;
+
+    const targetFile = nextFiles[index];
+    if (!/\.(tsx|ts|jsx|js)$/i.test(targetFile.path)) continue;
+
+    let updatedContent = targetFile.content;
+    for (const identifier of identifiers) {
+      if (fileImportsIdentifier(updatedContent, identifier)) continue;
+
+      const candidate = resolveLocalImportCandidate(
+        identifier,
+        targetFile.path,
+        nextFiles,
+      );
+      if (!candidate) continue;
+
+      const importStatement = candidate.importKind === "named"
+        ? `import { ${identifier} } from "${candidate.importPath}";`
+        : `import ${identifier} from "${candidate.importPath}";`;
+
+      updatedContent = insertImportStatement(updatedContent, importStatement);
+    }
+
+    if (updatedContent !== targetFile.content) {
+      nextFiles[index] = { ...targetFile, content: updatedContent };
+    }
+  }
+
+  return nextFiles;
 }
 
 function extractModuleSpecifiers(content: string): string[] {
@@ -2510,6 +3158,46 @@ function extractCreatedTablesFromSql(sql: string): Set<string> {
   return tables;
 }
 
+function schemaHasCartConflictUniqueConstraint(schemaSql: string): boolean {
+  const normalized = schemaSql || "";
+
+  const tableConstraintRegex =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:(?:public|auth)\.)?"?cart_items"?\s*\(([\s\S]*?)\);/gi;
+  for (const tableMatch of normalized.matchAll(tableConstraintRegex)) {
+    const tableBody = String(tableMatch[1] || "");
+    if (
+      /unique\s*\(\s*"?user_id"?\s*,\s*"?product_id"?\s*\)/i.test(tableBody) ||
+      /unique\s*\(\s*"?product_id"?\s*,\s*"?user_id"?\s*\)/i.test(tableBody)
+    ) {
+      return true;
+    }
+  }
+
+  if (
+    /alter\s+table\s+(?:if\s+exists\s+)?(?:(?:public|auth)\.)?"?cart_items"?[\s\S]*?\badd\s+constraint[\s\S]*?\bunique\s*\(\s*"?user_id"?\s*,\s*"?product_id"?\s*\)/i.test(
+      normalized,
+    ) ||
+    /alter\s+table\s+(?:if\s+exists\s+)?(?:(?:public|auth)\.)?"?cart_items"?[\s\S]*?\badd\s+constraint[\s\S]*?\bunique\s*\(\s*"?product_id"?\s*,\s*"?user_id"?\s*\)/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /create\s+unique\s+index[\s\S]*?\bon\s+(?:(?:public|auth)\.)?"?cart_items"?[\s\S]*?\(\s*"?user_id"?\s*,\s*"?product_id"?\s*\)/i.test(
+      normalized,
+    ) ||
+    /create\s+unique\s+index[\s\S]*?\bon\s+(?:(?:public|auth)\.)?"?cart_items"?[\s\S]*?\(\s*"?product_id"?\s*,\s*"?user_id"?\s*\)/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function extractColumnReferencesFromCode(
   files: GeneratedFile[],
 ): Map<string, Set<string>> {
@@ -2837,10 +3525,6 @@ function collectSupabaseSchemaIssues(
     }
   }
 
-  // Relation join validation: check that .select('*, other_table(...)') references real tables
-  // AND that a direct foreign key exists between the source table and joined table.
-  // PostgREST only resolves joins via direct FK relationships.
-  const foreignKeys = extractForeignKeysFromSql(schemaContent);
   const codeFiles = files.filter(
     (f) =>
       f.path.endsWith(".ts") ||
@@ -2848,6 +3532,54 @@ function collectSupabaseSchemaIssues(
       f.path.endsWith(".js") ||
       f.path.endsWith(".jsx"),
   );
+
+  const cartUpsertInCode = codeFiles.some(
+    (file) =>
+      /\.from\(\s*["'`]cart_items["'`]\s*\)[\s\S]*?\.upsert\(/i.test(
+        file.content,
+      ),
+  );
+  if (cartUpsertInCode && !schemaHasCartConflictUniqueConstraint(schemaContent)) {
+    issues.push({
+      path: "supabase/schema.sql",
+      line: 1,
+      column: 1,
+      rule: "schema/cart-missing-conflict-constraint",
+      message:
+        'Code performs cart_items upserts, but schema lacks a unique constraint/index for (user_id, product_id). Add UNIQUE(user_id, product_id) so upsert onConflict works reliably.',
+    });
+  }
+
+  for (const file of codeFiles) {
+    const cartConflictRe =
+      /\.from\(\s*["'`]cart_items["'`]\s*\)[\s\S]{0,1200}?\bonConflict\s*:\s*["'`]([^"'`]+)["'`]/gi;
+    for (const match of file.content.matchAll(cartConflictRe)) {
+      const configuredTarget = String(match[1] || "")
+        .replace(/\s+/g, "")
+        .toLowerCase();
+      if (
+        configuredTarget === "user_id,product_id" ||
+        configuredTarget === "product_id,user_id"
+      ) {
+        continue;
+      }
+
+      const pos = lineColumnAt(file.content, match.index ?? 0);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "schema/cart-invalid-on-conflict-target",
+        message:
+          'cart_items upsert must use onConflict: "user_id,product_id" so it matches schema constraints.',
+      });
+    }
+  }
+
+  // Relation join validation: check that .select('*, other_table(...)') references real tables
+  // AND that a direct foreign key exists between the source table and joined table.
+  // PostgREST only resolves joins via direct FK relationships.
+  const foreignKeys = extractForeignKeysFromSql(schemaContent);
   for (const file of codeFiles) {
     const joinRegex =
       /\.from\(\s*["'`](\w+)["'`]\s*\)\s*\.select\(\s*["'`]([^"'`]+)["'`]/g;
@@ -3997,14 +4729,21 @@ NAV + MOBILE RULES:
       await sendProgress(projectId, "[5/8] Validating Next.js compatibility...");
       // Apply known-good templates before validation so AI-broken
       // infra files (e.g. auth/callback/route.ts) are overwritten first.
-      const workingFiles = ensureRequiredFiles(
+      let workingFiles = ensureRequiredFiles(
         fixedFiles,
         dependencies,
         integrationRequirements,
         managedAuthConfig,
         projectId,
       );
-      const issues = collectNextJsValidationIssues(workingFiles, dependencies);
+      let issues = collectNextJsValidationIssues(workingFiles, dependencies);
+      if (issues.some((issue) => issue.rule === "undefined-reference")) {
+        workingFiles = applyDeterministicUndefinedReferenceImportFixes(
+          workingFiles,
+          issues,
+        );
+        issues = collectNextJsValidationIssues(workingFiles, dependencies);
+      }
       return {
         files: workingFiles,
         dependencies,
@@ -4047,10 +4786,17 @@ NAV + MOBILE RULES:
           );
         }
 
-        const issues = collectNextJsValidationIssues(
+        let issues = collectNextJsValidationIssues(
           workingFiles,
           workingDeps,
         );
+        if (issues.some((issue) => issue.rule === "undefined-reference")) {
+          workingFiles = applyDeterministicUndefinedReferenceImportFixes(
+            workingFiles,
+            issues,
+          );
+          issues = collectNextJsValidationIssues(workingFiles, workingDeps);
+        }
         return {
           files: workingFiles,
           dependencies: workingDeps,

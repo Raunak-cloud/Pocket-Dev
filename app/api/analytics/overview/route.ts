@@ -9,6 +9,15 @@ function parseRange(range: string | null): number {
   return 7;
 }
 
+function parseYear(year: string | null): number | null {
+  if (!year) return null;
+  if (!/^\d{4}$/.test(year)) return null;
+  const parsed = Number.parseInt(year, 10);
+  const current = new Date().getFullYear() + 1;
+  if (parsed < 2000 || parsed > current) return null;
+  return parsed;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { userId: authUserId } = await auth();
@@ -17,6 +26,9 @@ export async function GET(request: NextRequest) {
     }
 
     const range = parseRange(request.nextUrl.searchParams.get("range"));
+    const requestedRevenueYear = parseYear(
+      request.nextUrl.searchParams.get("year"),
+    );
     const since = new Date(Date.now() - range * 24 * 60 * 60 * 1000);
 
     const data = await withPrismaRetry(async () => {
@@ -111,6 +123,99 @@ export async function GET(request: NextRequest) {
         deductions: d.deductions,
       }));
 
+      const tokenPurchases = await prisma.tokenTransaction.findMany({
+        where: {
+          userId: user.id,
+          amount: { gt: 0 },
+          stripePaymentIntentId: { not: null },
+        },
+        select: {
+          amount: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "asc" },
+      });
+
+      const premiumPayments = await prisma.project.findMany({
+        where: {
+          userId: user.id,
+          tier: "premium",
+          paidAt: { not: null },
+        },
+        select: {
+          paidAt: true,
+        },
+        orderBy: { paidAt: "asc" },
+      });
+
+      const revenueYears = new Set<number>();
+      tokenPurchases.forEach((txn) =>
+        revenueYears.add(txn.createdAt.getUTCFullYear()),
+      );
+      premiumPayments.forEach((payment) => {
+        if (payment.paidAt) {
+          revenueYears.add(payment.paidAt.getUTCFullYear());
+        }
+      });
+
+      const currentYear = new Date().getUTCFullYear();
+      const availableYears = Array.from(revenueYears).sort((a, b) => b - a);
+      if (availableYears.length === 0) {
+        availableYears.push(currentYear);
+      }
+
+      const selectedRevenueYear =
+        requestedRevenueYear && availableYears.includes(requestedRevenueYear)
+          ? requestedRevenueYear
+          : availableYears[0];
+
+      const monthNames = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+
+      const monthlyRevenue = monthNames.map((label, index) => ({
+        month: label,
+        monthIndex: index,
+        tokenRevenue: 0,
+        premiumRevenue: 0,
+        revenue: 0,
+      }));
+
+      for (const txn of tokenPurchases) {
+        if (txn.createdAt.getUTCFullYear() !== selectedRevenueYear) continue;
+        const monthIndex = txn.createdAt.getUTCMonth();
+        monthlyRevenue[monthIndex].tokenRevenue += txn.amount;
+        monthlyRevenue[monthIndex].revenue += txn.amount;
+      }
+
+      for (const payment of premiumPayments) {
+        if (!payment.paidAt) continue;
+        if (payment.paidAt.getUTCFullYear() !== selectedRevenueYear) continue;
+        const monthIndex = payment.paidAt.getUTCMonth();
+        // Premium checkout is currently AUD 35/month at initial purchase.
+        monthlyRevenue[monthIndex].premiumRevenue += 35;
+        monthlyRevenue[monthIndex].revenue += 35;
+      }
+
+      const yearlyRevenueTotal = monthlyRevenue.reduce(
+        (sum, month) => sum + month.revenue,
+        0,
+      );
+      const lifetimeRevenueTotal =
+        tokenPurchases.reduce((sum, txn) => sum + txn.amount, 0) +
+        premiumPayments.length * 35;
+
       return {
         totalPageviews,
         totalVisitors,
@@ -118,6 +223,18 @@ export async function GET(request: NextRequest) {
         projects,
         daily,
         tokenUsage,
+        revenue: {
+          selectedYear: selectedRevenueYear,
+          availableYears,
+          yearlyTotal: Number(yearlyRevenueTotal.toFixed(2)),
+          lifetimeTotal: Number(lifetimeRevenueTotal.toFixed(2)),
+          monthly: monthlyRevenue.map((month) => ({
+            month: month.month,
+            tokenRevenue: Number(month.tokenRevenue.toFixed(2)),
+            premiumRevenue: Number(month.premiumRevenue.toFixed(2)),
+            revenue: Number(month.revenue.toFixed(2)),
+          })),
+        },
       };
     });
 

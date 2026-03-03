@@ -870,6 +870,61 @@ ${cleanCss(globalsCss)}
         window.process.env = { ...(window.process.env || {}), ...__pocketRuntimeEnv };
         try { globalThis.process = window.process; } catch {}
 
+        // Pocket analytics tracking for Cloudflare static deployments.
+        // Mirrors the Vercel-injected tracker so visitors/views work consistently.
+        (() => {
+          try {
+            const endpoint = String(window.process?.env?.NEXT_PUBLIC_POCKET_DEV_URL || "").replace(/\\/$/, "");
+            const projectId = String(window.process?.env?.NEXT_PUBLIC_POCKET_PROJECT_ID || "").trim();
+            if (!endpoint || !projectId || typeof window === "undefined") return;
+
+            const sidKey = "_pd_sid";
+            let sid = "";
+            try {
+              sid = sessionStorage.getItem(sidKey) || "";
+              if (!sid) {
+                sid =
+                  window.crypto?.randomUUID?.() ||
+                  (String(Date.now()) + "_" + Math.random().toString(36).slice(2));
+                sessionStorage.setItem(sidKey, sid);
+              }
+            } catch {
+              sid = String(Date.now()) + "_" + Math.random().toString(36).slice(2);
+            }
+
+            const payload = JSON.stringify({
+              projectId,
+              event: "pageview",
+              pathname: window.location?.pathname || "/",
+              referrer: document.referrer || null,
+              screenWidth: window.innerWidth,
+              language: navigator.language,
+              browser: navigator.userAgent.includes("Firefox")
+                ? "Firefox"
+                : navigator.userAgent.includes("Edg/")
+                  ? "Edge"
+                  : navigator.userAgent.includes("Chrome")
+                    ? "Chrome"
+                    : navigator.userAgent.includes("Safari")
+                      ? "Safari"
+                      : "Other",
+              sessionId: sid,
+            });
+
+            const url = endpoint + "/api/analytics/track";
+            if (navigator.sendBeacon) {
+              navigator.sendBeacon(url, new Blob([payload], { type: "application/json" }));
+            } else {
+              fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: payload,
+                keepalive: true,
+              }).catch(() => {});
+            }
+          } catch {}
+        })();
+
         const __pocketSupabaseResult = () => ({ data: null, error: null });
         const __pocketMakeSupabaseQueryBuilder = () => {
           const qb = {
@@ -2166,11 +2221,12 @@ export async function POST(request: NextRequest) {
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || "",
       NEXT_PUBLIC_POCKET_DEV_URL:
         parsedFileEnv.NEXT_PUBLIC_POCKET_DEV_URL ||
+        process.env.NEXT_PUBLIC_PRODUCTION_URL ||
         process.env.NEXT_PUBLIC_APP_URL ||
         "",
       NEXT_PUBLIC_POCKET_PROJECT_ID:
         parsedFileEnv.NEXT_PUBLIC_POCKET_PROJECT_ID ||
-        "",
+        projectId,
     };
     const globalsCss =
       findFileByCandidates(normalizedFiles, ["app/globals.css"])?.content || "";

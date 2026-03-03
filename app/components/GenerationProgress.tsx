@@ -169,6 +169,15 @@ function inferStepIndex(message: string, steps: ProgressStep[]): number {
   return 0;
 }
 
+function inferHighestStepIndex(messages: string[], steps: ProgressStep[]): number {
+  if (messages.length === 0) return 0;
+
+  return messages.reduce((highest, message) => {
+    const inferred = inferStepIndex(message, steps);
+    return inferred > highest ? inferred : highest;
+  }, 0);
+}
+
 function getProgressValue(stepIndex: number, totalSteps: number): number {
   const raw = ((stepIndex + 1) / totalSteps) * 100;
   if (stepIndex >= totalSteps - 1) return 100;
@@ -189,7 +198,7 @@ export default function GenerationProgress({
   const steps = isEditMode ? EDITING_STEPS : GENERATION_STEPS;
   const cleanedMessages = dedupeConsecutive(progressMessages);
   const latestMessage = cleanedMessages[cleanedMessages.length - 1] || "";
-  const currentStepIndex = inferStepIndex(latestMessage, steps);
+  const currentStepIndex = inferHighestStepIndex(cleanedMessages, steps);
   const currentStep = steps[currentStepIndex];
   const progress = getProgressValue(currentStepIndex, steps.length);
 

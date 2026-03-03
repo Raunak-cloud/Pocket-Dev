@@ -26,6 +26,7 @@ interface OverviewData {
   projects: ProjectSummary[];
   daily: DailyPoint[];
   tokenUsage: TokenPoint[];
+  revenue: RevenueOverview;
 }
 
 interface ProjectSummary {
@@ -65,6 +66,21 @@ interface NameCount {
   count: number;
 }
 
+interface RevenueOverview {
+  selectedYear: number;
+  availableYears: number[];
+  yearlyTotal: number;
+  lifetimeTotal: number;
+  monthly: RevenueMonthPoint[];
+}
+
+interface RevenueMonthPoint {
+  month: string;
+  tokenRevenue: number;
+  premiumRevenue: number;
+  revenue: number;
+}
+
 type Range = "7d" | "30d" | "90d";
 
 const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#6366f1"];
@@ -73,6 +89,7 @@ const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#636
 
 export default function AnalyticsContent() {
   const [range, setRange] = useState<Range>("7d");
+  const [revenueYear, setRevenueYear] = useState<number | null>(null);
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
@@ -84,16 +101,23 @@ export default function AnalyticsContent() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/analytics/overview?range=${range}`);
+      const params = new URLSearchParams({ range });
+      if (revenueYear !== null) {
+        params.set("year", String(revenueYear));
+      }
+      const res = await fetch(`/api/analytics/overview?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch analytics");
       const data = await res.json();
       setOverview(data);
+      if (revenueYear === null && typeof data?.revenue?.selectedYear === "number") {
+        setRevenueYear(data.revenue.selectedYear);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, [range, revenueYear]);
 
   const fetchProjectDetail = useCallback(
     async (projectId: string) => {
@@ -173,6 +197,14 @@ export default function AnalyticsContent() {
   }
 
   const totalTokenUsage = overview.tokenUsage.reduce((sum, t) => sum + t.deductions, 0);
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "AUD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  const revenueData = overview.revenue;
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -197,11 +229,75 @@ export default function AnalyticsContent() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
         <StatCard label="Total Visitors" value={overview.totalVisitors} icon="users" />
         <StatCard label="Total Pageviews" value={overview.totalPageviews} icon="eye" />
         <StatCard label="Published Projects" value={overview.publishedProjects} icon="globe" />
         <StatCard label="Tokens Used" value={Number(totalTokenUsage.toFixed(2))} icon="zap" />
+        <StatCard
+          label={`Revenue (${revenueData.selectedYear})`}
+          value={revenueData.yearlyTotal}
+          icon="cash"
+          valueFormatter={formatCurrency}
+        />
+      </div>
+
+      {/* Revenue */}
+      <div className="bg-bg-tertiary/50 border border-border-secondary/40 rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">Revenue</h2>
+            <p className="text-xs text-text-muted mt-1">
+              Token purchases and premium upgrades by month
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-text-muted">Year</label>
+            <select
+              value={revenueData.selectedYear}
+              onChange={(event) =>
+                setRevenueYear(Number.parseInt(event.target.value, 10))
+              }
+              className="bg-bg-tertiary border border-border-secondary/50 rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+            >
+              {revenueData.availableYears.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={revenueData.monthly}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+            <XAxis dataKey="month" tick={{ fill: "#888", fontSize: 11 }} />
+            <YAxis tick={{ fill: "#888", fontSize: 11 }} />
+            <Tooltip
+              formatter={(value: number) => formatCurrency(value)}
+              contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+              labelStyle={{ color: "#aaa" }}
+            />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="tokenRevenue" fill="#3b82f6" name="Token Revenue" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="premiumRevenue" fill="#10b981" name="Premium Revenue" radius={[4, 4, 0, 0]} />
+            <Line type="monotone" dataKey="revenue" stroke="#f59e0b" strokeWidth={2} dot={false} name="Total Revenue" />
+          </BarChart>
+        </ResponsiveContainer>
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-xl bg-bg-primary/40 border border-border-secondary/30 px-4 py-3">
+            <p className="text-[11px] uppercase tracking-wide text-text-muted">Yearly Revenue</p>
+            <p className="text-lg font-semibold text-text-primary mt-1">
+              {formatCurrency(revenueData.yearlyTotal)}
+            </p>
+          </div>
+          <div className="rounded-xl bg-bg-primary/40 border border-border-secondary/30 px-4 py-3">
+            <p className="text-[11px] uppercase tracking-wide text-text-muted">Lifetime Revenue</p>
+            <p className="text-lg font-semibold text-text-primary mt-1">
+              {formatCurrency(revenueData.lifetimeTotal)}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Visitors Over Time */}
@@ -302,7 +398,17 @@ export default function AnalyticsContent() {
 
 // ── Sub-components ───────────────────────────────────────────────
 
-function StatCard({ label, value, icon }: { label: string; value: number; icon: string }) {
+function StatCard({
+  label,
+  value,
+  icon,
+  valueFormatter,
+}: {
+  label: string;
+  value: number;
+  icon: string;
+  valueFormatter?: (value: number) => string;
+}) {
   const icons: Record<string, React.ReactNode> = {
     users: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -325,12 +431,20 @@ function StatCard({ label, value, icon }: { label: string; value: number; icon: 
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
       </svg>
     ),
+    cash: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 7.5A2.25 2.25 0 014.5 5.25h15A2.25 2.25 0 0121.75 7.5v9A2.25 2.25 0 0119.5 18.75h-15A2.25 2.25 0 012.25 16.5v-9z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    ),
   };
 
   return (
     <div className="bg-bg-tertiary/50 border border-border-secondary/40 rounded-2xl p-4">
       <div className="flex items-center gap-2 mb-2 text-text-muted">{icons[icon]}<span className="text-xs">{label}</span></div>
-      <p className="text-2xl font-bold text-text-primary tabular-nums">{value.toLocaleString()}</p>
+      <p className="text-2xl font-bold text-text-primary tabular-nums">
+        {valueFormatter ? valueFormatter(value) : value.toLocaleString()}
+      </p>
     </div>
   );
 }

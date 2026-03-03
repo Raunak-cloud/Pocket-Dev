@@ -8,6 +8,7 @@ interface GeneratedFile {
 export interface ReactProject {
   files: GeneratedFile[];
   dependencies: Record<string, string>;
+  config?: unknown;
 }
 
 export interface SandboxFiles {
@@ -43,8 +44,55 @@ export function hasAuthentication(project: ReactProject): boolean {
   );
 }
 
+function hasBackendEnabledFlag(project: ReactProject): boolean {
+  const config = project.config;
+  if (!config || typeof config !== "object") return false;
+  const record = config as Record<string, unknown>;
+  const integrations = record.__pocketIntegrations;
+  if (!integrations || typeof integrations !== "object") return false;
+  return (integrations as Record<string, unknown>).backendEnabled === true;
+}
+
+function hasBackendSignals(project: ReactProject): boolean {
+  if (hasBackendEnabledFlag(project)) return true;
+  if (hasAuthentication(project)) return true;
+  return project.files.some((f) => {
+    const normalizedPath = f.path.replace(/\\/g, "/").toLowerCase();
+    if (normalizedPath === "supabase/schema.sql") return true;
+    if (normalizedPath.startsWith("lib/supabase/")) return true;
+    if (normalizedPath.includes("/auth/")) return true;
+    if (/@supabase\/ssr|@supabase\/supabase-js|supabase\.auth/i.test(f.content)) {
+      return true;
+    }
+    return false;
+  });
+}
+
+function stripFrameBlockingPatterns(content: string): string {
+  let next = content;
+
+  // Remove explicit frame-blocking headers / CSP directives in code.
+  next = next.replace(/^[^\n]*x-frame-options[^\n]*\n?/gim, "");
+  next = next.replace(/^[^\n]*frame-ancestors[^\n]*\n?/gim, "");
+  next = next.replace(/frame-ancestors\s+[^;'"`]+;?/gi, "");
+
+  // Remove common frame-buster assignments.
+  next = next.replace(
+    /^[^\n]*(?:window\.)?top\.location(?:\.href)?\s*=\s*[^\n]*\n?/gim,
+    "",
+  );
+  next = next.replace(
+    /^[^\n]*(?:window\.)?(?:self|top)\.location(?:\.href)?\s*=\s*(?:window\.)?(?:self|top)\.location(?:\.href)?[^\n]*\n?/gim,
+    "",
+  );
+
+  return next;
+}
+
 export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
   const files: SandboxFiles = {};
+  const backendEnabled = hasBackendSignals(project);
+  const staticPreviewMode = !backendEnabled;
   const sourceEnvFile = project.files.find((f) => f.path === ".env.local");
   const sourceEnv = new Map<string, string>();
   if (sourceEnvFile?.content) {
@@ -81,7 +129,23 @@ export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
 
   project.files.forEach((f) => {
     if (managedConfigFiles.has(f.path)) return;
-    files[f.path] = rewriteExternalImageUrls(f.content);
+    const normalizedPath = f.path.replace(/\\/g, "/").toLowerCase();
+    if (
+      staticPreviewMode &&
+      /(?:^|\/)middleware\.(ts|js)$/.test(normalizedPath)
+    ) {
+      return;
+    }
+
+    let content = rewriteExternalImageUrls(f.content);
+    if (
+      staticPreviewMode &&
+      /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(normalizedPath)
+    ) {
+      content = stripFrameBlockingPatterns(content);
+    }
+
+    files[f.path] = content;
   });
 
   files["package.json"] = JSON.stringify(
@@ -105,7 +169,7 @@ export function prepareSandboxFiles(project: ReactProject): SandboxFiles {
         tailwindcss: "^3.3.0",
         postcss: "^8.4.31",
         autoprefixer: "^10.4.16",
-        ...(hasAuthentication(project)
+        ...(backendEnabled
           ? { "@supabase/supabase-js": "^2.57.4", "@supabase/ssr": "^0.7.0" }
           : {}),
       },
@@ -328,11 +392,7 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
     files["app/loading.tsx"] = `"use client";\nexport default function Loading() {\n  return (\n    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">\n      <div className="flex flex-col items-center gap-4">\n        <div className="h-10 w-10 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />\n        <p className="text-sm text-muted-foreground animate-pulse">Loading...</p>\n      </div>\n    </div>\n  );\n}\n`;
   }
 
-  const hasAuthIntegration = project.files.some(
-    (f) =>
-      f.content.includes("@supabase/supabase-js") ||
-      f.content.includes("supabase.auth"),
-  );
+  const hasAuthIntegration = backendEnabled;
   if (hasAuthIntegration) {
     const supabaseUrl =
       sourceEnv.get("NEXT_PUBLIC_SUPABASE_URL") ||

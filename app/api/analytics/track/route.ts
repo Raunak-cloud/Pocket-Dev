@@ -93,6 +93,13 @@ export async function POST(request: NextRequest) {
 
     const country = request.headers.get("x-vercel-ip-country") || null;
 
+    const fallbackSessionId = truncate(
+      `${ip}:${request.headers.get("user-agent") || "unknown"}`,
+      100,
+    );
+    const normalizedSessionId =
+      truncate(sessionId, 100) || fallbackSessionId;
+
     await prisma.analyticsEvent.create({
       data: {
         projectId,
@@ -104,7 +111,7 @@ export async function POST(request: NextRequest) {
         browser: truncate(browser, 50),
         screenWidth: typeof screenWidth === "number" ? Math.min(screenWidth, 10000) : null,
         language: truncate(language, 20),
-        sessionId: truncate(sessionId, 100),
+        sessionId: normalizedSessionId,
       },
     });
 

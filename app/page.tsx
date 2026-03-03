@@ -2148,7 +2148,7 @@ ${schemaContext}
 
       setEditProgressMessages((prev) => [
         ...prev,
-        "[6/7] Merging updated files into your project...",
+        "Finalizing and saving edited project files...",
       ]);
 
       // AI code generation: persist images and use generated files
@@ -2306,7 +2306,7 @@ ${pdfUrlList}
 
       setProgressMessages((prev) => [
         ...prev,
-        "[6/7] Saving generated project...",
+        "Finalizing and saving generated project...",
       ]);
 
       // Check if authentication was generated
@@ -2314,7 +2314,7 @@ ${pdfUrlList}
       // Persist generated images to Supabase Storage for stable URLs.
       setProgressMessages((prev) => [
         ...prev,
-        "[6/7] Persisting generated images...",
+        "Persisting generated images...",
       ]);
       const persistedFiles = await persistGeneratedImages(result.files, {
         originalPrompt: result.originalPrompt,
