@@ -3472,7 +3472,7 @@ ${pdfUrlList}
                             d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
                           />
                         </svg>
-                        <span className="max-[380px]:hidden">Edit</span>
+                        <span>Edit</span>
                       </button>
 
                       <div className="mobile-tools-dropdown relative">
@@ -3496,7 +3496,7 @@ ${pdfUrlList}
                               d="M4 6h16M4 12h16M4 18h16"
                             />
                           </svg>
-                          <span className="max-[380px]:hidden">Tools</span>
+                          <span>Tools</span>
                           <svg
                             className={`w-3 h-3 transition-transform ${isMobileToolsDropdownOpen ? "rotate-180" : ""}`}
                             fill="none"
