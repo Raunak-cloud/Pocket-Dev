@@ -1687,26 +1687,29 @@ function ReactGeneratorContent() {
   };
 
   const confirmCancelGeneration = async () => {
+    const projectIdToCancel = currentGenerationProjectIdRef.current;
     generationCancelledRef.current = true;
+    setShowCancelConfirm(null); // close modal immediately
+
+    // Reset UI state immediately; do not block on network cancellation call.
+    setStatus("idle");
+    setProgressMessages([]);
+    setGenerationPrompt("");
+    setIsGenerationMinimized(false);
+    setCurrentGenerationProjectId(null);
+
     if (progressIntervalRef.current) {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
     }
 
     // Cancel the Inngest job if it's running
-    if (currentGenerationProjectId) {
+    if (projectIdToCancel) {
       console.log(
-        `[App] Cancelling generation job: ${currentGenerationProjectId}`,
+        `[App] Cancelling generation job: ${projectIdToCancel}`,
       );
-      await cancelInngestRun(currentGenerationProjectId, "manual");
-      setCurrentGenerationProjectId(null);
+      await cancelInngestRun(projectIdToCancel, "manual");
     }
-
-    setStatus("idle");
-    setProgressMessages([]);
-    setGenerationPrompt("");
-    setIsGenerationMinimized(false);
-    setShowCancelConfirm(null);
   };
 
   const getAuthAppCost = (auth: string[]) => auth.length * AUTH_OPTION_APP_COST;
@@ -5681,7 +5684,7 @@ ${pdfUrlList}
                 <button
                   onClick={async () => {
                     if (showCancelConfirm === "generation") {
-                      confirmCancelGeneration();
+                      await confirmCancelGeneration();
                     } else {
                       if (currentGenerationProjectId) {
                         await cancelInngestRun(
@@ -6439,7 +6442,7 @@ ${pdfUrlList}
         onClose={() => setShowCancelConfirm(null)}
         onConfirm={async () => {
           if (showCancelConfirm === "generation") {
-            confirmCancelGeneration();
+            await confirmCancelGeneration();
           } else {
             if (currentGenerationProjectId) {
               await cancelInngestRun(currentGenerationProjectId, "manual");

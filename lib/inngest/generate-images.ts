@@ -47,6 +47,12 @@ export const generateImagesFunction = inngest.createFunction(
     id: "generate-images",
     name: "Generate Images",
     retries: 2,
+    cancelOn: [
+      {
+        event: "app/generate.cancelled",
+        if: "async.data.projectId == event.data.projectId",
+      },
+    ],
     concurrency: [
       { limit: 5 },                            // Global max
       { limit: 2, key: "event.data.userId" },  // Per-user fairness

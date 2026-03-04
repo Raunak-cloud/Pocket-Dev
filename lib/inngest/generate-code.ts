@@ -4286,6 +4286,12 @@ export const generateCodeFunction = inngest.createFunction(
     id: "generate-code",
     name: "Generate Next.js Code",
     retries: 0,
+    cancelOn: [
+      {
+        event: "app/generate.cancelled",
+        if: "async.data.projectId == event.data.projectId",
+      },
+    ],
     onFailure: async ({ event, error }) => {
       // In onFailure, the original event is nested at event.data.event.data
       const failureData = (event as Record<string, unknown>).data as Record<string, unknown> | undefined;

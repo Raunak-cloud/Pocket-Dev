@@ -49,6 +49,7 @@ export async function triggerCodeGeneration(
  */
 export async function cancelGenerationJob(projectId: string) {
   let localCancelled = false;
+  let eventCancelled = false;
   let remoteCancelled = false;
 
   const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
@@ -75,18 +76,76 @@ export async function cancelGenerationJob(projectId: string) {
     console.error("Failed to call local cancellation endpoint:", error);
   }
 
+  // Deterministic cancellation path using cancel event + function-level cancelOn.
+  try {
+    const sendResult = await inngest.send({
+      name: "app/generate.cancelled",
+      data: {
+        projectId,
+        reason: "manual",
+      },
+    });
+    eventCancelled = Array.isArray(sendResult.ids) && sendResult.ids.length > 0;
+  } catch (error) {
+    console.error("Failed to send cancellation event:", error);
+  }
+
   const signingKey = process.env.INNGEST_SIGNING_KEY;
   if (signingKey) {
     const escapedProjectId = projectId
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"');
+    const appId = process.env.INNGEST_APP_ID || INNGEST_APP_ID;
 
     const now = Date.now();
     const startedAfter = new Date(now - 24 * 60 * 60 * 1000).toISOString();
     const startedBefore = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    const condition = [
+      `event.data.projectId == "${escapedProjectId}"`,
+      `event.data.data.projectId == "${escapedProjectId}"`,
+      `event.projectId == "${escapedProjectId}"`,
+    ].join(" || ");
 
     try {
-      const cancellationResponse = await fetch(
+      const functionIds = [
+        `${appId}-generate-code`,
+        "generate-code",
+        `${appId}-generate-images`,
+        "generate-images",
+      ];
+
+      for (const functionId of functionIds) {
+        const cancellationResponse = await fetch(
+          "https://api.inngest.com/v1/cancellations",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${signingKey}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({
+              if: condition,
+              app_id: appId,
+              function_id: functionId,
+              started_after: startedAfter,
+              started_before: startedBefore,
+            }),
+          },
+        );
+
+        if (cancellationResponse.ok) {
+          remoteCancelled = true;
+        } else {
+          console.error(
+            "Failed to cancel Inngest run (function filter):",
+            functionId,
+            await cancellationResponse.text(),
+          );
+        }
+      }
+
+      const broadResponse = await fetch(
         "https://api.inngest.com/v1/cancellations",
         {
           method: "POST",
@@ -96,21 +155,20 @@ export async function cancelGenerationJob(projectId: string) {
             Accept: "application/json",
           },
           body: JSON.stringify({
-            if: `event.data.projectId == "${escapedProjectId}"`,
-            app_id: process.env.INNGEST_APP_ID || INNGEST_APP_ID,
-            function_id: "generate-code",
+            if: condition,
+            app_id: appId,
             started_after: startedAfter,
             started_before: startedBefore,
           }),
         },
       );
 
-      if (cancellationResponse.ok) {
+      if (broadResponse.ok) {
         remoteCancelled = true;
       } else {
         console.error(
-          "Failed to cancel Inngest run:",
-          await cancellationResponse.text(),
+          "Failed to cancel Inngest run (broad):",
+          await broadResponse.text(),
         );
       }
     } catch (error) {
@@ -123,8 +181,9 @@ export async function cancelGenerationJob(projectId: string) {
   }
 
   return {
-    success: localCancelled || remoteCancelled,
+    success: localCancelled || eventCancelled || remoteCancelled,
     localCancelled,
+    eventCancelled,
     remoteCancelled,
   };
 }
