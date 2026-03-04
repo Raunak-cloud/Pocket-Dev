@@ -30,6 +30,26 @@ type AuthClientContext = {
 
 const AuthCtx = createContext<AuthClientContext | null>(null);
 
+function resolveAuthRedirectOrigin(): string {
+  const configuredOrigin =
+    process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN?.trim() || "";
+  const browserOrigin =
+    typeof window !== "undefined" ? window.location.origin : "";
+
+  if (!configuredOrigin) {
+    return browserOrigin;
+  }
+
+  try {
+    return new URL(configuredOrigin).origin;
+  } catch {
+    console.warn(
+      "[Auth] Invalid NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN. Falling back to window.location.origin.",
+    );
+    return browserOrigin;
+  }
+}
+
 function toAuthClientUser(user: SupabaseUser): AuthClientUser {
   return {
     id: user.id,
@@ -78,8 +98,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   const openSignIn = useCallback(
     async (opts?: { redirectUrl?: string }) => {
       const redirectUrl = opts?.redirectUrl || "/";
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : "";
+      const origin = resolveAuthRedirectOrigin();
       const callback = `${origin}/auth/callback?next=${encodeURIComponent(
         redirectUrl,
       )}`;
@@ -135,4 +154,3 @@ export function useSupabaseAuth() {
     signOut: ctx.signOut,
   };
 }
-

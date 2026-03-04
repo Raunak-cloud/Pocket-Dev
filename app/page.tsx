@@ -71,6 +71,7 @@ const DEFAULT_BACKEND_DATABASE = [
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
 const ACTIVE_GENERATION_STORAGE_KEY = "__pocketActiveGeneration";
+const LAST_OPEN_PROJECT_STORAGE_KEY = "__pocketLastOpenProjectId";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
 
 type ActiveGenerationSession = {
@@ -430,6 +431,7 @@ function ReactGeneratorContent() {
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const currentGenerationProjectIdRef = useRef<string | null>(null);
   const resumeCheckedRef = useRef(false);
+  const restoreLastProjectCheckedRef = useRef(false);
   const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(
     null,
   );
@@ -494,6 +496,23 @@ function ReactGeneratorContent() {
         return null;
       }
     }, []);
+
+  const persistLastOpenedProjectId = useCallback((projectId: string) => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(LAST_OPEN_PROJECT_STORAGE_KEY, projectId);
+  }, []);
+
+  const readLastOpenedProjectId = useCallback((): string | null => {
+    if (typeof window === "undefined") return null;
+    const value = localStorage.getItem(LAST_OPEN_PROJECT_STORAGE_KEY);
+    if (!value || !value.trim()) return null;
+    return value;
+  }, []);
+
+  const clearLastOpenedProjectId = useCallback(() => {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(LAST_OPEN_PROJECT_STORAGE_KEY);
+  }, []);
 
   // Fetch Stripe Connect status on mount when user exists
   useEffect(() => {
@@ -895,6 +914,7 @@ function ReactGeneratorContent() {
 
     if (user) {
       resumeCheckedRef.current = false;
+      restoreLastProjectCheckedRef.current = false;
       loadSavedProjects();
     } else {
       // Keep active generation session in localStorage during auth rehydration.
@@ -984,6 +1004,31 @@ function ReactGeneratorContent() {
     user,
     clearActiveGenerationSession,
     readActiveGenerationSession,
+  ]);
+
+  // Restore the last opened saved project after refresh.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    if (status === "loading") return;
+    if (currentProjectId) return;
+    if (loadingProjects) return;
+    if (restoreLastProjectCheckedRef.current) return;
+    restoreLastProjectCheckedRef.current = true;
+
+    const lastOpenedProjectId = readLastOpenedProjectId();
+    if (!lastOpenedProjectId) return;
+
+    const target = savedProjects.find((p) => p.id === lastOpenedProjectId);
+    if (!target) return;
+    openSavedProject(target);
+  }, [
+    authLoading,
+    user,
+    status,
+    currentProjectId,
+    loadingProjects,
+    savedProjects,
+    readLastOpenedProjectId,
   ]);
 
   // Auto-collapse sidebar when project is being previewed
@@ -1453,6 +1498,7 @@ function ReactGeneratorContent() {
     setCurrentAppAuth([]);
     setEditAppAuth([]);
     setCurrentAppDatabase([]);
+    clearLastOpenedProjectId();
   };
 
   const handleNewProjectClick = () => {
@@ -1518,6 +1564,7 @@ function ReactGeneratorContent() {
       config: savedProject.config,
     });
     setCurrentProjectId(savedProject.id);
+    persistLastOpenedProjectId(savedProject.id);
     setGenerationPrompt(savedProject.prompt);
     setPublishedUrl(savedProject.publishedUrl || null);
     setDeploymentId(savedProject.deploymentId || null);
@@ -1567,6 +1614,7 @@ function ReactGeneratorContent() {
         setDeploymentId(null);
         setHasUnpublishedChanges(false);
         setEditHistory([]);
+        clearLastOpenedProjectId();
       }
 
       // Refresh projects list
@@ -2406,6 +2454,15 @@ ${schemaContext}
   };
 
   const startGeneration = async (promptOverride?: string) => {
+    if (!user?.uid) {
+      setPendingGeneration(true);
+      setShowSignInModal(true);
+      setStatus("idle");
+      setError("Please sign in to continue.");
+      return;
+    }
+
+    const authUserId = user.uid;
     const generationPrompt = promptOverride || prompt;
     generationCancelledRef.current = false;
     setStatus("loading");
@@ -2479,7 +2536,7 @@ ${pdfUrlList}
       persistActiveGenerationSession({
         runId: runProjectId,
         prompt: generationPrompt,
-        userId: user?.uid || "anonymous",
+        userId: authUserId,
         backendEnabled: isGenerationBackendSelected,
         paymentsEnabled,
         startedAt: Date.now(),
@@ -2487,7 +2544,7 @@ ${pdfUrlList}
       // Real-time progress from Inngest
       const result = await generateCodeWithInngest(
         fullPrompt,
-        user?.uid || "anonymous",
+        authUserId,
         (message) => {
           setProgressMessages((prev) => [...prev, message]);
         },
@@ -2496,7 +2553,7 @@ ${pdfUrlList}
           persistActiveGenerationSession({
             runId: projectId,
             prompt: generationPrompt,
-            userId: user?.uid || "anonymous",
+            userId: authUserId,
             backendEnabled: isGenerationBackendSelected,
             paymentsEnabled,
             startedAt: Date.now(),
@@ -2537,6 +2594,7 @@ ${pdfUrlList}
       // Save project to Firestore
       if (user && result.savedProjectId) {
         setCurrentProjectId(result.savedProjectId);
+        persistLastOpenedProjectId(result.savedProjectId);
         loadSavedProjects();
       } else if (user) {
         try {
@@ -2547,6 +2605,7 @@ ${pdfUrlList}
             authCost,
           );
           setCurrentProjectId(projectId);
+          persistLastOpenedProjectId(projectId);
 
           // Refresh projects list
           loadSavedProjects();
@@ -2576,7 +2635,7 @@ ${pdfUrlList}
 
   const handleSignInSuccess = () => {
     setShowSignInModal(false);
-    if (pendingGeneration) {
+    if (pendingGeneration && user?.uid) {
       setPendingGeneration(false);
       startGeneration();
     }
