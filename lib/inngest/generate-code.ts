@@ -10,9 +10,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
 import { generateImagesFunction } from "@/lib/inngest/generate-images";
+import { prisma, withPrismaRetry } from "@/lib/prisma";
 import {
   acquireAuthConfigForBindingKey,
   applySqlToManagedProject,
+  rebindAuthConfigBindingKey,
   type ManagedSupabaseAuthConfig,
 } from "@/lib/supabase-project-pool";
 import ts from "typescript";
@@ -5359,6 +5361,81 @@ NAV + MOBILE RULES:
       );
     }
 
+    // Step 8.5: Persist final project in DB so generation can complete in background
+    // even when the user closes/reloads the page.
+    const savedProjectId = await step.run("persist-generated-project", async () => {
+      if (!userId || userId === "anonymous") {
+        return null as string | null;
+      }
+
+      const owner = await withPrismaRetry(() =>
+        prisma.user.upsert({
+          where: { authUserId: userId },
+          update: {},
+          create: { authUserId: userId },
+          select: { id: true },
+        }),
+      );
+
+      const existing = await withPrismaRetry(() =>
+        prisma.project.findUnique({
+          where: { id: projectId },
+          select: { id: true, userId: true },
+        }),
+      );
+
+      // Edit flow: projectId is already a DB project id.
+      if (existing && existing.userId === owner.id) {
+        await withPrismaRetry(() =>
+          prisma.project.update({
+            where: { id: existing.id },
+            data: {
+              prompt,
+              files: filesWithImages,
+              dependencies,
+              lintReport: finalLint.lintReport,
+              updatedAt: new Date(),
+            },
+          }),
+        );
+        return existing.id;
+      }
+
+      // New generation flow: create a project and bind pool from run id -> project id.
+      const createdProject = await withPrismaRetry(() =>
+        prisma.$transaction(async (tx) => {
+          const created = await tx.project.create({
+            data: {
+              userId: owner.id,
+              prompt,
+              files: filesWithImages,
+              dependencies,
+              lintReport: finalLint.lintReport,
+            },
+            select: { id: true },
+          });
+
+          await tx.user.update({
+            where: { id: owner.id },
+            data: { projectCount: { increment: 1 } },
+          });
+
+          return created;
+        }),
+      );
+
+      try {
+        await rebindAuthConfigBindingKey(projectId, createdProject.id);
+      } catch (err) {
+        console.warn(
+          `[Inngest] Failed to rebind auth config for run ${projectId} -> ${createdProject.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+
+      return createdProject.id;
+    });
+
     // Step 9: Notify completion via API
     await step.run("notify-completion", async () => {
       await sendProgress(projectId, "[9/9] Finalizing your app...");
@@ -5383,6 +5460,7 @@ NAV + MOBILE RULES:
             originalPrompt: prompt,
             detectedTheme: detectedTheme,
             sandboxId: previewSandboxId,
+            savedProjectId,
           },
         }),
       });
@@ -5411,6 +5489,7 @@ NAV + MOBILE RULES:
       detectedTheme: detectedTheme,
       projectType: detectedProjectType,
       sandboxId: previewSandboxId,
+      savedProjectId,
     };
 
     } catch (err) {

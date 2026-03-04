@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, withPrismaRetry } from "@/lib/prisma";
 
-const COMPLETION_TTL_MS = 30 * 60 * 1000;
+const COMPLETION_TTL_MS = 24 * 60 * 60 * 1000;
 const PROGRESS_TTL_MS = 60 * 60 * 1000;
 const CANCEL_TTL_MS = 60 * 60 * 1000;
 const FAILURE_TTL_MS = 60 * 60 * 1000;

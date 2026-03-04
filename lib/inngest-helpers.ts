@@ -27,6 +27,7 @@ interface GenerateCodeResult {
   };
   model: string;
   projectId?: string;
+  savedProjectId?: string;
   originalPrompt?: string;
   detectedTheme?: SiteTheme;
   sandboxId?: string;
@@ -151,6 +152,14 @@ async function pollForCompletion<T>(
   });
 }
 
+export async function waitForInngestCompletion<T>(
+  projectId: string,
+  event: string,
+  onProgress?: (message: string) => void,
+): Promise<T> {
+  return pollForCompletion<T>(projectId, event, onProgress);
+}
+
 /**
  * Trigger AI code generation workflow
  */
@@ -217,4 +226,3 @@ export async function generateCodeWithInngest(
   // Include projectId in result for tracking
   return { ...result, projectId };
 }
-

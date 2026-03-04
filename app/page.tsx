@@ -3,7 +3,10 @@
 import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-import { generateCodeWithInngest } from "@/lib/inngest-helpers";
+import {
+  generateCodeWithInngest,
+  waitForInngestCompletion,
+} from "@/lib/inngest-helpers";
 import CodeViewer from "./components/CodeViewer";
 import WebContainerPreview from "./components/WebContainerPreview";
 import E2BSandboxPreview from "./components/E2BSandboxPreview/E2BSandboxPreview";
@@ -67,7 +70,17 @@ const DEFAULT_BACKEND_DATABASE = [
 ];
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
+const ACTIVE_GENERATION_STORAGE_KEY = "__pocketActiveGeneration";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
+
+type ActiveGenerationSession = {
+  runId: string;
+  prompt: string;
+  userId: string;
+  backendEnabled: boolean;
+  paymentsEnabled: boolean;
+  startedAt: number;
+};
 
 type SelectedLinkTarget = {
   name: string;
@@ -416,8 +429,7 @@ function ReactGeneratorContent() {
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const currentGenerationProjectIdRef = useRef<string | null>(null);
-  const runActiveRef = useRef(false);
-  const unloadCancelSentRef = useRef(false);
+  const resumeCheckedRef = useRef(false);
   const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(
     null,
   );
@@ -441,6 +453,47 @@ function ReactGeneratorContent() {
     Array<{ question: string; answer: string }>
   >([]);
   const { startUpload } = useSupabaseUploads();
+
+  const persistActiveGenerationSession = useCallback(
+    (session: ActiveGenerationSession) => {
+      if (typeof window === "undefined") return;
+      localStorage.setItem(ACTIVE_GENERATION_STORAGE_KEY, JSON.stringify(session));
+    },
+    [],
+  );
+
+  const clearActiveGenerationSession = useCallback(() => {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(ACTIVE_GENERATION_STORAGE_KEY);
+  }, []);
+
+  const readActiveGenerationSession =
+    useCallback((): ActiveGenerationSession | null => {
+      if (typeof window === "undefined") return null;
+      const raw = localStorage.getItem(ACTIVE_GENERATION_STORAGE_KEY);
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw) as Partial<ActiveGenerationSession>;
+        if (
+          typeof parsed.runId !== "string" ||
+          typeof parsed.prompt !== "string" ||
+          typeof parsed.userId !== "string"
+        ) {
+          return null;
+        }
+        return {
+          runId: parsed.runId,
+          prompt: parsed.prompt,
+          userId: parsed.userId,
+          backendEnabled: parsed.backendEnabled === true,
+          paymentsEnabled: parsed.paymentsEnabled === true,
+          startedAt:
+            typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),
+        };
+      } catch {
+        return null;
+      }
+    }, []);
 
   // Fetch Stripe Connect status on mount when user exists
   useEffect(() => {
@@ -838,12 +891,100 @@ function ReactGeneratorContent() {
 
   // Load saved projects when user logs in
   useEffect(() => {
+    if (authLoading) return;
+
     if (user) {
+      resumeCheckedRef.current = false;
       loadSavedProjects();
     } else {
+      // Keep active generation session in localStorage during auth rehydration.
+      // Clearing here can race with refresh and prevent resume in production.
       setSavedProjects([]);
     }
-  }, [user]);
+  }, [authLoading, user]);
+
+  // Resume generation progress after reload/tab close.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    if (resumeCheckedRef.current) return;
+    resumeCheckedRef.current = true;
+
+    const session = readActiveGenerationSession();
+    if (!session) return;
+    if (session.userId !== user.uid) {
+      clearActiveGenerationSession();
+      return;
+    }
+
+    let cancelled = false;
+
+    const resume = async () => {
+      setStatus("loading");
+      setError("");
+      setGenerationPrompt(session.prompt);
+      setProgressMessages(["Resuming generation in background..."]);
+      setCurrentGenerationProjectId(session.runId);
+      setIsGenerationMinimized(false);
+      setActiveSection("create");
+
+      try {
+        const result = await waitForInngestCompletion<ReactProject & {
+          savedProjectId?: string;
+          sandboxId?: string;
+        }>(
+          session.runId,
+          "generate.completed",
+          (message) => {
+            if (cancelled) return;
+            setProgressMessages((prev) => [...prev, message]);
+          },
+        );
+
+        if (cancelled) return;
+
+        const projectWithIntegrations = withStoredIntegrations(result, {
+          backendEnabled: session.backendEnabled,
+          paymentsEnabled: session.paymentsEnabled,
+        });
+
+        setProject(projectWithIntegrations);
+        syncIntegrationSelectionFromProject(projectWithIntegrations);
+        setPreviewSandboxId(result.sandboxId ?? null);
+
+        if (typeof result.savedProjectId === "string" && result.savedProjectId) {
+          setCurrentProjectId(result.savedProjectId);
+          await loadSavedProjects();
+        }
+
+        setStatus("success");
+        setCurrentGenerationProjectId(null);
+        clearActiveGenerationSession();
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.toLowerCase().includes("cancelled")) {
+          setStatus("idle");
+          setError("");
+        } else {
+          setStatus("error");
+          setError(message);
+        }
+        setCurrentGenerationProjectId(null);
+        clearActiveGenerationSession();
+      }
+    };
+
+    void resume();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authLoading,
+    user,
+    clearActiveGenerationSession,
+    readActiveGenerationSession,
+  ]);
 
   // Auto-collapse sidebar when project is being previewed
   useEffect(() => {
@@ -1393,7 +1534,7 @@ function ReactGeneratorContent() {
       },
     };
     const isBackend = inferProjectIntegrations(restoredProject).hasBackend;
-    setPreviewSandboxId(isBackend ? "create-new" : null);
+    setPreviewSandboxId(isBackend || isMobileViewport ? "create-new" : null);
     setStatus("success");
     setActiveSection("create");
     setShowEditHistory(false);
@@ -1623,64 +1764,9 @@ function ReactGeneratorContent() {
     [],
   );
 
-  const cancelInngestRunOnUnload = useCallback((projectId: string) => {
-    const payload = JSON.stringify({
-      projectId,
-      reason: "page-unload",
-    });
-
-    try {
-      if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
-        const blob = new Blob([payload], { type: "application/json" });
-        const sent = navigator.sendBeacon("/api/inngest/cancel", blob);
-        if (sent) return;
-      }
-    } catch (error) {
-      console.error("[App] Failed to enqueue unload cancellation:", error);
-    }
-
-    void fetch("/api/inngest/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: payload,
-      keepalive: true,
-    }).catch((error) => {
-      console.error("[App] Fallback unload cancellation failed:", error);
-    });
-  }, []);
-
   useEffect(() => {
     currentGenerationProjectIdRef.current = currentGenerationProjectId;
-    if (!currentGenerationProjectId) {
-      unloadCancelSentRef.current = false;
-    }
   }, [currentGenerationProjectId]);
-
-  useEffect(() => {
-    const active = status === "loading" || isEditing;
-    runActiveRef.current = active;
-    if (!active) {
-      unloadCancelSentRef.current = false;
-    }
-  }, [status, isEditing]);
-
-  useEffect(() => {
-    const handlePageExit = () => {
-      if (unloadCancelSentRef.current) return;
-      if (!runActiveRef.current) return;
-      const projectId = currentGenerationProjectIdRef.current;
-      if (!projectId) return;
-      unloadCancelSentRef.current = true;
-      cancelInngestRunOnUnload(projectId);
-    };
-
-    window.addEventListener("beforeunload", handlePageExit);
-    window.addEventListener("pagehide", handlePageExit);
-    return () => {
-      window.removeEventListener("beforeunload", handlePageExit);
-      window.removeEventListener("pagehide", handlePageExit);
-    };
-  }, [cancelInngestRunOnUnload]);
 
   const cancelGeneration = () => {
     setShowCancelConfirm("generation");
@@ -1689,6 +1775,7 @@ function ReactGeneratorContent() {
   const confirmCancelGeneration = async () => {
     const projectIdToCancel = currentGenerationProjectIdRef.current;
     generationCancelledRef.current = true;
+    clearActiveGenerationSession();
     setShowCancelConfirm(null); // close modal immediately
 
     // Reset UI state immediately; do not block on network cancellation call.
@@ -2389,6 +2476,14 @@ ${pdfUrlList}
     try {
       const runProjectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
       setCurrentGenerationProjectId(runProjectId);
+      persistActiveGenerationSession({
+        runId: runProjectId,
+        prompt: generationPrompt,
+        userId: user?.uid || "anonymous",
+        backendEnabled: isGenerationBackendSelected,
+        paymentsEnabled,
+        startedAt: Date.now(),
+      });
       // Real-time progress from Inngest
       const result = await generateCodeWithInngest(
         fullPrompt,
@@ -2398,6 +2493,14 @@ ${pdfUrlList}
         },
         (projectId) => {
           setCurrentGenerationProjectId(projectId);
+          persistActiveGenerationSession({
+            runId: projectId,
+            prompt: generationPrompt,
+            userId: user?.uid || "anonymous",
+            backendEnabled: isGenerationBackendSelected,
+            paymentsEnabled,
+            startedAt: Date.now(),
+          });
         },
         runProjectId,
         {
@@ -2413,6 +2516,7 @@ ${pdfUrlList}
       // If user cancelled while awaiting, discard the result
       if (generationCancelledRef.current) {
         setCurrentGenerationProjectId(null);
+        clearActiveGenerationSession();
         return;
       }
 
@@ -2431,7 +2535,10 @@ ${pdfUrlList}
       setPreviewSandboxId(result.sandboxId ?? null);
 
       // Save project to Firestore
-      if (user) {
+      if (user && result.savedProjectId) {
+        setCurrentProjectId(result.savedProjectId);
+        loadSavedProjects();
+      } else if (user) {
         try {
           const authCost = getAuthAppCost(currentAppAuth);
           const projectId = await saveProjectToFirestore(
@@ -2450,12 +2557,14 @@ ${pdfUrlList}
 
       setStatus("success");
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
+      clearActiveGenerationSession();
     } catch (err) {
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);
       }
       progressIntervalRef.current = null;
       setCurrentGenerationProjectId(null); // Clear projectId on error
+      clearActiveGenerationSession();
       // Don't show error if user cancelled
       if (generationCancelledRef.current) {
         return;
@@ -4467,7 +4576,7 @@ ${pdfUrlList}
                     </div>
                   )}
 
-                  {/* Preview — E2B cloud sandbox for backend apps, WebContainer for others */}
+                  {/* Preview — mobile always uses E2B cloud sandbox; desktop uses E2B for backend apps */}
                   <div
                     className={
                       !isMobileViewport && previewMode !== "desktop"
@@ -4475,11 +4584,11 @@ ${pdfUrlList}
                         : "h-full"
                     }
                   >
-                    {previewSandboxId &&
+                    {isMobileViewport ||
                     inferProjectIntegrations(project).hasBackend ? (
                       <E2BSandboxPreview
                         project={project}
-                        sandboxId={previewSandboxId}
+                        sandboxId={previewSandboxId ?? "create-new"}
                         previewKey={previewKey}
                         textEditMode={textEditMode}
                         imageSelectMode={imageSelectMode}
