@@ -925,16 +925,16 @@ function ReactGeneratorContent() {
 
   // Resume generation progress after reload/tab close.
   useEffect(() => {
-    if (authLoading || !user) return;
+    if (authLoading) return;
     if (resumeCheckedRef.current) return;
-    resumeCheckedRef.current = true;
 
     const session = readActiveGenerationSession();
     if (!session) return;
-    if (session.userId !== user.uid) {
+    if (user && session.userId !== user.uid) {
       clearActiveGenerationSession();
       return;
     }
+    resumeCheckedRef.current = true;
 
     let cancelled = false;
 
@@ -971,7 +971,11 @@ function ReactGeneratorContent() {
         syncIntegrationSelectionFromProject(projectWithIntegrations);
         setPreviewSandboxId(result.sandboxId ?? null);
 
-        if (typeof result.savedProjectId === "string" && result.savedProjectId) {
+        if (
+          user &&
+          typeof result.savedProjectId === "string" &&
+          result.savedProjectId
+        ) {
           setCurrentProjectId(result.savedProjectId);
           await loadSavedProjects();
         }
