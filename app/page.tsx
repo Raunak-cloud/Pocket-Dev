@@ -6388,6 +6388,9 @@ ${pdfUrlList}
     }
   };
 
+  const isGenerationFullScreenProgress =
+    activeSection === "create" && status === "loading" && !isGenerationMinimized;
+
   // Show loading screen while auth state is being resolved
   if (authLoading) {
     return <LoadingScreen />;
@@ -6492,6 +6495,8 @@ ${pdfUrlList}
           className={`flex-1 flex flex-col relative z-10 ${
             activeSection === "support" || activeSection === "admin"
               ? "overflow-hidden"
+              : isGenerationFullScreenProgress
+                ? "items-stretch justify-stretch px-0 py-0 sm:px-2 sm:py-2 overflow-hidden"
               : "items-center justify-center px-4 py-12"
           }`}
         >

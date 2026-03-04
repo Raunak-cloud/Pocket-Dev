@@ -285,13 +285,13 @@ export default function GenerationProgress({
   }
 
   return (
-    <div className="w-full h-full flex flex-col">
+    <div className="w-full h-full min-h-0 overflow-hidden flex flex-col">
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] bg-blue-500/[0.05] rounded-full blur-3xl" />
         <div className="absolute top-1/3 left-1/3 w-[280px] h-[280px] bg-violet-500/[0.05] rounded-full blur-3xl" />
       </div>
 
-      <div className="relative w-full h-full flex flex-col bg-bg-secondary/70 backdrop-blur-2xl border border-border-secondary/40 shadow-2xl shadow-black/20 overflow-hidden">
+      <div className="relative w-full h-full min-h-0 flex flex-col bg-bg-secondary/70 backdrop-blur-2xl border border-border-secondary/40 shadow-2xl shadow-black/20 overflow-hidden">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div
             className="absolute -top-[1px] -left-[1px] -right-[1px] h-[1px]"
@@ -302,7 +302,7 @@ export default function GenerationProgress({
           />
         </div>
 
-        <div className="relative px-4 sm:px-8 pt-4 sm:pt-8 pb-5 text-center">
+        <div className="relative px-3 sm:px-8 pt-3 sm:pt-8 pb-3 sm:pb-5 text-center">
           {(onToggleMinimize || onCancel) && (
             <div className="relative z-20 mb-4 flex items-center justify-end gap-2 sm:mb-0 sm:absolute sm:top-5 sm:right-5">
               {onToggleMinimize && (
@@ -350,23 +350,23 @@ export default function GenerationProgress({
             </div>
           )}
 
-          <div className="relative inline-flex mb-4">
+          <div className="relative inline-flex mb-3 sm:mb-4">
             <div className="absolute inset-0 blur-xl bg-gradient-to-r from-blue-500 to-violet-500 opacity-25 scale-150" />
-            <div className="relative p-3.5 rounded-2xl bg-gradient-to-br from-bg-tertiary/80 to-bg-tertiary/40 ring-1 ring-white/[0.08]">
-              <Logo size={40} animate />
+            <div className="relative p-3 sm:p-3.5 rounded-2xl bg-gradient-to-br from-bg-tertiary/80 to-bg-tertiary/40 ring-1 ring-white/[0.08]">
+              <Logo size={32} animate />
             </div>
           </div>
 
-          <h2 className="text-xl font-bold text-text-primary tracking-tight mb-2">
+          <h2 className="text-lg sm:text-xl font-bold text-text-primary tracking-tight mb-1.5 sm:mb-2">
             {isEditMode ? "Editing your app" : `Building ${getAppType()}`}
           </h2>
-          <p className="text-text-tertiary text-sm leading-relaxed max-w-md mx-auto line-clamp-2">
+          <p className="text-text-tertiary text-xs sm:text-sm leading-relaxed max-w-md mx-auto line-clamp-1 sm:line-clamp-2">
             {cleanPrompt}
           </p>
         </div>
 
-        <div className="px-8 pb-5">
-          <div className="flex items-center justify-between mb-2.5">
+        <div className="px-3 sm:px-8 pb-3 sm:pb-5">
+          <div className="flex items-center justify-between mb-2 sm:mb-2.5">
             <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
               Current Step
             </span>
@@ -385,18 +385,18 @@ export default function GenerationProgress({
           </div>
         </div>
 
-        <div className="mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
+        <div className="mx-3 sm:mx-8 h-px bg-gradient-to-r from-transparent via-border-secondary/50 to-transparent" />
 
-        <div className="flex-1 flex items-center justify-center px-6 py-6">
+        <div className="flex-1 min-h-0 flex items-center justify-center px-3 sm:px-6 py-3 sm:py-6">
           <div className="relative w-full">
             <div className="absolute inset-0 bg-gradient-to-r from-blue-500/[0.08] via-indigo-500/[0.06] to-violet-500/[0.08] blur-2xl rounded-[2rem]" />
 
-            <div className="relative rounded-[2rem] border border-border-secondary/60 bg-bg-tertiary/55 backdrop-blur-xl p-8 sm:p-10 text-center shadow-[0_20px_60px_-30px_rgba(59,130,246,0.5)]">
-              <div className="relative mx-auto w-20 h-20 mb-6 floating-icon">
+            <div className="relative rounded-[1.5rem] sm:rounded-[2rem] border border-border-secondary/60 bg-bg-tertiary/55 backdrop-blur-xl p-4 sm:p-10 text-center shadow-[0_20px_60px_-30px_rgba(59,130,246,0.5)]">
+              <div className="relative mx-auto w-16 h-16 sm:w-20 sm:h-20 mb-4 sm:mb-6 floating-icon">
                 <div className="absolute inset-0 rounded-full border border-blue-400/35 orbit-ring" />
-                <div className="absolute inset-[10px] rounded-full bg-gradient-to-br from-blue-500/15 to-violet-500/15 ring-1 ring-white/10 flex items-center justify-center">
+                <div className="absolute inset-[8px] sm:inset-[10px] rounded-full bg-gradient-to-br from-blue-500/15 to-violet-500/15 ring-1 ring-white/10 flex items-center justify-center">
                   <svg
-                    className="w-8 h-8 text-blue-300"
+                    className="w-6 h-6 sm:w-8 sm:h-8 text-blue-300"
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -414,14 +414,14 @@ export default function GenerationProgress({
               <p className="text-[11px] uppercase tracking-[0.2em] text-text-muted font-semibold mb-3">
                 {isEditMode ? "Editing In Progress" : "Generation In Progress"}
               </p>
-              <h3 className="text-2xl sm:text-3xl font-semibold text-text-primary tracking-tight mb-3">
+              <h3 className="text-xl sm:text-3xl font-semibold text-text-primary tracking-tight mb-2 sm:mb-3">
                 {currentStep.label}
               </h3>
-              <p className="text-sm sm:text-base text-text-tertiary mx-auto">
+              <p className="text-xs sm:text-base text-text-tertiary mx-auto">
                 {currentStep.detail}
               </p>
 
-              <div className="mt-6 flex items-center justify-center gap-2">
+              <div className="mt-4 sm:mt-6 flex items-center justify-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-blue-400/80 dot-bounce dot-delay-0" />
                 <span className="w-2 h-2 rounded-full bg-indigo-400/80 dot-bounce dot-delay-1" />
                 <span className="w-2 h-2 rounded-full bg-violet-400/80 dot-bounce dot-delay-2" />
