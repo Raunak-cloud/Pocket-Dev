@@ -289,13 +289,13 @@ export default function GenerationProgress({
           />
         </div>
 
-        <div className="relative px-8 pt-8 pb-5 text-center">
+        <div className="relative px-4 sm:px-8 pt-4 sm:pt-8 pb-5 text-center">
           {(onToggleMinimize || onCancel) && (
-            <div className="absolute top-5 right-5 flex items-center gap-2">
+            <div className="relative z-20 mb-4 flex items-center justify-end gap-2 sm:mb-0 sm:absolute sm:top-5 sm:right-5">
               {onToggleMinimize && (
                 <button
                   onClick={onToggleMinimize}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary bg-bg-tertiary/40 hover:bg-border-secondary/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs text-text-tertiary hover:text-text-primary bg-bg-tertiary/40 hover:bg-border-secondary/50 rounded-lg ring-1 ring-white/[0.06] hover:ring-white/[0.1] transition-all duration-200"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -310,13 +310,13 @@ export default function GenerationProgress({
                       d="M19 9l-7 7-7-7"
                     />
                   </svg>
-                  Minimize
+                  <span className="hidden min-[420px]:inline">Minimize</span>
                 </button>
               )}
               {onCancel && (
                 <button
                   onClick={onCancel}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs text-red-400/80 hover:text-red-300 bg-red-500/[0.06] hover:bg-red-500/10 rounded-lg ring-1 ring-red-500/10 hover:ring-red-500/20 transition-all duration-200"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -331,7 +331,7 @@ export default function GenerationProgress({
                       d="M6 18L18 6M6 6l12 12"
                     />
                   </svg>
-                  Cancel
+                  <span className="hidden min-[420px]:inline">Cancel</span>
                 </button>
               )}
             </div>

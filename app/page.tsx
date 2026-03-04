@@ -75,12 +75,14 @@ const LAST_OPEN_PROJECT_STORAGE_KEY = "__pocketLastOpenProjectId";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
 
 type ActiveGenerationSession = {
+  mode: "generation" | "edit";
   runId: string;
   prompt: string;
   userId: string;
   backendEnabled: boolean;
   paymentsEnabled: boolean;
   startedAt: number;
+  projectId?: string | null;
 };
 
 type SelectedLinkTarget = {
@@ -484,6 +486,7 @@ function ReactGeneratorContent() {
           return null;
         }
         return {
+          mode: parsed.mode === "edit" ? "edit" : "generation",
           runId: parsed.runId,
           prompt: parsed.prompt,
           userId: parsed.userId,
@@ -491,6 +494,8 @@ function ReactGeneratorContent() {
           paymentsEnabled: parsed.paymentsEnabled === true,
           startedAt:
             typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),
+          projectId:
+            typeof parsed.projectId === "string" ? parsed.projectId : null,
         };
       } catch {
         return null;
@@ -923,7 +928,7 @@ function ReactGeneratorContent() {
     }
   }, [authLoading, user]);
 
-  // Resume generation progress after reload/tab close.
+  // Resume generation/edit progress after reload/tab close.
   useEffect(() => {
     if (authLoading) return;
     if (resumeCheckedRef.current) return;
@@ -939,13 +944,21 @@ function ReactGeneratorContent() {
     let cancelled = false;
 
     const resume = async () => {
-      setStatus("loading");
       setError("");
-      setGenerationPrompt(session.prompt);
-      setProgressMessages(["Resuming generation in background..."]);
       setCurrentGenerationProjectId(session.runId);
-      setIsGenerationMinimized(false);
       setActiveSection("create");
+
+      if (session.mode === "edit") {
+        setIsEditing(true);
+        setIsEditMinimized(true);
+        setEditPrompt(session.prompt);
+        setEditProgressMessages(["Resuming edit in background..."]);
+      } else {
+        setStatus("loading");
+        setGenerationPrompt(session.prompt);
+        setProgressMessages(["Resuming generation in background..."]);
+        setIsGenerationMinimized(false);
+      }
 
       try {
         const result = await waitForInngestCompletion<ReactProject & {
@@ -956,7 +969,11 @@ function ReactGeneratorContent() {
           "generate.completed",
           (message) => {
             if (cancelled) return;
-            setProgressMessages((prev) => [...prev, message]);
+            if (session.mode === "edit") {
+              setEditProgressMessages((prev) => [...prev, message]);
+            } else {
+              setProgressMessages((prev) => [...prev, message]);
+            }
           },
         );
 
@@ -971,26 +988,48 @@ function ReactGeneratorContent() {
         syncIntegrationSelectionFromProject(projectWithIntegrations);
         setPreviewSandboxId(result.sandboxId ?? null);
 
+        if (session.projectId) {
+          setCurrentProjectId(session.projectId);
+          persistLastOpenedProjectId(session.projectId);
+        }
+
         if (
           user &&
           typeof result.savedProjectId === "string" &&
           result.savedProjectId
         ) {
           setCurrentProjectId(result.savedProjectId);
+          persistLastOpenedProjectId(result.savedProjectId);
           await loadSavedProjects();
         }
 
-        setStatus("success");
+        if (session.mode === "edit") {
+          setIsEditing(false);
+          setIsEditMinimized(false);
+          setEditProgressMessages([]);
+        } else {
+          setStatus("success");
+        }
         setCurrentGenerationProjectId(null);
         clearActiveGenerationSession();
       } catch (err) {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
         if (message.toLowerCase().includes("cancelled")) {
-          setStatus("idle");
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setEditProgressMessages([]);
+          } else {
+            setStatus("idle");
+          }
           setError("");
         } else {
-          setStatus("error");
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setEditProgressMessages([]);
+          } else {
+            setStatus("error");
+          }
           setError(message);
         }
         setCurrentGenerationProjectId(null);
@@ -1008,6 +1047,7 @@ function ReactGeneratorContent() {
     user,
     clearActiveGenerationSession,
     readActiveGenerationSession,
+    persistLastOpenedProjectId,
   ]);
 
   // Restore the last opened saved project after refresh.
@@ -2247,6 +2287,12 @@ ${schemaContext}
     clarificationHistoryOverride?: Array<{ question: string; answer: string }>,
   ) => {
     if (!project) return;
+    if (!user?.uid) {
+      setShowSignInModal(true);
+      setIsEditing(false);
+      setError("Please sign in to continue.");
+      return;
+    }
     setShowTokenConfirmModal(null);
     setIsEditing(true);
     editStartTimeRef.current = Date.now();
@@ -2365,9 +2411,10 @@ ${schemaContext}
     }
 
     try {
-      if (currentProjectId) {
-        setCurrentGenerationProjectId(currentProjectId);
-      }
+      const runProjectId =
+        currentProjectId ||
+        `proj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      setCurrentGenerationProjectId(runProjectId);
       const hasUploadedEditImages = editFiles.some((f) =>
         f.type.startsWith("image/"),
       );
@@ -2379,16 +2426,37 @@ ${schemaContext}
         ? extractStableImageUrls(project.files)
         : undefined;
 
+      persistActiveGenerationSession({
+        mode: "edit",
+        runId: runProjectId,
+        prompt: editPrompt,
+        userId: user.uid,
+        backendEnabled: backendSelectedForEdit || hasExistingBackend,
+        paymentsEnabled: paymentsEnabledForEdit || false,
+        startedAt: Date.now(),
+        projectId: currentProjectId ?? null,
+      });
+
       const result = await generateCodeWithInngest(
         editFullPrompt,
-        user?.uid || "anonymous",
+        user.uid,
         (message) => {
           setEditProgressMessages((prev) => [...prev, message]);
         },
         (projectId) => {
           setCurrentGenerationProjectId(projectId);
+          persistActiveGenerationSession({
+            mode: "edit",
+            runId: projectId,
+            prompt: editPrompt,
+            userId: user.uid,
+            backendEnabled: backendSelectedForEdit || hasExistingBackend,
+            paymentsEnabled: paymentsEnabledForEdit || false,
+            startedAt: Date.now(),
+            projectId: currentProjectId ?? null,
+          });
         },
-        currentProjectId || undefined,
+        runProjectId,
         {
           requiresAuth: backendSelectedForEdit || hasExistingBackend,
           requiresDatabase: backendSelectedForEdit || hasExistingBackend,
@@ -2445,9 +2513,11 @@ ${schemaContext}
           console.error("Error updating project:", saveError);
         }
       }
+      clearActiveGenerationSession();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Edit failed");
       setCurrentGenerationProjectId(null); // Clear projectId on error
+      clearActiveGenerationSession();
     } finally {
       setIsEditing(false);
       setCurrentGenerationProjectId(null); // Clear projectId after edit completes
@@ -2538,12 +2608,14 @@ ${pdfUrlList}
       const runProjectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
       setCurrentGenerationProjectId(runProjectId);
       persistActiveGenerationSession({
+        mode: "generation",
         runId: runProjectId,
         prompt: generationPrompt,
         userId: authUserId,
         backendEnabled: isGenerationBackendSelected,
         paymentsEnabled,
         startedAt: Date.now(),
+        projectId: null,
       });
       // Real-time progress from Inngest
       const result = await generateCodeWithInngest(
@@ -2555,12 +2627,14 @@ ${pdfUrlList}
         (projectId) => {
           setCurrentGenerationProjectId(projectId);
           persistActiveGenerationSession({
+            mode: "generation",
             runId: projectId,
             prompt: generationPrompt,
             userId: authUserId,
             backendEnabled: isGenerationBackendSelected,
             paymentsEnabled,
             startedAt: Date.now(),
+            projectId: null,
           });
         },
         runProjectId,
@@ -5865,6 +5939,7 @@ ${pdfUrlList}
                         );
                         setCurrentGenerationProjectId(null);
                       }
+                      clearActiveGenerationSession();
                       const withinRefundWindow =
                         Date.now() - editStartTimeRef.current < 10000;
                       setIsEditing(false);
@@ -6620,6 +6695,7 @@ ${pdfUrlList}
               await cancelInngestRun(currentGenerationProjectId, "manual");
               setCurrentGenerationProjectId(null);
             }
+            clearActiveGenerationSession();
             const withinRefundWindow =
               Date.now() - editStartTimeRef.current < 10000;
             setIsEditing(false);
