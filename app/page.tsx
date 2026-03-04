@@ -990,7 +990,6 @@ function ReactGeneratorContent() {
 
         if (session.projectId) {
           setCurrentProjectId(session.projectId);
-          persistLastOpenedProjectId(session.projectId);
         }
 
         if (
@@ -999,7 +998,6 @@ function ReactGeneratorContent() {
           result.savedProjectId
         ) {
           setCurrentProjectId(result.savedProjectId);
-          persistLastOpenedProjectId(result.savedProjectId);
           await loadSavedProjects();
         }
 
@@ -1048,7 +1046,6 @@ function ReactGeneratorContent() {
     user,
     clearActiveGenerationSession,
     readActiveGenerationSession,
-    persistLastOpenedProjectId,
   ]);
 
   // Restore the last opened saved project after refresh.
@@ -2539,6 +2536,8 @@ ${schemaContext}
 
     const authUserId = user.uid;
     const generationPrompt = promptOverride || prompt;
+    // Prevent refresh from auto-opening a previous preview after this new run.
+    clearLastOpenedProjectId();
     generationCancelledRef.current = false;
     setStatus("loading");
     setError("");
@@ -2673,7 +2672,6 @@ ${pdfUrlList}
       // Save project to Firestore
       if (user && result.savedProjectId) {
         setCurrentProjectId(result.savedProjectId);
-        persistLastOpenedProjectId(result.savedProjectId);
         loadSavedProjects();
       } else if (user) {
         try {
@@ -2684,7 +2682,6 @@ ${pdfUrlList}
             authCost,
           );
           setCurrentProjectId(projectId);
-          persistLastOpenedProjectId(projectId);
 
           // Refresh projects list
           loadSavedProjects();
