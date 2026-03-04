@@ -84,6 +84,7 @@ VISUAL DESIGN
 - Typography: clear hierarchy. Page title text-2xl font-semibold, section headings text-lg font-medium, body text-sm text-gray-600.
 - Dense but breathable: p-4 to p-6 for card padding, gap-4 to gap-6 between cards.
 - TEXT CONTRAST: All text must be clearly readable against its background. Use text-gray-900/text-slate-900 on white/light cards, text-white on dark sidebars. Never use light gray text on white backgrounds or dark text on dark backgrounds. Stat card values and labels must have strong contrast.
+- If any top navigation/header overlays media or gradient backgrounds, add a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast link text on desktop and mobile.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ENGINEERING CONTRACT

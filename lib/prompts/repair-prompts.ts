@@ -64,7 +64,7 @@ export function buildLintRepairPrompt(args: {
   const { originalPrompt, files, dependencies, lintIssues } = args;
 
   const hasNavigationUxIssue = lintIssues.some((issue) =>
-    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|responsive-breakpoints|mobile-overflow-guard)$/.test(
+    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|navbar-contrast|responsive-breakpoints|mobile-overflow-guard)$/.test(
       issue.rule ?? "",
     ),
   );
@@ -114,6 +114,7 @@ ${
   - Mobile menu panel must be above page content (not behind hero/cards), using fixed/absolute overlay positioning with strong z-index.
   - Mobile menu panel must use readable contrast and non-transparent background.
   - Mobile menu panel must span full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0).
+  - If navbar overlays hero media (image/video/gradient), navbar needs a readable surface (semi-opaque bg or backdrop blur + border/shadow) and high-contrast nav link text.
   - Do not create separate scrollbar UI on nav/header/menu wrappers.
   - Prevent horizontal overflow on small screens.`
     : ""
