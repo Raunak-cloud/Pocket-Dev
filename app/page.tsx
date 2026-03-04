@@ -3634,6 +3634,9 @@ ${pdfUrlList}
                 activeSection={activeSection}
                 onSectionChange={handleSuccessSectionChange}
                 isCollapsed={false}
+                onToggleCollapse={(collapsed) => {
+                  if (collapsed) setIsMobileMenuOpen(false);
+                }}
                 onBuyTokens={() => {
                   setTokenPurchaseAmount(0);
                   setShowTokenPurchaseModal(true);
@@ -3767,6 +3770,7 @@ ${pdfUrlList}
                             <button
                               onClick={publishProject}
                               disabled={isPublishing}
+                              aria-label="Publish changes"
                               className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               {isPublishing ? (
@@ -3786,15 +3790,14 @@ ${pdfUrlList}
                                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
                                   />
                                 </svg>
-                                <span className="max-[380px]:hidden">
-                                  Publish
-                                </span>
+                                <span className="sr-only">Publish</span>
                               </>
                             )}
                           </button>
                         ) : (
                           <button
                             onClick={() => setShowDomainModal(true)}
+                            aria-label="Published"
                             className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
                           >
                               <svg
@@ -3810,15 +3813,14 @@ ${pdfUrlList}
                                 d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
                               />
                             </svg>
-                            <span className="max-[380px]:hidden">
-                              Published
-                            </span>
+                            <span className="sr-only">Published</span>
                           </button>
                         )
                       ) : (
                         <button
                           onClick={publishProject}
                           disabled={isPublishing || !currentProjectId}
+                          aria-label="Publish"
                           className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {isPublishing ? (
@@ -3838,9 +3840,7 @@ ${pdfUrlList}
                                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
                                   />
                                 </svg>
-                                <span className="max-[380px]:hidden">
-                                  Publish
-                                </span>
+                                <span className="sr-only">Publish</span>
                               </>
                             )}
                           </button>
@@ -3848,6 +3848,7 @@ ${pdfUrlList}
 
                         <button
                           onClick={handleNewProjectClick}
+                          aria-label="New project"
                           className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
                         >
                           <svg
@@ -3863,7 +3864,7 @@ ${pdfUrlList}
                               d="M12 4v16m8-8H4"
                             />
                           </svg>
-                          <span className="max-[380px]:hidden">New</span>
+                          <span className="sr-only">New</span>
                         </button>
                       </div>
                     </>
@@ -6430,6 +6431,9 @@ ${pdfUrlList}
               activeSection={activeSection}
               onSectionChange={handleDefaultSectionChange}
               isCollapsed={false}
+              onToggleCollapse={(collapsed) => {
+                if (collapsed) setIsMobileMenuOpen(false);
+              }}
               onBuyTokens={() => {
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
