@@ -25,10 +25,11 @@ import {
   applyReplacements,
   lockExistingImageSourcesFromUrls,
 } from "@/lib/server/persist-generated-images";
+import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 
 async function sendProgress(projectId: string, message: string) {
   try {
-    await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`, {
+    await fetch(getInngestStatusApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

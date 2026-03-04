@@ -11,6 +11,7 @@ const PUBLIC_ROUTE_PATTERNS = [
   /^\/api\/inngest(?:\/.*)?$/,
   /^\/api\/stripe\/connect(?:\/.*)?$/,
   /^\/api\/analytics\/track$/,
+  /^\/api\/debug\/app-base-url$/,
 ];
 
 function isPublicRoute(pathname: string) {
@@ -58,4 +59,3 @@ export const config = {
     "/(api|trpc)(.*)",
   ],
 };
-

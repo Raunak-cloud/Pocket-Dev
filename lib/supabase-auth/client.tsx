@@ -103,11 +103,23 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         redirectUrl,
       )}`;
 
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: callback },
+        options: {
+          redirectTo: callback,
+          skipBrowserRedirect: true,
+        },
       });
       if (error) throw error;
+      if (!data?.url) {
+        throw new Error("Failed to get OAuth authorization URL");
+      }
+
+      if (typeof window !== "undefined") {
+        console.log("[Auth] OAuth callback:", callback);
+        console.log("[Auth] OAuth URL:", data.url);
+        window.location.assign(data.url);
+      }
     },
     [supabase],
   );

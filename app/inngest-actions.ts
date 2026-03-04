@@ -7,6 +7,7 @@
 "use server";
 
 import { INNGEST_APP_ID, inngest } from "@/lib/inngest-client";
+import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 
 /**
  * Trigger AI code generation workflow
@@ -52,10 +53,8 @@ export async function cancelGenerationJob(projectId: string) {
   let eventCancelled = false;
   let remoteCancelled = false;
 
-  const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
-
   try {
-    const response = await fetch(url, {
+    const response = await fetch(getInngestStatusApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

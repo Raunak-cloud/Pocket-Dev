@@ -30,6 +30,7 @@ import {
   buildSchemaBootstrapRepairPrompt,
   SUPABASE_API_REFERENCE,
 } from "@/lib/prompts";
+import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 
 const MODEL = "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
@@ -336,7 +337,7 @@ async function generateWithGemini(systemPrompt: string, userPrompt: string) {
 
 async function sendProgress(projectId: string, message: string) {
   try {
-    await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`, {
+    await fetch(getInngestStatusApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -352,7 +353,7 @@ async function sendProgress(projectId: string, message: string) {
 
 async function sendFailure(projectId: string, error: string) {
   try {
-    await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`, {
+    await fetch(getInngestStatusApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -368,8 +369,9 @@ async function sendFailure(projectId: string, error: string) {
 
 async function checkIfCancelled(projectId: string): Promise<boolean> {
   try {
+    const statusUrl = getInngestStatusApiUrl();
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status?projectId=${projectId}&event=generate.completed`,
+      `${statusUrl}?projectId=${projectId}&event=generate.completed`,
     );
 
     if (response.ok) {
@@ -5439,7 +5441,7 @@ NAV + MOBILE RULES:
     // Step 9: Notify completion via API
     await step.run("notify-completion", async () => {
       await sendProgress(projectId, "[9/9] Finalizing your app...");
-      const url = `${process.env.NEXT_PUBLIC_APP_URL}/api/inngest/status`;
+      const url = getInngestStatusApiUrl();
       console.log("[Inngest] Notifying completion:", {
         url,
         projectId,
