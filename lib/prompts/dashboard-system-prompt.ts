@@ -38,6 +38,7 @@ SIDEBAR:
 - Each nav link must map to a real page route.
 - Active link state highlighted (background tint, left border accent).
 - Mobile: sidebar hidden by default, toggled via hamburger button in a top header bar.
+- Navigation quality on all breakpoints: links must remain clearly readable, labels must not overlap/truncate awkwardly, and touch targets must be comfortable (44px+ on mobile).
 
 CONTENT AREA:
 - Fills remaining screen width (flex-1 overflow-y-auto).

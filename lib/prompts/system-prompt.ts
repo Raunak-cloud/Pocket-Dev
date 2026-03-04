@@ -112,6 +112,9 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Header/navbar must stay pinned (sticky/fixed + top-0) and remain above content (high z-index).
 - Mobile menu must render on top of content, have readable contrast, and occupy full phone height (h-screen/min-h-screen/100dvh/inset-y-0).
 - If navbar overlays hero images/videos/gradients, it must use a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast nav text/links on both desktop and mobile.
+- Desktop nav must look polished: balanced spacing, clear active/hover/focus states, legible typography, and no low-contrast links.
+- Mobile nav must be touch-friendly: clear menu button, 44px+ tap targets, no clipped/overlapping labels, and obvious open/close affordance.
+- Before finalizing, sanity-check navigation in both desktop and mobile layouts for readability, tapability, and visual clarity.
 - Avoid nested/independent scrollbars in nav/header/menu wrappers.
 - Desktop nav should include the brand name/logo and key navigation links with hover effects.
 - CRITICAL: Every navigation link must point to a real route with a generated page. If the nav has "About", "Services", "Pricing", "Contact" — generate app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/contact/page.tsx. No dead links or anchor-only fallbacks for top-level nav items.

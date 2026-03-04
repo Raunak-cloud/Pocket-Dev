@@ -3053,55 +3053,6 @@ function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
       });
     }
 
-    const hasTopHeroMedia = navFiles.some(
-      (f) =>
-        /<(?:Image|img)\b[\s\S]{0,220}\b(?:fill|object-cover)\b/i.test(
-          f.content,
-        ) ||
-        /\b(?:h-\[(?:7[0-9]|8[0-9]|9[0-9]|100)vh\]|min-h-screen|h-screen)\b[\s\S]{0,220}<(?:Image|img)\b/i.test(
-          f.content,
-        ) ||
-        /<(?:Image|img)\b[\s\S]{0,220}\b(?:h-\[(?:7[0-9]|8[0-9]|9[0-9]|100)vh\]|min-h-screen|h-screen)\b/i.test(
-          f.content,
-        ),
-    );
-
-    const navTagHasReadableSurface = navFiles.some((f) => {
-      const classAttrRe = /<(?:nav|header)[^>]*className\s*=\s*["'\x60]([^"'\x60]*)["'\x60]/gi;
-      const classMatches = Array.from(f.content.matchAll(classAttrRe));
-
-      const hasReadableSurfaceClass = classMatches.some((match) => {
-        const classes = String(match[1] || "");
-        const hasOpaqueOrTintedBg =
-          /\bbg-(?!transparent\b)[\w[\]/:-]+\b/i.test(classes) &&
-          !/\bbg-(?:none|inherit)\b/i.test(classes);
-        const hasBackdropSurface = /\bbackdrop-blur(?:-[\w-]+)?\b/i.test(
-          classes,
-        );
-        const hasSurfaceChrome = /\b(?:border-b|shadow(?:-[\w-]+)?)\b/i.test(
-          classes,
-        );
-        return hasOpaqueOrTintedBg || hasBackdropSurface || hasSurfaceChrome;
-      });
-
-      const hasInlineBackground = /<(?:nav|header)[^>]*style=\{\{[^}]*background(?:Color|Image)?\s*:/i.test(
-        f.content,
-      );
-
-      return hasReadableSurfaceClass || hasInlineBackground;
-    });
-
-    if (hasTopHeroMedia && !navTagHasReadableSurface) {
-      issues.push({
-        path: navFiles[0].path,
-        line: 1,
-        column: 1,
-        rule: "ux/navbar-contrast",
-        message:
-          "Navbar overlays visual media but lacks a readable surface. Add a semi-opaque nav background/backdrop and enforce high-contrast link/text colors on mobile and desktop.",
-      });
-    }
-
     const hasFullHeightMenuPanel = navFiles.some(
       (f) =>
         /\b(?:mobile-menu|menu|drawer|nav-panel|menu-panel)\b[\s\S]{0,160}\b(?:h-screen|min-h-screen|h-dvh|min-h-dvh|h-\[100dvh\]|min-h-\[100dvh\]|inset-y-0|top-0\s+bottom-0)\b/i.test(
@@ -4551,6 +4502,9 @@ NAV + MOBILE RULES:
 - Keep header/navbar pinned at top with proper z-index.
 - Mobile menu must render above content with clear background contrast and full viewport height.
 - If navbar overlays hero images/videos/gradients, it MUST use a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast text/link colors on both desktop and mobile.
+- Desktop navbar must look premium: balanced spacing, clear hover/active/focus states, and strongly legible link labels.
+- Mobile navbar must be touch-friendly: clear menu affordance, 44px+ tap targets, no clipped/overlapping text, and obvious close state.
+- Final nav quality check: verify readability and interaction quality in both desktop and mobile layouts before returning files.
 - Avoid creating extra independent scrollbars inside nav/menu wrappers.
 - CRITICAL: Every nav link must use Next.js Link component with href pointing to a real route (e.g., href="/about"). Generate a matching app/{route}/page.tsx for each. No "#" or empty href values for primary navigation items.`;
     });
