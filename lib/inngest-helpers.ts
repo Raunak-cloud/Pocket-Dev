@@ -221,8 +221,6 @@ export async function generateCodeWithInngest(
     onProgress
   );
 
-  onProgress?.("[9/9] Generation complete.");
-
   // Include projectId in result for tracking
   return { ...result, projectId };
 }

@@ -1008,6 +1008,7 @@ function ReactGeneratorContent() {
           setIsEditMinimized(false);
           setEditProgressMessages([]);
         } else {
+          setProgressMessages((prev) => [...prev, "Ready to preview!"]);
           setStatus("success");
         }
         setCurrentGenerationProjectId(null);
@@ -2692,6 +2693,7 @@ ${pdfUrlList}
         }
       }
 
+      setProgressMessages((prev) => [...prev, "Ready to preview!"]);
       setStatus("success");
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
       clearActiveGenerationSession();

@@ -68,7 +68,7 @@ const GENERATION_STEPS: ProgressStep[] = [
     label: "Ready to preview",
     detail: "Your app is prepared and ready.",
     icon: "M5 13l4 4L19 7",
-    keywords: ["ready", "complete", "done", "preview"],
+    keywords: ["ready to preview", "generation complete"],
   },
 ];
 
@@ -120,7 +120,7 @@ const EDITING_STEPS: ProgressStep[] = [
     label: "Edits ready",
     detail: "Your updated app is ready to preview.",
     icon: "M5 13l4 4L19 7",
-    keywords: ["ready", "complete", "done", "preview"],
+    keywords: ["edits ready", "edit complete", "ready to preview"],
   },
 ];
 
@@ -142,28 +142,41 @@ function normalizeMessage(message: string): string {
 
 function inferStepIndex(message: string, steps: ProgressStep[]): number {
   if (!message.trim()) return 0;
+  const normalized = normalizeMessage(message);
+
+  // Only treat terminal "ready" states as final when an explicit terminal phrase appears.
+  const readyKeywords = steps[steps.length - 1]?.keywords ?? [];
+  const isTerminalReady = readyKeywords.some((keyword) =>
+    normalized.includes(keyword),
+  );
+  if (isTerminalReady) {
+    return steps.length - 1;
+  }
 
   const explicit = message.match(STEP_PATTERN);
   if (explicit) {
     const rawStep = Number.parseInt(explicit[1], 10);
-    const step = Number.isFinite(rawStep) ? rawStep - 1 : 0;
-    return Math.max(0, Math.min(step, steps.length - 1));
+    const rawTotal = Number.parseInt(explicit[2], 10);
+    const step = Number.isFinite(rawStep) ? Math.max(1, rawStep) : 1;
+    const total = Number.isFinite(rawTotal) ? Math.max(1, rawTotal) : 1;
+
+    // Backend emits [x/9], while UI has fewer conceptual steps.
+    // Map explicit backend progress into non-terminal UI steps only,
+    // and reserve the final "ready" step for true terminal messages.
+    const maxNonTerminalIndex = Math.max(0, steps.length - 2);
+    if (maxNonTerminalIndex === 0 || total <= 1) {
+      return 0;
+    }
+    const ratio = Math.min(Math.max((step - 1) / (total - 1), 0), 1);
+    const mapped = Math.round(ratio * maxNonTerminalIndex);
+    return Math.min(Math.max(mapped, 0), maxNonTerminalIndex);
   }
 
-  const normalized = normalizeMessage(message);
   const matchedIndex = steps.findIndex((step) =>
     step.keywords.some((keyword) => normalized.includes(keyword)),
   );
   if (matchedIndex !== -1) {
     return matchedIndex;
-  }
-
-  if (
-    normalized.includes("ready") ||
-    normalized.includes("complete") ||
-    normalized.includes("done")
-  ) {
-    return steps.length - 1;
   }
 
   return 0;
