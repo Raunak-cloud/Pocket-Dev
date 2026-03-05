@@ -69,6 +69,7 @@ export const generateImagesFunction = inngest.createFunction(
       detectedTheme,
       preserveExistingImages,
       previousImageUrls,
+      maxImages,
     } = event.data as {
       files: GeneratedFile[];
       userId: string;
@@ -77,6 +78,7 @@ export const generateImagesFunction = inngest.createFunction(
       detectedTheme?: string;
       preserveExistingImages?: boolean;
       previousImageUrls?: string[];
+      maxImages?: number | null;
     };
 
     // Step 1: Lock existing images if this is an edit with preservation
@@ -99,6 +101,34 @@ export const generateImagesFunction = inngest.createFunction(
 
     if (imageRefs.length === 0) {
       return { replacements: {} as Record<string, string>, files: lockedFiles };
+    }
+
+    const normalizedMaxImages =
+      typeof maxImages === "number" && Number.isFinite(maxImages) && maxImages > 0
+        ? Math.floor(maxImages)
+        : null;
+    const refsToGenerate =
+      normalizedMaxImages && imageRefs.length > normalizedMaxImages
+        ? imageRefs.slice(0, normalizedMaxImages)
+        : imageRefs;
+    const overflowRefs =
+      normalizedMaxImages && imageRefs.length > normalizedMaxImages
+        ? imageRefs.slice(normalizedMaxImages)
+        : [];
+    const replacements: Record<string, string> = {};
+
+    if (overflowRefs.length > 0) {
+      await sendProgress(
+        projectId,
+        `Image quota reached: generating ${refsToGenerate.length}/${imageRefs.length}; using deterministic placeholders for ${overflowRefs.length} overflow image(s).`,
+      );
+      overflowRefs.forEach((ref, i) => {
+        replacements[ref.source] = createFallbackImageDataUri(
+          ref.source,
+          ref.altText || "Generated placeholder visual",
+          refsToGenerate.length + i + 1,
+        );
+      });
     }
 
     // Step 3: Check for Replicate API key — fallback to SVGs if missing
@@ -131,14 +161,14 @@ export const generateImagesFunction = inngest.createFunction(
     const prompts = await step.run("enhance-prompts", async () => {
       if (config.enableLlmPromptEnhancement) {
         const siteContentSample = buildSiteContentSample(lockedFiles);
-        return await generateImagePrompts(imageRefs as ImageReference[], {
+        return await generateImagePrompts(refsToGenerate as ImageReference[], {
           originalPrompt: originalPrompt || "",
           detectedTheme,
           isUserProvidedPrompt: false,
           siteContentSample,
         });
       }
-      return fallbackPromptGeneration(imageRefs as ImageReference[]);
+      return fallbackPromptGeneration(refsToGenerate as ImageReference[]);
     });
 
     // Step 5: Ensure storage bucket exists
@@ -153,7 +183,6 @@ export const generateImagesFunction = inngest.createFunction(
 
     // Steps 6-N: Generate each image as its own step (keeps each under 60s)
     const replicate = new Replicate({ auth: apiKey });
-    const replacements: Record<string, string> = {};
 
     for (let i = 0; i < prompts.length; i++) {
       const prompt = prompts[i] as ImagePromptResult;
@@ -222,7 +251,7 @@ export const generateImagesFunction = inngest.createFunction(
       u.startsWith("data:image/svg"),
     ).length;
     console.log(
-      `[generate-images] Complete: ${Object.keys(replacements).length}/${imageRefs.length} generated (${fallbackCount} fallbacks)`,
+      `[generate-images] Complete: ${Object.keys(replacements).length}/${imageRefs.length} resolved (${fallbackCount} fallbacks)`,
     );
 
     return { replacements, files: finalFiles };

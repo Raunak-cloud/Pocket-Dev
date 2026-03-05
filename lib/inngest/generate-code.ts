@@ -17,6 +17,7 @@ import {
   rebindAuthConfigBindingKey,
   type ManagedSupabaseAuthConfig,
 } from "@/lib/supabase-project-pool";
+import { collectImageReferences } from "@/lib/server/persist-generated-images";
 import ts from "typescript";
 import {
   SYSTEM_PROMPT,
@@ -46,6 +47,8 @@ const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
 const MAX_NEXTJS_REPAIR_ATTEMPTS = 4;
 const MAX_TYPECHECK_REPAIR_ATTEMPTS = 3;
 const MAX_SCHEMA_BOOTSTRAP_REPAIR_ATTEMPTS = 2;
+const MAX_IMAGE_BUDGET_REPAIR_ATTEMPTS = 2;
+const MAX_NEW_GENERATION_IMAGES = 10;
 const MAX_FILE_COUNT = 300;
 const MAX_FILE_CONTENT_LENGTH = 300_000;
 
@@ -242,6 +245,34 @@ function normalizeIntegrationRequirements(
     requiresPasswordAuth: raw.requiresPasswordAuth === true,
     requiresPayments: raw.requiresPayments === true,
   };
+}
+
+function collectImageBudgetIssues(
+  files: GeneratedFile[],
+  maxImages: number,
+): { imageCount: number; issues: LintIssue[] } {
+  const refs = collectImageReferences(files);
+  if (refs.length <= maxImages) {
+    return { imageCount: refs.length, issues: [] };
+  }
+
+  const overflowPaths = Array.from(
+    new Set(refs.slice(maxImages).map((ref) => ref.filePath)),
+  );
+  const paths =
+    overflowPaths.length > 0
+      ? overflowPaths
+      : [refs[maxImages]?.filePath || refs[0]?.filePath || "app/page.tsx"];
+
+  const issues: LintIssue[] = paths.map((path) => ({
+    path,
+    line: 1,
+    column: 1,
+    rule: "image/max-count",
+    message: `Project currently references ${refs.length} unique images. Reduce to at most ${maxImages} unique image sources by removing lower-priority image-heavy sections/cards or reusing existing image sources.`,
+  }));
+
+  return { imageCount: refs.length, issues };
 }
 
 function projectNeedsManagedSupabase(
@@ -4401,6 +4432,7 @@ CORE IMPLEMENTATION RULES:
 - Do not use @apply in CSS.
 - All files must parse without TS/JS syntax errors.
 - Do not output lockfiles.
+- If you include illustrative images, cap the app at 10 unique image sources/placeholders and use icon/gradient alternatives beyond that budget.
 
 AUTHENTICATION & BACKEND RULES:
   * If auth/backend is NOT requested: do NOT generate sign-in/sign-up/login pages, middleware.ts, auth API routes, or any Supabase imports. Do NOT add account-dependent transactional features that imply backend state. Build with zero backend dependencies.
@@ -4481,6 +4513,8 @@ PAYMENT RULES (PROXY PATTERN):
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
 - Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).
+- NEW GENERATION IMAGE BUDGET: You may use a maximum of 10 unique image sources/placeholders across the entire app. Plan sections accordingly.
+- If the design would exceed 10 images, prioritize high-impact sections (hero + key cards) and convert remaining sections to icon/typography/gradient-driven layouts that do NOT require additional images.
 - Alt text IS the image generation prompt. Write each alt text as a detailed photographer's brief (20-40 words).
 - Structure: [Specific Subject] + [Scene/Setting] + [Photography Style] + [Lighting] + [Key Visual Details]
 - GOOD: "Fresh strawberry cheesecake with glossy red glaze and mint garnish on a white marble countertop, soft natural window light, overhead flat-lay composition, bakery kitchen blurred in background"
@@ -5215,7 +5249,7 @@ NAV + MOBILE RULES:
       previewSandboxId = typecheckResult.sandboxId;
     }
 
-    const { finalFiles, finalLint } = await step.run(
+    let { finalFiles, finalLint } = await step.run(
       "post-scaffold-validation",
       async () => {
         const scaffoldedFiles = ensureRequiredFiles(
@@ -5249,6 +5283,90 @@ NAV + MOBILE RULES:
         return { finalFiles: scaffoldedFiles, finalLint: lint };
       },
     );
+
+    if (!isEditRequest) {
+      const imageBudgetState = await step.run(
+        "image-budget-check-and-repair",
+        async () => {
+          let workingFiles = finalFiles;
+          let workingDeps = dependencies;
+
+          for (
+            let attempt = 1;
+            attempt <= MAX_IMAGE_BUDGET_REPAIR_ATTEMPTS + 1;
+            attempt++
+          ) {
+            const budget = collectImageBudgetIssues(
+              workingFiles,
+              MAX_NEW_GENERATION_IMAGES,
+            );
+            if (budget.issues.length === 0) {
+              return {
+                files: workingFiles,
+                dependencies: workingDeps,
+                imageCount: budget.imageCount,
+              };
+            }
+
+            console.warn(
+              `[ImageBudget] Attempt ${attempt} - ${budget.imageCount} image refs found (max ${MAX_NEW_GENERATION_IMAGES}).`,
+            );
+
+            if (attempt > MAX_IMAGE_BUDGET_REPAIR_ATTEMPTS) {
+              return {
+                files: workingFiles,
+                dependencies: workingDeps,
+                imageCount: budget.imageCount,
+              };
+            }
+
+            try {
+              const repaired = await repairProjectFromLintFeedback({
+                originalPrompt: prompt,
+                files: workingFiles,
+                dependencies: workingDeps,
+                lintIssues: budget.issues,
+                requirements: integrationRequirements,
+                managedAuthConfig,
+                systemPrompt: repairSystemPrompt,
+              });
+              workingFiles = ensureRequiredFiles(
+                applyKnownImportSpecifierFixups(repaired.files),
+                repaired.dependencies,
+                integrationRequirements,
+                managedAuthConfig,
+                projectId,
+              );
+              workingDeps = repaired.dependencies;
+            } catch (repairErr) {
+              console.warn(
+                `[ImageBudget] Repair attempt ${attempt} failed:`,
+                repairErr instanceof Error ? repairErr.message : repairErr,
+              );
+            }
+          }
+
+          const remaining = collectImageBudgetIssues(
+            workingFiles,
+            MAX_NEW_GENERATION_IMAGES,
+          );
+          return {
+            files: workingFiles,
+            dependencies: workingDeps,
+            imageCount: remaining.imageCount,
+          };
+        },
+      );
+
+      finalFiles = imageBudgetState.files;
+      dependencies = imageBudgetState.dependencies;
+
+      if (imageBudgetState.imageCount > MAX_NEW_GENERATION_IMAGES) {
+        console.warn(
+          `[ImageBudget] Repair loop exhausted with ${imageBudgetState.imageCount} image refs. Overflow will use deterministic fallbacks.`,
+        );
+      }
+    }
 
     if (integrationRequirements.requiresDatabase) {
       if (!managedAuthConfig?.projectRef) {
@@ -5345,6 +5463,7 @@ NAV + MOBILE RULES:
           detectedTheme,
           preserveExistingImages: preserveExistingImages ?? false,
           previousImageUrls: previousImageUrls ?? [],
+          maxImages: isEditRequest ? null : MAX_NEW_GENERATION_IMAGES,
         },
         timeout: "10m",
       }) as {

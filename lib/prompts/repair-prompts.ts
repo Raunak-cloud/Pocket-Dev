@@ -68,6 +68,9 @@ export function buildLintRepairPrompt(args: {
       issue.rule ?? "",
     ),
   );
+  const hasImageBudgetIssue = lintIssues.some(
+    (issue) => issue.rule === "image/max-count",
+  );
 
   const issueList = lintIssues
     .slice(0, 40)
@@ -116,6 +119,16 @@ ${
   - Mobile menu panel must span full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0).
   - Do not create separate scrollbar UI on nav/header/menu wrappers.
   - Prevent horizontal overflow on small screens.`
+    : ""
+}
+${
+  hasImageBudgetIssue
+    ? `- Image budget constraints:
+  - Keep the entire app at or below 10 unique image sources/placeholders.
+  - Preserve visual quality by prioritizing hero and top-value sections.
+  - Replace lower-priority image-heavy sections/cards with iconography, gradients, or typography-driven UI.
+  - Reuse existing image sources where appropriate instead of adding new ones.
+  - Do not add new product cards/sections that require additional unique images once the budget is reached.`
     : ""
 }`;
 }

@@ -102,6 +102,7 @@ ENGINEERING CONTRACT
 - Do not use @apply in CSS.
 - Do not output lockfiles.
 - Return complete project JSON — all files needed to run the app.
+- If the dashboard includes illustrative images, keep new generation to a maximum of 10 unique image sources/placeholders across the app; prioritize critical visuals and use icon/gradient alternatives for lower-priority sections.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AUTHENTICATION & BACKEND
