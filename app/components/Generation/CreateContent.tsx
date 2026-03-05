@@ -4,7 +4,7 @@ import LaunchAnimation from "../LaunchAnimation";
 import type { CompatibleUser } from "@/app/contexts/AuthContext";
 import type { UploadedFile } from "@/app/types";
 
-const EXAMPLES = [
+const MOBILE_EXAMPLES = [
   {
     icon: "🛍️",
     name: "E-Commerce",
@@ -30,6 +30,36 @@ const EXAMPLES = [
     desc: "Posts, comments & search",
     query:
       "Create a blog app with MDX support, and full-text search functionality",
+  },
+];
+
+const DESKTOP_ONLY_EXAMPLES = [
+  {
+    icon: "💼",
+    name: "Portfolio",
+    desc: "Case studies & contact flow",
+    query: "Create a portfolio website with case studies and contact page",
+  },
+  {
+    icon: "🏋️",
+    name: "Fitness",
+    desc: "Plans, trainers & schedule",
+    query:
+      "Create a fitness studio website with trainers, class schedules, and pricing",
+  },
+  {
+    icon: "🏠",
+    name: "Real Estate",
+    desc: "Listings, agents & inquiry",
+    query:
+      "Create a real estate website with property listings, agent profiles, and contact forms",
+  },
+  {
+    icon: "💡",
+    name: "Agency",
+    desc: "Services, projects & CTA",
+    query:
+      "Create a digital agency website with services, case studies, and lead capture",
   },
 ];
 
@@ -269,12 +299,29 @@ export default function CreateContent({
         <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3 text-center">
           Quick start
         </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {EXAMPLES.map((ex) => (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+          {MOBILE_EXAMPLES.map((ex) => (
             <button
               key={ex.name}
               onClick={() => setPrompt(ex.query)}
               className="group p-3 bg-bg-secondary/50 hover:bg-bg-tertiary/70 border border-border-primary hover:border-border-secondary rounded-xl text-left transition-all duration-200"
+            >
+              <div className="flex items-center gap-2.5 mb-1">
+                <span className="text-xl">{ex.icon}</span>
+                <span className="text-sm font-medium text-text-primary group-hover:text-blue-400 transition-colors">
+                  {ex.name}
+                </span>
+              </div>
+              <p className="text-xs text-text-muted pl-8 line-clamp-1">
+                {ex.desc}
+              </p>
+            </button>
+          ))}
+          {DESKTOP_ONLY_EXAMPLES.map((ex) => (
+            <button
+              key={ex.name}
+              onClick={() => setPrompt(ex.query)}
+              className="hidden sm:block group p-3 bg-bg-secondary/50 hover:bg-bg-tertiary/70 border border-border-primary hover:border-border-secondary rounded-xl text-left transition-all duration-200"
             >
               <div className="flex items-center gap-2.5 mb-1">
                 <span className="text-xl">{ex.icon}</span>
