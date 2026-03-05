@@ -1,5 +1,7 @@
 "use client";
 
+import { CustomAPIsSection, type CustomApiConfig } from "@/app/components/Integrations/CustomAPIsSection";
+
 interface EditIntegrationsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -7,6 +9,9 @@ interface EditIntegrationsModalProps {
   onBackendChange: (enabled: boolean) => void;
   paymentsEnabled: boolean;
   onTogglePayments: () => void;
+  projectId?: string;
+  customApis?: CustomApiConfig[];
+  onCustomApisChange?: (apis: CustomApiConfig[]) => void;
 }
 
 export function EditIntegrationsModal({
@@ -16,6 +21,9 @@ export function EditIntegrationsModal({
   onBackendChange,
   paymentsEnabled,
   onTogglePayments,
+  projectId,
+  customApis = [],
+  onCustomApisChange,
 }: EditIntegrationsModalProps) {
   if (!isOpen) return null;
 
@@ -44,7 +52,7 @@ export function EditIntegrationsModal({
                 Integrations
               </h3>
               <p className="text-xs text-text-tertiary">
-                Configure backend and payment integrations
+                Configure backend, payments, and custom APIs
               </p>
             </div>
           </div>
@@ -208,6 +216,15 @@ export function EditIntegrationsModal({
                 </div>
               </div>
             </button>
+
+            {/* Custom APIs */}
+            {projectId && (
+              <CustomAPIsSection
+                projectId={projectId}
+                apis={customApis}
+                onChange={onCustomApisChange ?? (() => {})}
+              />
+            )}
           </div>
         </div>
 

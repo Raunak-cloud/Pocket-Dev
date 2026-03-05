@@ -4507,6 +4507,7 @@ export const generateCodeFunction = inngest.createFunction(
     const userId = (event.data as Record<string, unknown>)?.userId as string | undefined;
     const preserveExistingImages = (event.data as Record<string, unknown>)?.preserveExistingImages as boolean | undefined;
     const previousImageUrls = (event.data as Record<string, unknown>)?.previousImageUrls as string[] | undefined;
+    const customApis = (event.data as Record<string, unknown>)?.customApis as Array<{ name: string; slug: string; baseUrl: string; description?: string | null }> | undefined;
 
     try {
     const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
@@ -4717,6 +4718,37 @@ NAV + MOBILE RULES:
 - CRITICAL: Every nav link must use Next.js Link component with href pointing to a real route (e.g., href="/about"). Generate a matching app/{route}/page.tsx for each. No "#" or empty href values for primary navigation items.`;
     });
 
+    // Append custom API integration instructions if any are configured
+    const finalUserPrompt = (() => {
+      if (!customApis || customApis.length === 0) return userPrompt;
+
+      const apiBlocks = customApis
+        .map((api) => {
+          const descLine = api.description ? `\nDescription: ${api.description}` : "";
+          return `API: ${api.name} (slug: "${api.slug}")
+Base URL: ${api.baseUrl}${descLine}
+
+Usage pattern (use in any component or server action):
+const res = await fetch(\`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/user-apis/proxy\`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID,
+    apiSlug: '${api.slug}',
+    path: '/your-endpoint',
+    method: 'GET',
+    queryParams: { key: 'value' }
+  })
+});
+const data = await res.json();`;
+        })
+        .join("\n\n---\n\n");
+
+      const section = `\n\n---\n\nCUSTOM API INTEGRATIONS:\nThe following APIs are pre-configured on the platform. Call them via the platform proxy (API keys are handled server-side — never exposed to the client):\n\n${apiBlocks}\n\nCRITICAL: Do NOT hardcode API keys anywhere. Do NOT call external APIs directly (CORS will block them). Always use the proxy pattern above for every API call.`;
+
+      return userPrompt + section;
+    })();
+
     // Step 1.5: Extract theme from prompt
     const detectedTheme = await step.run(
       "extract-theme-from-prompt",
@@ -4750,7 +4782,7 @@ NAV + MOBILE RULES:
           generationSystemPrompt += "\n" + SUPABASE_API_REFERENCE;
         }
 
-        const text = await generateWithGemini(generationSystemPrompt, userPrompt);
+        const text = await generateWithGemini(generationSystemPrompt, finalUserPrompt);
         console.log("Gemini response length:", text.length, "chars");
         console.log("Response preview:", text.substring(0, 200) + "...");
 

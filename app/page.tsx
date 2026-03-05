@@ -46,6 +46,7 @@ import {
   buildSchemaContextSection,
   buildCriticalRequirementSection,
 } from "@/lib/prompts/edit-prompt";
+import type { CustomApiConfig } from "@/app/components/Integrations/CustomAPIsSection";
 
 // Types
 import type {
@@ -459,6 +460,7 @@ function ReactGeneratorContent() {
     "website" | "dashboard"
   >("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [customApis, setCustomApis] = useState<CustomApiConfig[]>([]);
   const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<
     string | null
   >(null);
@@ -1665,6 +1667,11 @@ function ReactGeneratorContent() {
     setPreviewKey((prev) => prev + 1);
     // Load edit history
     loadEditHistory(savedProject.id, savedProject.config);
+    // Load custom APIs for this project
+    fetch(`/api/user-apis?projectId=${savedProject.id}`)
+      .then((r) => r.ok ? r.json() : { apis: [] })
+      .then((data) => setCustomApis(data.apis ?? []))
+      .catch(() => setCustomApis([]));
   };
 
   // Delete project
@@ -2501,6 +2508,9 @@ ${schemaContext}
           preserveExistingImages: !allowImageChanges,
           previousImageUrls,
         },
+        customApis.length > 0
+          ? customApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
+          : undefined,
       );
 
       setEditProgressMessages((prev) => [
@@ -2680,6 +2690,10 @@ ${pdfUrlList}
           requiresPayments: paymentsEnabled,
         },
         generationProjectType,
+        undefined, // imageOptions
+        customApis.length > 0
+          ? customApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
+          : undefined,
       );
 
       // If user cancelled while awaiting, discard the result
@@ -5787,6 +5801,9 @@ ${pdfUrlList}
             onBackendChange={setBackendSelection}
             paymentsEnabled={paymentsEnabled}
             onTogglePayments={togglePayments}
+            projectId={currentProjectId ?? undefined}
+            customApis={customApis}
+            onCustomApisChange={setCustomApis}
           />
         )}
 
@@ -6791,6 +6808,9 @@ ${pdfUrlList}
           onBackendChange={setBackendSelection}
           paymentsEnabled={paymentsEnabled}
           onTogglePayments={togglePayments}
+          projectId={currentProjectId ?? undefined}
+          customApis={customApis}
+          onCustomApisChange={setCustomApis}
         />
       )}
 

@@ -28,6 +28,7 @@ export async function triggerCodeGeneration(
     preserveExistingImages?: boolean;
     previousImageUrls?: string[];
   },
+  customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
 ) {
   const sendResult = await inngest.send({
     name: "app/generate.code",
@@ -39,6 +40,7 @@ export async function triggerCodeGeneration(
       projectType,
       preserveExistingImages: imageOptions?.preserveExistingImages,
       previousImageUrls: imageOptions?.previousImageUrls,
+      customApis,
     },
   });
 

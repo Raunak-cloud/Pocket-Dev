@@ -181,6 +181,7 @@ export async function generateCodeWithInngest(
     preserveExistingImages?: boolean;
     previousImageUrls?: string[];
   },
+  customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -210,6 +211,7 @@ export async function generateCodeWithInngest(
     integrationRequirements,
     projectType,
     imageOptions,
+    customApis,
   );
 
   onProgress?.("[0/9] Generation started. Waiting for first update...");

@@ -31,7 +31,8 @@
       "WebFetch(domain:supabase.com)",
       "Bash(npx prisma:*)",
       "Bash(grep:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(npx dotenv-cli:*)"
     ]
   }
 }
