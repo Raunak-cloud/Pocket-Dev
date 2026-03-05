@@ -63,6 +63,7 @@ const BASE_EDIT_APP_COST = 0.2;
 const AUTH_OPTION_APP_COST = 2;
 const DATABASE_APP_FLAT_COST = 10;
 const PAYMENT_INTEGRATION_COST = 2;
+const CUSTOM_API_INTEGRATION_COST = 0.5;
 const DEFAULT_BACKEND_AUTH = ["username-password"];
 const DEFAULT_BACKEND_DATABASE = [
   "supabase-postgres",
@@ -461,6 +462,7 @@ function ReactGeneratorContent() {
   >("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [customApis, setCustomApis] = useState<CustomApiConfig[]>([]);
+  const [pendingCustomApis, setPendingCustomApis] = useState<CustomApiConfig[]>([]);
   const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<
     string | null
   >(null);
@@ -1978,10 +1980,11 @@ function ReactGeneratorContent() {
       BASE_GENERATION_APP_COST +
         getAuthAppCost(currentAppAuth) +
         getDatabaseAppCost(currentAppDatabase) +
-        (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0),
+        (paymentsEnabled ? PAYMENT_INTEGRATION_COST : 0) +
+        pendingCustomApis.length * CUSTOM_API_INTEGRATION_COST,
     );
   const getEditAppCost = () =>
-    roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total);
+    roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total + customApis.length * CUSTOM_API_INTEGRATION_COST);
 
   const confirmGenerationStart = async () => {
     const generationCost = getGenerationAppCost();
@@ -2691,8 +2694,8 @@ ${pdfUrlList}
         },
         generationProjectType,
         undefined, // imageOptions
-        customApis.length > 0
-          ? customApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
+        pendingCustomApis.length > 0
+          ? pendingCustomApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
           : undefined,
       );
 
@@ -2735,6 +2738,36 @@ ${pdfUrlList}
             saveError,
           );
         }
+        // Save any pending custom APIs to DB now that we have a projectId
+        if (pendingCustomApis.length > 0) {
+          const savedApis: CustomApiConfig[] = [];
+          for (const api of pendingCustomApis) {
+            try {
+              const res = await fetch("/api/user-apis", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  projectId: result.savedProjectId,
+                  name: api.name,
+                  baseUrl: api.baseUrl,
+                  description: api.description || undefined,
+                  authType: api.authType,
+                  authHeaderName: api.authHeaderName || undefined,
+                  authParamName: api.authParamName || undefined,
+                  apiKey: api.apiKey || undefined,
+                }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                savedApis.push(data.api as CustomApiConfig);
+              }
+            } catch {
+              console.error("Error saving pending API:", api.name);
+            }
+          }
+          setCustomApis(savedApis);
+          setPendingCustomApis([]);
+        }
         loadSavedProjects();
       } else if (user) {
         try {
@@ -2745,7 +2778,36 @@ ${pdfUrlList}
             authCost,
           );
           setCurrentProjectId(projectId);
-
+          // Save any pending custom APIs to DB now that we have a projectId
+          if (pendingCustomApis.length > 0) {
+            const savedApis: CustomApiConfig[] = [];
+            for (const api of pendingCustomApis) {
+              try {
+                const res = await fetch("/api/user-apis", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    projectId,
+                    name: api.name,
+                    baseUrl: api.baseUrl,
+                    description: api.description || undefined,
+                    authType: api.authType,
+                    authHeaderName: api.authHeaderName || undefined,
+                    authParamName: api.authParamName || undefined,
+                    apiKey: api.apiKey || undefined,
+                  }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  savedApis.push(data.api as CustomApiConfig);
+                }
+              } catch {
+                console.error("Error saving pending API:", api.name);
+              }
+            }
+            setCustomApis(savedApis);
+            setPendingCustomApis([]);
+          }
           // Refresh projects list
           loadSavedProjects();
         } catch (saveError) {
@@ -5747,7 +5809,9 @@ ${pdfUrlList}
             const baseCost = isGeneration
               ? BASE_GENERATION_APP_COST
               : BASE_EDIT_APP_COST;
-            const totalCost = baseCost + authCost + databaseCost + paymentCost;
+            const apiCount = isGeneration ? pendingCustomApis.length : customApis.length;
+            const apiCost = roundToken(apiCount * CUSTOM_API_INTEGRATION_COST);
+            const totalCost = baseCost + authCost + databaseCost + paymentCost + apiCost;
             const appBalance = userData?.appTokens || 0;
 
             const handleConfirm = () => {
@@ -5768,6 +5832,8 @@ ${pdfUrlList}
                 authCost={authCost}
                 databaseCost={databaseCost}
                 paymentCost={paymentCost}
+                apiCost={apiCost}
+                apiCount={apiCount}
                 appBalance={appBalance}
                 skipEditTokenConfirm={skipEditTokenConfirm}
                 onSkipEditTokenConfirmChange={setSkipEditTokenConfirm}
@@ -6078,6 +6144,8 @@ ${pdfUrlList}
         onSetProjectType={handleSetGenerationProjectType}
         paymentsEnabled={paymentsEnabled}
         onTogglePayments={togglePayments}
+        pendingCustomApis={pendingCustomApis}
+        onPendingCustomApisChange={setPendingCustomApis}
         handleGenerate={handleGenerate}
         setAuthPromptWarning={setAuthPromptWarning}
         setBlockedPromptWords={setBlockedPromptWords}

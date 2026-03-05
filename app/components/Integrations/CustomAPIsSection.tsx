@@ -11,12 +11,16 @@ export interface CustomApiConfig {
   authHeaderName?: string | null;
   authParamName?: string | null;
   description?: string | null;
+  /** Only present in pending (pre-creation) mode — never returned from DB */
+  apiKey?: string;
 }
 
 interface CustomApisSectionProps {
   projectId: string;
   apis: CustomApiConfig[];
   onChange: (apis: CustomApiConfig[]) => void;
+  /** When true, all operations are local-only (no DB calls). Used in create phase. */
+  pendingMode?: boolean;
 }
 
 type AuthType = "api_key_header" | "bearer_token" | "query_param" | "none";
@@ -36,7 +40,7 @@ function toSlug(name: string): string {
     .slice(0, 64);
 }
 
-export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSectionProps) {
+export function CustomAPIsSection({ projectId, apis, onChange, pendingMode = false }: CustomApisSectionProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -103,6 +107,31 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
 
     setSaving(true);
     try {
+      if (pendingMode) {
+        const cleanApi = {
+          name: name.trim(),
+          baseUrl: baseUrl.trim(),
+          description: description.trim() || undefined,
+          authType,
+          authHeaderName: authType === "api_key_header" ? (authHeaderName.trim() || "X-API-Key") : undefined,
+          authParamName: authType === "query_param" ? authParamName.trim() || undefined : undefined,
+          apiKey: authType !== "none" && apiKey.trim() ? apiKey.trim() : undefined,
+        };
+        if (editingId) {
+          onChange(apis.map((a) => a.id === editingId ? { ...a, ...cleanApi, ...(cleanApi.apiKey ? {} : { apiKey: a.apiKey }) } : a));
+        } else {
+          const baseSlug = toSlug(name.trim()) || "api";
+          const existingSlugs = new Set(apis.map((a) => a.slug));
+          let slug = baseSlug;
+          let i = 2;
+          while (existingSlugs.has(slug)) { slug = `${baseSlug}-${i}`; i++; }
+          onChange([...apis, { id: Date.now().toString(), slug, ...cleanApi }]);
+        }
+        resetForm();
+        setShowForm(false);
+        return;
+      }
+
       if (editingId) {
         // Update existing
         const res = await fetch("/api/user-apis", {
@@ -164,6 +193,10 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
   };
 
   const handleDelete = async (id: string) => {
+    if (pendingMode) {
+      onChange(apis.filter((a) => a.id !== id));
+      return;
+    }
     setDeletingId(id);
     try {
       const res = await fetch(`/api/user-apis?id=${encodeURIComponent(id)}&projectId=${encodeURIComponent(projectId)}`, {

@@ -9,6 +9,8 @@ interface TokenConfirmModalProps {
   authCost: number;
   databaseCost: number;
   paymentCost: number;
+  apiCost?: number;
+  apiCount?: number;
   appBalance: number;
   skipEditTokenConfirm: boolean;
   onSkipEditTokenConfirmChange: (skip: boolean) => void;
@@ -28,6 +30,8 @@ export function TokenConfirmModal({
   authCost,
   databaseCost,
   paymentCost,
+  apiCost = 0,
+  apiCount = 0,
   appBalance,
   skipEditTokenConfirm,
   onSkipEditTokenConfirmChange,
@@ -147,6 +151,16 @@ export function TokenConfirmModal({
                   </span>
                   <span className="font-medium text-text-primary">
                     -{fmt(paymentCost)}
+                  </span>
+                </div>
+              )}
+              {apiCost > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-text-secondary">
+                    Custom APIs ({apiCount} integration{apiCount === 1 ? "" : "s"})
+                  </span>
+                  <span className="font-medium text-text-primary">
+                    -{fmt(apiCost)}
                   </span>
                 </div>
               )}
