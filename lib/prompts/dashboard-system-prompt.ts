@@ -46,9 +46,49 @@ SIDEBAR:
 - Keep inactive mobile nav labels readable too (not ultra-faint gray on light backgrounds).
 
 CONTENT AREA:
-- Fills remaining screen width (flex-1 overflow-y-auto).
+- Fills remaining screen width (flex-1 min-w-0 overflow-y-auto).
+- CRITICAL: The content area div must NEVER have responsive visibility classes (hidden, md:flex, md:block, etc.). ONLY the sidebar <aside> should be hidden on mobile. The content wrapper must always be visible: className="flex-1 min-w-0 overflow-y-auto".
 - Top bar inside content area: page title (h1/h2) on the left, optional action buttons (Create, Export, Filter) on the right.
 - Content below top bar: stat cards → charts → tables or feature-specific content.
+
+MOBILE LAYOUT — MANDATORY SHELL PATTERN:
+The app shell must use this exact structure so mobile content is never blank:
+
+  <div className="flex h-screen overflow-hidden">
+    {/* Sidebar: visible on desktop, hidden on mobile */}
+    <aside className="hidden md:flex md:flex-col w-64 ..."> ... </aside>
+
+    {/* Right side: always visible */}
+    <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+      {/* Mobile-only top header bar */}
+      <header className="md:hidden flex items-center justify-between h-16 px-4 border-b bg-white">
+        <BrandLogo />
+        <button onClick={() => setMobileMenuOpen(true)}><Menu /></button>
+      </header>
+
+      {/* Scrollable content — always rendered, never hidden */}
+      <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-gray-50">
+        {children}
+      </main>
+    </div>
+
+    {/* Mobile sidebar overlay — full screen when open */}
+    {mobileMenuOpen && (
+      <div className="fixed inset-0 z-[200] bg-white flex flex-col md:hidden">
+        <header className="flex items-center justify-between h-16 px-4 border-b">
+          <BrandLogo />
+          <button onClick={() => setMobileMenuOpen(false)}><X /></button>
+        </header>
+        <nav className="flex-1 overflow-y-auto p-4"> ... nav links ... </nav>
+      </div>
+    )}
+  </div>
+
+This pattern guarantees: sidebar hidden on mobile, content always visible, mobile menu is a full-screen overlay, no blank body.
+
+RECHARTS ON MOBILE:
+- All charts must be wrapped in a ResponsiveContainer with width="100%" and an explicit numeric height (e.g., height={300}). Never use height="100%" without a fixed-height parent.
+- Chart parent containers must have explicit width (w-full) and never be inside a collapsed/zero-width flex container on mobile.
 
 NEVER generate a hero section, marketing copy, testimonials, pricing tables, or "how it works" sections in a dashboard.
 

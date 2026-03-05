@@ -64,7 +64,7 @@ export function buildLintRepairPrompt(args: {
   const { originalPrompt, files, dependencies, lintIssues } = args;
 
   const hasNavigationUxIssue = lintIssues.some((issue) =>
-    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|responsive-breakpoints|mobile-overflow-guard)$/.test(
+    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|mobile-menu-partial|mobile-menu-no-close|navbar-hero-overlap|navbar-invisible-text|badge-above-navbar|dashboard-blank-mobile|responsive-breakpoints|mobile-overflow-guard)$/.test(
       issue.rule ?? "",
     ),
   );
@@ -83,6 +83,16 @@ export function buildLintRepairPrompt(args: {
   // Only send files that have lint issues — reduces input tokens and prevents
   // Gemini from rewriting unrelated files.
   const affectedPaths = new Set(lintIssues.map((i) => i.path));
+
+  // Cross-file nav fixes: navbar-hero-overlap fix requires layout/page; invisible-text fix may need layout too
+  const hasHeroOverlapIssue = lintIssues.some(
+    (i) => i.rule === "ux/navbar-hero-overlap",
+  );
+  if (hasHeroOverlapIssue) {
+    affectedPaths.add("app/layout.tsx");
+    affectedPaths.add("app/page.tsx");
+  }
+
   const affectedFiles = files
     .filter((f) => affectedPaths.has(f.path))
     .map((f) => ({ path: f.path, content: f.content }));
@@ -112,19 +122,22 @@ Requirements:
 ${
   hasNavigationUxIssue
     ? `- Navigation quality constraints:
-  - Header/navbar must stay visible and pinned at top on mobile (sticky/fixed + top-0 + high z-index).
+  - Header/navbar must stay visible and pinned at top on mobile using "fixed top-0 left-0 right-0 w-full z-50" with a consistent height (h-16 or h-20).
+  - HERO OVERLAP FIX: If the navbar is fixed, the first content element after the navbar (main, section, or layout wrapper) MUST have pt-16 or pt-20 matching the navbar height. If the issue is in app/layout.tsx or app/page.tsx, include that file in your response and add the padding there.
   - Mobile menu must open/close cleanly, anchored from the top layer.
-  - Mobile menu panel must be above page content (not behind hero/cards), using fixed/absolute overlay positioning with strong z-index.
-  - Mobile menu panel must use readable contrast and non-transparent background.
-  - Mobile menu panel must span full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0).
-  - When mobile menu is open, underlying hero/content must not visually interfere with menu labels (use opaque menu surface plus a dedicated full-screen overlay).
-  - Use a dedicated mobile menu header row with fixed height (brand left, close button right) and start link list below it with explicit spacing.
+  - FULL SCREEN OVERLAY: Mobile menu panel must use "fixed inset-0 z-[200]" (covers all 4 edges — top, right, bottom, left). Do NOT use only top-0 without bottom-0. The outer wrapper must be "fixed inset-0 z-[200] bg-[solidColor] flex flex-col". Inner panel must be h-full so no page content shows through at the bottom.
+  - Mobile menu panel must use a FULLY OPAQUE background (bg-white, bg-gray-900, etc.) — no bg-opacity-*, no bg-white/80.
+  - CLOSE BUTTON: The menu overlay MUST contain an explicit X/Close button in the top-right of the menu header row. Use a Lucide X icon in a button that calls setIsMenuOpen(false). Minimum 44×44px tap target.
+  - Mobile menu header row: flex justify-between items-center, h-16, border-b. Brand/logo on left, X button on right. Nav links start below this row.
   - Ensure brand/logo text in mobile header does not wrap/collide with icons or first nav item; truncate long brand text.
-  - Provide a clear close button and lock background page scroll while the mobile menu is open.
+  - Lock background page scroll while the mobile menu is open (document.body.style.overflow = 'hidden'), restore on close.
+  - INVISIBLE TEXT FIX: If the navbar has a solid white/light background, the default (unscrolled) text color MUST be dark (text-gray-900 or text-black). Never use text-white as the default state on a light-background navbar — it makes brand name and links invisible at page load.
+  - Trust badge / social proof elements must use z-index lower than the navbar (z-10 or below). Never z-50 or higher for badges/ribbons/award strips.
   - Define explicit navbar color/surface states for default, scrolled, menu-open, and non-home routes. Do not keep one text color for all states.
   - On non-home routes, navbar must use a solid readable surface with high-contrast brand/link colors; avoid transparent navbar with white text over light backgrounds.
   - After clicking a mobile nav link, close the menu and restore body scroll; ensure brand/nav text remains readable on destination route.
   - Keep inactive mobile nav links readable (avoid very low-contrast gray text on white surfaces).
+  - DASHBOARD BLANK MOBILE FIX: If the content wrapper div (flex-1 overflow-y-auto) has a "hidden" class alongside it, remove "hidden" from the content wrapper — only the sidebar <aside> should be hidden on mobile. The correct shell is: outer div "flex h-screen overflow-hidden" → aside "hidden md:flex w-64" (sidebar) + div "flex flex-col flex-1 min-w-0 overflow-hidden" (content, always visible) → header "md:hidden h-16" (mobile top bar) + main "flex-1 overflow-y-auto" (scrollable content).
   - Do not create separate scrollbar UI on nav/header/menu wrappers.
   - Prevent horizontal overflow on small screens.`
     : ""
