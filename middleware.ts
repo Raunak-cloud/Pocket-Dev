@@ -12,6 +12,7 @@ const PUBLIC_ROUTE_PATTERNS = [
   /^\/api\/stripe\/connect(?:\/.*)?$/,
   /^\/api\/analytics\/track$/,
   /^\/api\/debug\/app-base-url$/,
+  /^\/api\/user-apis\/proxy$/,
 ];
 
 function isPublicRoute(pathname: string) {
