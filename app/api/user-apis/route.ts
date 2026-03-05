@@ -142,6 +142,84 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** PATCH /api/user-apis — update an existing custom API */
+export async function PATCH(request: NextRequest) {
+  try {
+    const { userId: authUserId } = await auth();
+    if (!authUserId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { id, projectId, name, baseUrl, authType, authHeaderName, authParamName, apiKey, description } = body;
+
+    if (!id || !projectId || !name || !baseUrl || !authType) {
+      return NextResponse.json({ error: "id, projectId, name, baseUrl, and authType are required" }, { status: 400 });
+    }
+
+    const validAuthTypes = ["api_key_header", "bearer_token", "query_param", "none"];
+    if (!validAuthTypes.includes(authType)) {
+      return NextResponse.json({ error: "Invalid authType" }, { status: 400 });
+    }
+
+    try { new URL(baseUrl); } catch {
+      return NextResponse.json({ error: "Invalid baseUrl" }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({ where: { authUserId }, select: { id: true } });
+    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { userId: true },
+    });
+    if (!project || project.userId !== user.id) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    // Verify the API belongs to this project
+    const existing = await prisma.customApi.findFirst({ where: { id, projectId }, select: { id: true } });
+    if (!existing) return NextResponse.json({ error: "API not found" }, { status: 404 });
+
+    const updateData: Record<string, unknown> = {
+      name,
+      baseUrl,
+      authType,
+      authHeaderName: authType === "api_key_header" ? (authHeaderName || null) : null,
+      authParamName: authType === "query_param" ? (authParamName || null) : null,
+      description: description || null,
+    };
+
+    // Only update apiKey if a new one was provided
+    if (apiKey && authType !== "none") {
+      updateData.apiKey = encryptApiKey(apiKey);
+    } else if (authType === "none") {
+      updateData.apiKey = null;
+    }
+
+    const api = await prisma.customApi.update({
+      where: { id },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        baseUrl: true,
+        authType: true,
+        authHeaderName: true,
+        authParamName: true,
+        description: true,
+        createdAt: true,
+      },
+    });
+
+    return NextResponse.json({ api });
+  } catch (error) {
+    console.error("[user-apis PATCH]", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
 /** DELETE /api/user-apis?id=xxx&projectId=xxx */
 export async function DELETE(request: NextRequest) {
   try {

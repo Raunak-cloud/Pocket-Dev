@@ -4729,7 +4729,7 @@ NAV + MOBILE RULES:
 Base URL: ${api.baseUrl}${descLine}
 
 Usage pattern (use in any component or server action):
-const res = await fetch(\`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/user-apis/proxy\`, {
+const res = await fetch(\`\${(process.env.NEXT_PUBLIC_POCKET_DEV_URL || '').replace(/\\/$/, '')}/api/user-apis/proxy\`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({

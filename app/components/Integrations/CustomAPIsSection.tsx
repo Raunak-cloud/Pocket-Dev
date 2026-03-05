@@ -38,6 +38,7 @@ function toSlug(name: string): string {
 
 export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSectionProps) {
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -61,6 +62,7 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
     setAuthParamName("");
     setApiKey("");
     setFormError(null);
+    setEditingId(null);
   };
 
   const handleCancel = () => {
@@ -68,7 +70,20 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
     setShowForm(false);
   };
 
-  const handleAdd = async () => {
+  const handleEdit = (api: CustomApiConfig) => {
+    setEditingId(api.id);
+    setName(api.name);
+    setBaseUrl(api.baseUrl);
+    setDescription(api.description ?? "");
+    setAuthType(api.authType as AuthType);
+    setAuthHeaderName(api.authHeaderName ?? "X-API-Key");
+    setAuthParamName(api.authParamName ?? "");
+    setApiKey("");
+    setFormError(null);
+    setShowForm(true);
+  };
+
+  const handleSave = async () => {
     setFormError(null);
 
     if (!name.trim()) {
@@ -88,28 +103,57 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
 
     setSaving(true);
     try {
-      const res = await fetch("/api/user-apis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          name: name.trim(),
-          baseUrl: baseUrl.trim(),
-          description: description.trim() || undefined,
-          authType,
-          authHeaderName: authType === "api_key_header" ? (authHeaderName.trim() || "X-API-Key") : undefined,
-          authParamName: authType === "query_param" ? authParamName.trim() || undefined : undefined,
-          apiKey: authType !== "none" && apiKey.trim() ? apiKey.trim() : undefined,
-        }),
-      });
+      if (editingId) {
+        // Update existing
+        const res = await fetch("/api/user-apis", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: editingId,
+            projectId,
+            name: name.trim(),
+            baseUrl: baseUrl.trim(),
+            description: description.trim() || undefined,
+            authType,
+            authHeaderName: authType === "api_key_header" ? (authHeaderName.trim() || "X-API-Key") : undefined,
+            authParamName: authType === "query_param" ? authParamName.trim() || undefined : undefined,
+            apiKey: authType !== "none" && apiKey.trim() ? apiKey.trim() : undefined,
+          }),
+        });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setFormError(data.error ?? "Failed to add API.");
-        return;
+        const data = await res.json();
+        if (!res.ok) {
+          setFormError(data.error ?? "Failed to update API.");
+          return;
+        }
+
+        onChange(apis.map((a) => (a.id === editingId ? (data.api as CustomApiConfig) : a)));
+      } else {
+        // Create new
+        const res = await fetch("/api/user-apis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            name: name.trim(),
+            baseUrl: baseUrl.trim(),
+            description: description.trim() || undefined,
+            authType,
+            authHeaderName: authType === "api_key_header" ? (authHeaderName.trim() || "X-API-Key") : undefined,
+            authParamName: authType === "query_param" ? authParamName.trim() || undefined : undefined,
+            apiKey: authType !== "none" && apiKey.trim() ? apiKey.trim() : undefined,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          setFormError(data.error ?? "Failed to add API.");
+          return;
+        }
+
+        onChange([...apis, data.api as CustomApiConfig]);
       }
 
-      onChange([...apis, data.api as CustomApiConfig]);
       resetForm();
       setShowForm(false);
     } catch {
@@ -167,6 +211,17 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
                 </span>
                 <button
                   type="button"
+                  onClick={() => handleEdit(api)}
+                  disabled={deletingId === api.id}
+                  className="p-0.5 text-text-tertiary hover:text-blue-400 transition rounded flex-shrink-0 opacity-0 group-hover:opacity-100"
+                  aria-label={`Edit ${api.name}`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleDelete(api.id)}
                   disabled={deletingId === api.id}
                   className="p-0.5 text-text-tertiary hover:text-red-400 transition rounded flex-shrink-0 opacity-0 group-hover:opacity-100"
@@ -206,6 +261,7 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
       {/* Inline add form */}
       {showForm && (
         <div className="border-t border-border-primary px-5 py-4 space-y-3 bg-bg-tertiary/40">
+          <p className="text-xs font-semibold text-text-secondary">{editingId ? "Edit API" : "Add API"}</p>
           {/* Name */}
           <div>
             <label className="block text-xs font-medium text-text-secondary mb-1">
@@ -218,11 +274,16 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
               placeholder="OpenWeather API"
               className="w-full px-3 py-2 text-sm bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder-text-tertiary focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition"
             />
-            {slug && (
+            {editingId ? (
+              <p className="mt-1 text-[11px] text-text-tertiary">
+                Slug: <span className="font-mono text-blue-300">{apis.find((a) => a.id === editingId)?.slug}</span>{" "}
+                <span className="text-text-tertiary">(unchanged)</span>
+              </p>
+            ) : slug ? (
               <p className="mt-1 text-[11px] text-text-tertiary">
                 Slug: <span className="font-mono text-blue-300">{slug}</span>
               </p>
-            )}
+            ) : null}
           </div>
 
           {/* Base URL */}
@@ -314,7 +375,7 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="••••••••••••••••"
+                placeholder={editingId ? "Leave blank to keep existing key" : "••••••••••••••••"}
                 autoComplete="new-password"
                 className="w-full px-3 py-2 text-sm bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder-text-tertiary focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition"
               />
@@ -337,11 +398,11 @@ export function CustomAPIsSection({ projectId, apis, onChange }: CustomApisSecti
             </button>
             <button
               type="button"
-              onClick={handleAdd}
+              onClick={handleSave}
               disabled={saving}
               className="flex-1 px-3 py-2 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
-              {saving ? "Adding…" : "Add API →"}
+              {saving ? (editingId ? "Saving…" : "Adding…") : editingId ? "Save changes →" : "Add API →"}
             </button>
           </div>
         </div>
