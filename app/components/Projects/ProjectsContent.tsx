@@ -15,6 +15,28 @@ export default function ProjectsContent({
   onOpenProject,
   onDeleteProject,
 }: ProjectsContentProps) {
+  const INITIAL_GENERATION_PROMPT_CONFIG_KEY = "__pocketInitialGenerationPrompt";
+
+  const getProjectDisplayPrompt = (savedProject: SavedProject) => {
+    const configRecord =
+      savedProject.config && typeof savedProject.config === "object"
+        ? (savedProject.config as unknown as Record<string, unknown>)
+        : null;
+    const initialPrompt =
+      configRecord &&
+      typeof configRecord[INITIAL_GENERATION_PROMPT_CONFIG_KEY] === "string"
+        ? String(configRecord[INITIAL_GENERATION_PROMPT_CONFIG_KEY]).trim()
+        : "";
+    if (initialPrompt) return initialPrompt;
+
+    const prompt = savedProject.prompt?.trim() || "";
+    if (!prompt) return "Untitled project";
+    if (prompt.startsWith("You are a senior full-stack developer.")) {
+      return "Generated project";
+    }
+    return prompt;
+  };
+
   const formatProjectDate = (value: Date | string | number) => {
     const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime())) return "Unknown date";
@@ -101,7 +123,7 @@ export default function ProjectsContent({
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <h3 className="text-text-primary font-medium mb-1 group-hover:text-blue-400 transition break-words [overflow-wrap:anywhere]">
-                  {savedProject.prompt}
+                  {getProjectDisplayPrompt(savedProject)}
                 </h3>
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-text-muted">
                   <span>{savedProject.files.length} files</span>

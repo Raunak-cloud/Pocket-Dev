@@ -117,6 +117,11 @@ ${
   - Mobile menu panel must be above page content (not behind hero/cards), using fixed/absolute overlay positioning with strong z-index.
   - Mobile menu panel must use readable contrast and non-transparent background.
   - Mobile menu panel must span full mobile viewport height (h-screen/min-h-screen/100dvh or inset-y-0).
+  - When mobile menu is open, underlying hero/content must not visually interfere with menu labels (use opaque menu surface plus a dedicated full-screen overlay).
+  - Provide a clear close button and lock background page scroll while the mobile menu is open.
+  - Define explicit navbar color/surface states for default, scrolled, menu-open, and non-home routes. Do not keep one text color for all states.
+  - On non-home routes, navbar must use a solid readable surface with high-contrast brand/link colors; avoid transparent navbar with white text over light backgrounds.
+  - After clicking a mobile nav link, close the menu and restore body scroll; ensure brand/nav text remains readable on destination route.
   - Do not create separate scrollbar UI on nav/header/menu wrappers.
   - Prevent horizontal overflow on small screens.`
     : ""

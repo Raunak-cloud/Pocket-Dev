@@ -39,6 +39,9 @@ SIDEBAR:
 - Active link state highlighted (background tint, left border accent).
 - Mobile: sidebar hidden by default, toggled via hamburger button in a top header bar.
 - Navigation quality on all breakpoints: links must remain clearly readable, labels must not overlap/truncate awkwardly, and touch targets must be comfortable (44px+ on mobile).
+- Mobile open-menu state must use a full-screen overlay with an opaque panel surface (light: white/near-white, dark: slate/near-black) so underlying page content does not bleed through nav labels.
+- Include a clear close button/icon and prevent background scrolling while the mobile menu is open.
+- Route-aware contrast is mandatory: brand/logo and nav labels must remain high-contrast after route changes (do not leave white text on light backgrounds on inner pages).
 
 CONTENT AREA:
 - Fills remaining screen width (flex-1 overflow-y-auto).

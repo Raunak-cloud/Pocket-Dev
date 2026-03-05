@@ -70,6 +70,7 @@ const DEFAULT_BACKEND_DATABASE = [
 ];
 const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
+const INITIAL_GENERATION_PROMPT_CONFIG_KEY = "__pocketInitialGenerationPrompt";
 const ACTIVE_GENERATION_STORAGE_KEY = "__pocketActiveGeneration";
 const LAST_OPEN_PROJECT_STORAGE_KEY = "__pocketLastOpenProjectId";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
@@ -188,6 +189,22 @@ const withStoredIntegrations = (
         ...existing,
         ...integrations,
       },
+    } as unknown as ReactProject["config"],
+  };
+};
+
+const withInitialGenerationPrompt = (
+  projectData: ReactProject,
+  initialPrompt: string,
+): ReactProject => {
+  const prompt = initialPrompt.trim();
+  if (!prompt) return projectData;
+  const existingConfig = (projectData.config ?? {}) as Record<string, unknown>;
+  return {
+    ...projectData,
+    config: {
+      ...existingConfig,
+      [INITIAL_GENERATION_PROMPT_CONFIG_KEY]: prompt,
     } as unknown as ReactProject["config"],
   };
 };
@@ -983,9 +1000,13 @@ function ReactGeneratorContent() {
           backendEnabled: session.backendEnabled,
           paymentsEnabled: session.paymentsEnabled,
         });
+        const projectWithInitialPrompt =
+          session.mode === "generation"
+            ? withInitialGenerationPrompt(projectWithIntegrations, session.prompt)
+            : projectWithIntegrations;
 
-        setProject(projectWithIntegrations);
-        syncIntegrationSelectionFromProject(projectWithIntegrations);
+        setProject(projectWithInitialPrompt);
+        syncIntegrationSelectionFromProject(projectWithInitialPrompt);
         setPreviewSandboxId(result.sandboxId ?? null);
 
         if (session.projectId) {
@@ -998,6 +1019,19 @@ function ReactGeneratorContent() {
           result.savedProjectId
         ) {
           setCurrentProjectId(result.savedProjectId);
+          if (session.mode === "generation") {
+            try {
+              await updateProjectInFirestore(
+                result.savedProjectId,
+                projectWithInitialPrompt,
+              );
+            } catch (error) {
+              console.error(
+                "Failed to persist initial generation prompt after resume:",
+                error,
+              );
+            }
+          }
           await loadSavedProjects();
         }
 
@@ -2665,19 +2699,34 @@ ${pdfUrlList}
         backendEnabled: isGenerationBackendSelected,
         paymentsEnabled,
       });
-      setProject(projectWithIntegrations);
-      syncIntegrationSelectionFromProject(projectWithIntegrations);
+      const projectWithInitialPrompt = withInitialGenerationPrompt(
+        projectWithIntegrations,
+        generationPrompt,
+      );
+      setProject(projectWithInitialPrompt);
+      syncIntegrationSelectionFromProject(projectWithInitialPrompt);
       setPreviewSandboxId(result.sandboxId ?? null);
 
       // Save project to Firestore
       if (user && result.savedProjectId) {
         setCurrentProjectId(result.savedProjectId);
+        try {
+          await updateProjectInFirestore(
+            result.savedProjectId,
+            projectWithInitialPrompt,
+          );
+        } catch (saveError) {
+          console.error(
+            "Error persisting initial generation prompt config:",
+            saveError,
+          );
+        }
         loadSavedProjects();
       } else if (user) {
         try {
           const authCost = getAuthAppCost(currentAppAuth);
           const projectId = await saveProjectToFirestore(
-            projectWithIntegrations,
+            projectWithInitialPrompt,
             generationPrompt,
             authCost,
           );
@@ -3707,7 +3756,7 @@ ${pdfUrlList}
                     <>
                       <button
                         onClick={() => setIsMobileEditPanelOpen(true)}
-                        className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-blue-100 bg-blue-600/25 hover:bg-blue-600/35 border border-blue-500/40 rounded-lg transition"
+                        className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-blue-800 bg-blue-100 hover:bg-blue-200 border border-blue-300 dark:text-blue-100 dark:bg-blue-600/25 dark:hover:bg-blue-600/35 dark:border-blue-500/40 rounded-lg transition"
                         title="Edit website with prompts"
                       >
                         <svg
@@ -3731,7 +3780,7 @@ ${pdfUrlList}
                           onClick={() =>
                             setIsMobileToolsDropdownOpen((prev) => !prev)
                           }
-                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-slate-800 bg-slate-200 hover:bg-slate-300 dark:text-text-secondary dark:bg-bg-tertiary dark:hover:bg-border-secondary rounded-lg transition"
                           title="Editing tools"
                         >
                           <svg

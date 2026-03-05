@@ -238,8 +238,8 @@ export default function CreateContent({
             <span
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-medium ${
                 projectType === "dashboard"
-                  ? "text-blue-300 bg-blue-500/10 border-blue-500/30"
-                  : "text-slate-300 bg-slate-500/10 border-slate-500/30"
+                  ? "text-blue-700 bg-blue-100 border-blue-300 dark:text-blue-300 dark:bg-blue-500/10 dark:border-blue-500/30"
+                  : "text-slate-700 bg-slate-100 border-slate-300 dark:text-slate-300 dark:bg-slate-500/10 dark:border-slate-500/30"
               }`}
             >
               <svg
