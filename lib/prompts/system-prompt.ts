@@ -113,12 +113,15 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Mobile menu must render on top of content, have readable contrast, and occupy full phone height (h-screen/min-h-screen/100dvh/inset-y-0).
 - Mobile menu open state must use a dedicated full-screen overlay layer (fixed inset-0, very high z-index) with an opaque or near-opaque menu surface (bg-white/95 for light mode, dark:bg-slate-900/95 for dark mode). Underlying hero/content must not visually compete with menu links.
 - Mobile menu links must be in a dedicated vertical list container with clear spacing and 44px+ tap targets; no overlap with hero headlines/images.
+- Mobile menu must have a dedicated header row (brand left, close button right) with fixed height and bottom border; menu links must start below this header with explicit top spacing.
+- Brand lockup in mobile header must not wrap into multiple lines or collide with icons; use constrained width with truncate/ellipsis and keep logo/icon + text aligned on one row.
 - Ensure an obvious close action (X button) and lock background scroll while menu is open (restore scroll on close).
 - If navbar overlays hero images/videos/gradients, it must use a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast nav text/links on both desktop and mobile.
 - Route-aware contrast is mandatory: define explicit navbar states for default, scrolled, menu-open, and non-home-route. Do NOT use one global text color for all states.
 - On non-home routes, navbar must default to a solid readable surface with high-contrast brand/link colors (never transparent-over-light with white text).
 - On home route hero overlays, if text is light at top, switch to dark text/solid surface on scroll OR when route changes; logo/brand text must remain readable in all states.
 - After tapping a mobile nav link, close the menu and restore body scroll; resulting page must preserve readable brand/nav colors immediately after navigation.
+- Inactive mobile nav links must still be clearly readable (avoid ultra-light gray on white). Keep strong contrast for both active and inactive link text.
 - Desktop nav must look polished: balanced spacing, clear active/hover/focus states, legible typography, and no low-contrast links.
 - Mobile nav must be touch-friendly: clear menu button, 44px+ tap targets, no clipped/overlapping labels, and obvious open/close affordance.
 - Before finalizing, sanity-check navigation in both desktop and mobile layouts for readability, tapability, and visual clarity.

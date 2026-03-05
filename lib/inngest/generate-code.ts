@@ -4537,11 +4537,14 @@ NAV + MOBILE RULES:
 - Mobile menu must render above content with clear background contrast and full viewport height.
 - Mobile menu open state must use a dedicated full-screen overlay layer (fixed inset-0, high z-index) plus an opaque/near-opaque menu surface so hero content does not bleed through menu labels.
 - Keep mobile menu links in a dedicated vertical list with 44px+ tap targets and clear spacing; no overlap with hero/headline blocks.
+- Mobile menu must include a dedicated header row (brand on left, close button on right) with fixed height and border; start menu links below header with explicit top spacing.
+- Brand lockup in the mobile header must remain single-row and non-overlapping (truncate long text instead of wrapping into nav items/icons).
 - Include an obvious close action and lock background scroll while the menu is open.
 - If navbar overlays hero images/videos/gradients, it MUST use a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast text/link colors on both desktop and mobile.
 - Route-aware navbar contrast is mandatory: define explicit states for default, scrolled, menu-open, and non-home routes. Do NOT use one shared text color across all states.
 - On non-home routes, navbar must default to a solid readable surface with high-contrast brand/link colors (never transparent-over-light with white text).
 - After mobile link tap, close menu and restore body scroll; destination page must keep brand/nav text clearly visible immediately after navigation.
+- Keep inactive mobile nav links clearly readable too (do not use very faint gray on light backgrounds).
 - Desktop navbar must look premium: balanced spacing, clear hover/active/focus states, and strongly legible link labels.
 - Mobile navbar must be touch-friendly: clear menu affordance, 44px+ tap targets, no clipped/overlapping text, and obvious close state.
 - Final nav quality check: verify readability and interaction quality in both desktop and mobile layouts before returning files.
