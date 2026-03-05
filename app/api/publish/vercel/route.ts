@@ -586,12 +586,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const pocketDevUrl =
+    const pocketDevUrl = (
       parsedFileEnv.NEXT_PUBLIC_POCKET_DEV_URL ||
       process.env.NEXT_PUBLIC_PRODUCTION_URL ||
       process.env.VERCEL_PROJECT_PRODUCTION_URL ||
       (process.env.NEXT_PUBLIC_APP_URL?.includes("localhost") ? "" : process.env.NEXT_PUBLIC_APP_URL) ||
-      "";
+      ""
+    ).replace(/\/$/, "");
     if (pocketDevUrl) {
       envVars.push({
         key: "NEXT_PUBLIC_POCKET_DEV_URL",
