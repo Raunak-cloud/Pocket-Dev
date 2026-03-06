@@ -35,7 +35,7 @@ export default function ProjectsContent({
       return "Generated project";
     }
     // Strip image/PDF/backend injection blocks appended after the user's clean prompt
-    const cleanPrompt = prompt.replace(/\n\n[🔷🔸📷📄🖼️].*/s, "").trim();
+    const cleanPrompt = prompt.replace(/\n\n[🔷🔸📷📄🖼️][\s\S]*/, "").trim();
     return cleanPrompt || "Untitled project";
   };
 

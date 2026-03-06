@@ -4534,7 +4534,7 @@ const data = await res.json();`;
           .slice(0, 15);
 
         // Strip image/PDF injection blocks so we give Gemini the clean user intent
-        const cleanPromptForFeedback = prompt.replace(/\n\n[🔷🔸📷📄🖼️].*/s, "").trim();
+        const cleanPromptForFeedback = prompt.replace(/\n\n[🔷🔸📷📄🖼️][\s\S]*/, "").trim();
 
         const feedbackPrompt = isEditRequest
           ? `Edit instruction: "${(userInstruction || "").slice(0, 600)}"\nFiles modified: ${fileList.join(", ")}\n\nYou MUST write a detailed summary of EXACTLY what was changed. Requirements:\n- Minimum 150 words, target 200-250 words\n- Exactly 4-5 bullet points\n- Each bullet point must be 2-3 sentences long and specific\n- Start each bullet with "• "\n- Cover: which components/files changed, what UI elements were updated, any behavior or logic changes, new features or sections added\n- Write directly to the user ("Your app now has...", "The navigation was updated to...")\n\nDo NOT write fewer than 150 words. Do NOT use vague phrases like "various improvements".\n\nSummary:`
