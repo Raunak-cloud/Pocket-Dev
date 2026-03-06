@@ -347,7 +347,11 @@ async function extractThemeFromPrompt(prompt: string): Promise<SiteTheme> {
   return "generic";
 }
 
-async function generateWithGemini(systemPrompt: string, userPrompt: string) {
+async function generateWithGemini(
+  systemPrompt: string,
+  userPrompt: string,
+  pdfAttachments?: Array<{ name: string; url: string }>,
+) {
   const gemini = getGeminiClient();
   const model = gemini.getGenerativeModel({
     model: MODEL,
@@ -358,13 +362,31 @@ async function generateWithGemini(systemPrompt: string, userPrompt: string) {
     },
   });
 
+  // Build parts array — fetch PDFs as inlineData so Gemini can read their content
+  const parts: Array<{ text: string } | { inlineData: { data: string; mimeType: string } }> = [];
+
+  if (pdfAttachments?.length) {
+    for (const pdf of pdfAttachments) {
+      try {
+        const res = await fetch(pdf.url);
+        if (res.ok) {
+          const buffer = await res.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          parts.push({ inlineData: { data: base64, mimeType: "application/pdf" } });
+          console.log(`PDF attached for Gemini: ${pdf.name} (${buffer.byteLength} bytes)`);
+        } else {
+          console.warn(`Failed to fetch PDF ${pdf.name}: ${res.status}`);
+        }
+      } catch (err) {
+        console.warn(`Error fetching PDF ${pdf.name}:`, err);
+      }
+    }
+  }
+
+  parts.push({ text: `${systemPrompt}\n\n${userPrompt}` });
+
   const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
-      },
-    ],
+    contents: [{ role: "user", parts }],
   });
 
   return result.response.text();
@@ -3221,6 +3243,7 @@ export const generateCodeFunction = inngest.createFunction(
     const previousImageUrls = (event.data as Record<string, unknown>)?.previousImageUrls as string[] | undefined;
     const customApis = (event.data as Record<string, unknown>)?.customApis as Array<{ name: string; slug: string; baseUrl: string; description?: string | null }> | undefined;
     const userInstruction = (event.data as Record<string, unknown>)?.userInstruction as string | undefined;
+    const pdfAttachments = (event.data as Record<string, unknown>)?.pdfAttachments as Array<{ name: string; url: string }> | undefined;
 
     try {
     const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
@@ -3495,7 +3518,7 @@ const data = await res.json();`;
           generationSystemPrompt += "\n" + SUPABASE_API_REFERENCE;
         }
 
-        const text = await generateWithGemini(generationSystemPrompt, finalUserPrompt);
+        const text = await generateWithGemini(generationSystemPrompt, finalUserPrompt, pdfAttachments);
         console.log("Gemini response length:", text.length, "chars");
         console.log("Response preview:", text.substring(0, 200) + "...");
 

@@ -72,21 +72,24 @@ The user expects to see their ACTUAL uploaded images in the updated website.`;
 }
 
 export function buildPdfUploadSection(pdfFiles: UploadedFileInfo[]): string {
-  const pdfUrlList = pdfFiles
-    .map(
-      (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
-    )
-    .join("\n");
+  const pdfNameList = pdfFiles.map((f, i) => `PDF ${i + 1}: ${f.name}`).join("\n");
 
-  return `\n\n📄 CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+  return `\n\n📄 PDF CONTENT EXTRACTION — User has uploaded ${pdfFiles.length} PDF file(s):
 
-${pdfUrlList}
+${pdfNameList}
 
-🚨 YOU MUST:
-1. The PDFs are uploaded for reference/context - analyze their content if shown visually
-2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
-3. If the PDF contains design references, use them to inform the visual design changes
-4. The user has uploaded these PDFs to provide context for the edit request`;
+The actual PDF content is attached and you can read it directly.
+
+DEFAULT BEHAVIOR (unless the user explicitly says otherwise):
+1. READ and EXTRACT all text, sections, data, and information from the PDF(s)
+2. USE the extracted content to update or add to the pages — put real headings, paragraphs, lists, tables, and data from the PDF into the website
+3. DO NOT just link to or embed the PDF — use its content in the appropriate sections
+4. If the PDF contains updated company info, product details, team bios, etc. — replace or supplement the existing page content with the real information from the PDF
+
+DOWNLOAD LINK: If you also need to offer the PDF as a download, use:
+${pdfFiles.map((f) => `<a href="${f.downloadUrl || ""}" download="${f.name}">${f.name}</a>`).join("\n")}
+
+OVERRIDE: If the user explicitly requested a different behavior, follow those instructions instead.`;
 }
 
 export function buildSchemaContextSection(schemaContext: string): string {

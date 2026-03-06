@@ -12,6 +12,7 @@ export interface UserData {
   lastLoginAt: Date | null;
   projectCount: number;
   appTokens: number;
+  banned?: boolean;
 }
 
 export interface CompatibleUser {

@@ -103,6 +103,7 @@ interface CreateContentProps {
   setBlockedPromptWords: (val: string[]) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   isLaunching?: boolean;
+  systemDisabledFeatures?: { backend: boolean; payments: boolean; apis: boolean };
 }
 
 export default function CreateContent({
@@ -142,6 +143,7 @@ export default function CreateContent({
   setBlockedPromptWords,
   textareaRef,
   isLaunching = false,
+  systemDisabledFeatures = { backend: false, payments: false, apis: false },
 }: CreateContentProps) {
   const [showCustomApisPanel, setShowCustomApisPanel] = useState(false);
 
@@ -574,69 +576,71 @@ export default function CreateContent({
                 <option value="website">Website</option>
                 <option value="dashboard">Dashboard</option>
               </select>
-              <button
-                type="button"
-                onClick={onToggleBackend}
-                className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${backendEnabled ? "text-violet-300 bg-violet-500/10 hover:bg-violet-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
-                title={
-                  backendEnabled
-                    ? "Backend enabled (authentication + database)"
-                    : "Enable backend (authentication + database)"
-                }
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
+              <div className="relative group">
+                <button
+                  type="button"
+                  onClick={systemDisabledFeatures.backend ? undefined : onToggleBackend}
+                  disabled={systemDisabledFeatures.backend}
+                  className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${systemDisabledFeatures.backend ? "opacity-40 cursor-not-allowed text-text-muted" : backendEnabled ? "text-violet-300 bg-violet-500/10 hover:bg-violet-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                  />
-                </svg>
-                <span className="mt-0.5 text-[10px] font-medium">Backend</span>
-              </button>
-              <button
-                type="button"
-                onClick={onTogglePayments}
-                className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${paymentsEnabled ? "text-amber-300 bg-amber-500/10 hover:bg-amber-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
-                title={
-                  paymentsEnabled
-                    ? "Payments enabled (Stripe Checkout)"
-                    : "Enable payments (Stripe Checkout)"
-                }
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                  </svg>
+                  <span className="mt-0.5 text-[10px] font-medium">Backend</span>
+                </button>
+                {systemDisabledFeatures.backend && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-44 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                    <div className="bg-bg-primary border border-amber-500/30 rounded-lg px-2.5 py-2 text-center shadow-lg">
+                      <p className="text-[11px] font-medium text-amber-400">Temporarily unavailable</p>
+                      <p className="text-[10px] text-text-muted mt-0.5">Backend is disabled by admin</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative group">
+                <button
+                  type="button"
+                  onClick={systemDisabledFeatures.payments ? undefined : onTogglePayments}
+                  disabled={systemDisabledFeatures.payments}
+                  className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none ${systemDisabledFeatures.payments ? "opacity-40 cursor-not-allowed text-text-muted" : paymentsEnabled ? "text-amber-300 bg-amber-500/10 hover:bg-amber-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3.75 7.5h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v10.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V6.75a1.5 1.5 0 011.5-1.5zm10.5 8.25h1.5"
-                  />
-                </svg>
-                <span className="mt-0.5 text-[10px] font-medium">Payment</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowCustomApisPanel((v) => !v)}
-                className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none relative ${pendingCustomApis.length > 0 ? "text-blue-300 bg-blue-500/10 hover:bg-blue-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
-                title="Custom APIs"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <span className="mt-0.5 text-[10px] font-medium">
-                  APIs{pendingCustomApis.length > 0 ? ` (${pendingCustomApis.length})` : ""}
-                </span>
-              </button>
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 7.5h16.5M5.25 5.25h13.5A1.5 1.5 0 0120.25 6.75v10.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V6.75a1.5 1.5 0 011.5-1.5zm10.5 8.25h1.5" />
+                  </svg>
+                  <span className="mt-0.5 text-[10px] font-medium">Payment</span>
+                </button>
+                {systemDisabledFeatures.payments && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-44 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                    <div className="bg-bg-primary border border-amber-500/30 rounded-lg px-2.5 py-2 text-center shadow-lg">
+                      <p className="text-[11px] font-medium text-amber-400">Temporarily unavailable</p>
+                      <p className="text-[10px] text-text-muted mt-0.5">Payments are disabled by admin</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative group">
+                <button
+                  type="button"
+                  onClick={systemDisabledFeatures.apis ? undefined : () => setShowCustomApisPanel((v) => !v)}
+                  disabled={systemDisabledFeatures.apis}
+                  className={`px-2 py-1 rounded-lg transition flex flex-col items-center leading-none relative ${systemDisabledFeatures.apis ? "opacity-40 cursor-not-allowed text-text-muted" : pendingCustomApis.length > 0 ? "text-blue-300 bg-blue-500/10 hover:bg-blue-500/20" : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"}`}
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                  <span className="mt-0.5 text-[10px] font-medium">
+                    APIs{pendingCustomApis.length > 0 ? ` (${pendingCustomApis.length})` : ""}
+                  </span>
+                </button>
+                {systemDisabledFeatures.apis && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-44 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                    <div className="bg-bg-primary border border-amber-500/30 rounded-lg px-2.5 py-2 text-center shadow-lg">
+                      <p className="text-[11px] font-medium text-amber-400">Temporarily unavailable</p>
+                      <p className="text-[10px] text-text-muted mt-0.5">API integrations are disabled by admin</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <button
               type="submit"

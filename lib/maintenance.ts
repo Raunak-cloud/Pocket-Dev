@@ -5,6 +5,9 @@ export interface MaintenanceStatus {
   message?: string;
   lastUpdatedBy?: string;
   lastUpdatedAt?: Date;
+  backendDisabled?: boolean;
+  paymentsDisabled?: boolean;
+  apisDisabled?: boolean;
 }
 
 export async function getMaintenanceStatus(): Promise<MaintenanceStatus> {
@@ -20,6 +23,9 @@ export async function getMaintenanceStatus(): Promise<MaintenanceStatus> {
       lastUpdatedBy:
         typeof data.lastUpdatedBy === "string" ? data.lastUpdatedBy : undefined,
       lastUpdatedAt: data.lastUpdatedAt ? new Date(data.lastUpdatedAt) : undefined,
+      backendDisabled: Boolean(data.backendDisabled),
+      paymentsDisabled: Boolean(data.paymentsDisabled),
+      apisDisabled: Boolean(data.apisDisabled),
     };
   } catch (error) {
     console.error("Error getting maintenance status:", error);

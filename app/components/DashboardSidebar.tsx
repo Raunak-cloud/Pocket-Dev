@@ -63,14 +63,11 @@ export default function DashboardSidebar({
           onClick={() => onSectionChange("create")}
           className={`flex items-center gap-2.5 hover:opacity-80 transition ${isCollapsed ? "justify-center w-full" : ""}`}
         >
-          <Logo size={30} />
+          <Logo size={40} />
           {!isCollapsed && (
             <div>
               <span className="font-bold text-text-primary text-base tracking-tight">
                 Danphe
-              </span>
-              <span className="block text-[10px] text-text-muted font-medium -mt-0.5">
-                Build apps with Danphe AI
               </span>
             </div>
           )}

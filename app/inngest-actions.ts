@@ -8,6 +8,7 @@
 
 import { INNGEST_APP_ID, inngest } from "@/lib/inngest-client";
 import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Trigger AI code generation workflow
@@ -30,19 +31,56 @@ export async function triggerCodeGeneration(
   },
   customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
   userInstruction?: string,
+  pdfAttachments?: Array<{ name: string; url: string }>,
 ) {
+  // Enforce per-user ban and system-level feature restrictions
+  const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
+  const [dbUser, systemConfig] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { banned: true, email: true },
+    }),
+    prisma.maintenance.findUnique({
+      where: { id: 1 },
+      select: { backendDisabled: true, paymentsDisabled: true, apisDisabled: true },
+    }),
+  ]);
+
+  if (dbUser?.banned) {
+    return { success: false, error: "Your account has been suspended. Please contact support.", projectId, eventIds: [] };
+  }
+
+  // Admin is exempt from all system-level feature restrictions
+  const isAdmin = ADMIN_EMAIL && dbUser?.email === ADMIN_EMAIL;
+
+  let effectiveIntegrations = integrationRequirements;
+  if (!isAdmin && systemConfig?.backendDisabled && effectiveIntegrations) {
+    effectiveIntegrations = {
+      ...effectiveIntegrations,
+      requiresAuth: false,
+      requiresDatabase: false,
+      requiresGoogleOAuth: false,
+      requiresPasswordAuth: false,
+    };
+  }
+  if (!isAdmin && systemConfig?.paymentsDisabled && effectiveIntegrations) {
+    effectiveIntegrations = { ...effectiveIntegrations, requiresPayments: false };
+  }
+  const effectiveCustomApis = (!isAdmin && systemConfig?.apisDisabled) ? [] : customApis;
+
   const sendResult = await inngest.send({
     name: "app/generate.code",
     data: {
       prompt,
       userId,
       projectId,
-      integrationRequirements,
+      integrationRequirements: effectiveIntegrations,
       projectType,
       preserveExistingImages: imageOptions?.preserveExistingImages,
       previousImageUrls: imageOptions?.previousImageUrls,
-      customApis,
+      customApis: effectiveCustomApis,
       userInstruction,
+      pdfAttachments,
     },
   });
 

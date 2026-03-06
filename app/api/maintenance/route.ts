@@ -8,16 +8,19 @@ export async function GET() {
   try {
     const row = await prisma.maintenance.findUnique({ where: { id: 1 } });
     if (!row) {
-      return NextResponse.json({ enabled: false });
+      return NextResponse.json({ enabled: false, backendDisabled: false, paymentsDisabled: false, apisDisabled: false });
     }
     return NextResponse.json({
       enabled: row.enabled,
       message: row.message,
       lastUpdatedAt: row.updatedAt,
+      backendDisabled: row.backendDisabled,
+      paymentsDisabled: row.paymentsDisabled,
+      apisDisabled: row.apisDisabled,
     });
   } catch (error) {
     console.error("[GET /api/maintenance] Error:", error);
-    return NextResponse.json({ enabled: false });
+    return NextResponse.json({ enabled: false, backendDisabled: false, paymentsDisabled: false, apisDisabled: false });
   }
 }
 
@@ -35,16 +38,24 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const enabled = Boolean(body.enabled);
-    const message =
-      typeof body.message === "string" && body.message.trim()
-        ? body.message.trim()
-        : "System is currently under maintenance. Please check back soon.";
+
+    const updateData: Record<string, unknown> = {};
+
+    if ("enabled" in body) {
+      updateData.enabled = Boolean(body.enabled);
+      updateData.message =
+        typeof body.message === "string" && body.message.trim()
+          ? body.message.trim()
+          : "System is currently under maintenance. Please check back soon.";
+    }
+    if ("backendDisabled" in body) updateData.backendDisabled = Boolean(body.backendDisabled);
+    if ("paymentsDisabled" in body) updateData.paymentsDisabled = Boolean(body.paymentsDisabled);
+    if ("apisDisabled" in body) updateData.apisDisabled = Boolean(body.apisDisabled);
 
     await prisma.maintenance.upsert({
       where: { id: 1 },
-      update: { enabled, message },
-      create: { id: 1, enabled, message },
+      update: updateData,
+      create: { id: 1, enabled: false, backendDisabled: false, paymentsDisabled: false, apisDisabled: false, ...updateData },
     });
 
     return NextResponse.json({ success: true });

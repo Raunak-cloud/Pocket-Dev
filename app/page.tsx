@@ -36,6 +36,7 @@ import {
 } from "./components/Modals";
 import CreateContentComponent from "./components/Generation/CreateContent";
 import SupportContentComponent from "./components/Support/SupportContent";
+import AdminUsersContent from "./components/Admin/AdminUsersContent";
 import { usePublishing } from "./hooks/usePublishing";
 import { useGitHubExport } from "./hooks/useGitHubExport";
 import { useEditorExport } from "./hooks/useEditorExport";
@@ -337,7 +338,7 @@ function ReactGeneratorContent() {
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [pendingGeneration, setPendingGeneration] = useState(false);
   const [activeSection, setActiveSection] = useState("create");
-  const [adminTab, setAdminTab] = useState<"support" | "maintenance">(
+  const [adminTab, setAdminTab] = useState<"support" | "maintenance" | "users">(
     "support",
   );
   const [isGenerationMinimized, setIsGenerationMinimized] = useState(false);
@@ -460,6 +461,11 @@ function ReactGeneratorContent() {
     "website" | "dashboard"
   >("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [systemDisabledFeatures, setSystemDisabledFeatures] = useState<{
+    backend: boolean;
+    payments: boolean;
+    apis: boolean;
+  }>({ backend: false, payments: false, apis: false });
   const [customApis, setCustomApis] = useState<CustomApiConfig[]>([]);
   const [pendingCustomApis, setPendingCustomApis] = useState<CustomApiConfig[]>(
     [],
@@ -948,6 +954,19 @@ function ReactGeneratorContent() {
       resumeCheckedRef.current = false;
       restoreLastProjectCheckedRef.current = false;
       loadSavedProjects();
+      // Fetch system feature flags (skip for admin — they're always unrestricted)
+      if (user.email !== ADMIN_EMAIL) {
+        fetch("/api/maintenance", { cache: "no-store" })
+          .then((r) => r.json())
+          .then((d) => {
+            setSystemDisabledFeatures({
+              backend: Boolean(d.backendDisabled),
+              payments: Boolean(d.paymentsDisabled),
+              apis: Boolean(d.apisDisabled),
+            });
+          })
+          .catch(() => {});
+      }
     } else {
       // User signed out — clear persisted project so it doesn't auto-restore on next sign-in.
       clearLastOpenedProjectId();
@@ -2620,12 +2639,11 @@ ${schemaContext}
       fullPrompt += buildPaymentRequirementPrompt("new");
     }
 
+    const pdfFiles = uploadedFiles.filter((f) => f.type === "application/pdf");
+
     if (uploadedFiles.length > 0) {
       const imageFiles = uploadedFiles.filter((f) =>
         f.type.startsWith("image/"),
-      );
-      const pdfFiles = uploadedFiles.filter(
-        (f) => f.type === "application/pdf",
       );
 
       if (imageFiles.length > 0) {
@@ -2650,20 +2668,24 @@ The user expects to see their ACTUAL uploaded images in the final website.`;
       }
 
       if (pdfFiles.length > 0) {
-        const pdfUrlList = pdfFiles
-          .map(
-            (f, i) => `PDF ${i + 1} (${f.name}): ${f.downloadUrl || f.dataUrl}`,
-          )
-          .join("\n");
-        fullPrompt += `\n\nðŸ"„ CRITICAL - User has uploaded ${pdfFiles.length} PDF file(s):
+        const pdfNameList = pdfFiles.map((f, i) => `PDF ${i + 1}: ${f.name}`).join("\n");
+        fullPrompt += `\n\n📄 PDF CONTENT EXTRACTION — User has uploaded ${pdfFiles.length} PDF file(s):
 
-${pdfUrlList}
+${pdfNameList}
 
-ðŸš¨ YOU MUST:
-1. The PDFs are uploaded for reference/context - analyze their content if shown visually
-2. If the user wants to link to the PDFs, use these EXACT URLs: <a href="${pdfFiles[0]?.downloadUrl || ""}" download>Download PDF</a>
-3. If the PDF contains design references, use them to inform the visual design of the website
-4. The user has uploaded these PDFs to provide context or downloadable resources for the website`;
+The actual PDF content is attached and you can read it directly.
+
+DEFAULT BEHAVIOR (unless the user explicitly says otherwise):
+1. READ and EXTRACT all text, sections, data, and information from the PDF(s)
+2. USE the extracted content to populate the pages — put real headings, paragraphs, lists, tables, and data from the PDF into the website
+3. ORGANIZE the content logically across pages (e.g. if the PDF has sections for About, Services, Contact — create those pages with the actual content)
+4. DO NOT just link to or embed the PDF — use its content to build the website
+5. If the PDF is a business brochure, company info, resume, product catalog, menu, or report — populate the appropriate sections with that real information
+
+DOWNLOAD LINK: If the user also needs to offer the PDF as a download, use:
+${pdfFiles.map((f) => `<a href="${f.downloadUrl || ""}" download="${f.name}">${f.name}</a>`).join("\n")}
+
+OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link the PDF", "embed a PDF viewer", "use as background reference"), follow those explicit instructions instead.`;
       }
     }
 
@@ -2717,6 +2739,10 @@ ${pdfUrlList}
               baseUrl: a.baseUrl,
               description: a.description,
             }))
+          : undefined,
+        undefined, // userInstruction
+        pdfFiles.length > 0
+          ? pdfFiles.map((f) => ({ name: f.name, url: f.downloadUrl || "" })).filter((f) => f.url)
           : undefined,
       );
 
@@ -5801,7 +5827,7 @@ ${pdfUrlList}
             onClick={() => setAiFeedback(null)}
           >
             <div
-              className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[50vh] flex flex-col overflow-hidden"
+              className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[70vh] flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -6235,6 +6261,7 @@ ${pdfUrlList}
         setBlockedPromptWords={setBlockedPromptWords}
         textareaRef={textareaRef as React.RefObject<HTMLTextAreaElement>}
         isLaunching={isLaunching}
+        systemDisabledFeatures={systemDisabledFeatures}
       />
     );
   };
@@ -6276,33 +6303,70 @@ ${pdfUrlList}
 
   // Admin Content (visible only to admin)
   const AdminContent = () => (
-    <div className="max-w-3xl mx-auto w-full p-4 h-full flex flex-col overflow-hidden">
+    <div className="max-w-5xl mx-auto w-full p-4 h-full flex flex-col overflow-hidden">
       {/* Tab Navigation */}
       <div className="flex gap-2 mb-4 flex-shrink-0">
         <button
+          onClick={() => setAdminTab("users")}
+          className={`px-4 py-2 rounded-lg font-medium transition text-sm flex items-center gap-2 ${
+            adminTab === "users"
+              ? "bg-violet-600 text-white"
+              : "bg-bg-tertiary text-text-tertiary hover:text-text-primary"
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+          </svg>
+          Users
+        </button>
+        <button
           onClick={() => setAdminTab("support")}
-          className={`px-4 py-2 rounded-lg font-medium transition ${
+          className={`px-4 py-2 rounded-lg font-medium transition text-sm flex items-center gap-2 ${
             adminTab === "support"
               ? "bg-blue-600 text-white"
               : "bg-bg-tertiary text-text-tertiary hover:text-text-primary"
           }`}
         >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 6.75A4.5 4.5 0 009 11.25c0 1.152.432 2.203 1.143 3l-1.143 5.25 5.25-1.143a4.5 4.5 0 102.25-11.607z" />
+          </svg>
           Support Tickets
         </button>
         <button
           onClick={() => setAdminTab("maintenance")}
-          className={`px-4 py-2 rounded-lg font-medium transition ${
+          className={`px-4 py-2 rounded-lg font-medium transition text-sm flex items-center gap-2 ${
             adminTab === "maintenance"
               ? "bg-orange-600 text-white"
               : "bg-bg-tertiary text-text-tertiary hover:text-text-primary"
           }`}
         >
-          Maintenance Mode
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l5.654-4.654m5.346-4.327c.212-.994-.074-2.052-.823-2.801a4.5 4.5 0 00-6.364 0l-3 3a4.5 4.5 0 006.364 6.364l1.5-1.5" />
+          </svg>
+          Maintenance
         </button>
       </div>
 
       {/* Tab Content */}
-      {adminTab === "maintenance" ? (
+      {adminTab === "users" ? (
+        <div className="flex-1 overflow-hidden min-h-0">
+          <AdminUsersContent
+            onEditProject={(project) => {
+              openSavedProject({
+                ...project,
+                files: project.files as { path: string; content: string }[],
+                dependencies: project.dependencies as Record<string, string>,
+                lintReport: project.lintReport as { passed: boolean; errors: number; warnings: number },
+                createdAt: new Date(project.createdAt),
+                updatedAt: new Date(project.updatedAt),
+                publishedAt: project.publishedAt ? new Date(project.publishedAt) : undefined,
+                paidAt: project.paidAt ? new Date(project.paidAt) : undefined,
+              } as unknown as SavedProject);
+              setActiveSection("create");
+            }}
+          />
+        </div>
+      ) : adminTab === "maintenance" ? (
         <div className="flex-1 overflow-y-auto">
           <MaintenanceToggle />
         </div>

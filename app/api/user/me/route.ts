@@ -53,6 +53,7 @@ export async function GET() {
         lastLoginAt: user.lastLoginAt,
         projectCount: activeProjectCount,
         appTokens: user.appTokens,
+        banned: user.banned,
       };
       return result;
     });

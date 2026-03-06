@@ -29,6 +29,11 @@ model User {
   stripeConnectStatus             String?   @map("stripe_connect_status") // "pending" | "active" | "restricted"
   stripeConnectOnboardingComplete Boolean   @default(false) @map("stripe_connect_onboarding_complete")
 
+  // Admin controls
+  banned       Boolean   @default(false)
+  bannedAt     DateTime?
+  bannedReason String?
+
   // Relations
   projects            Project[]
   supportTickets      SupportTicket[]
@@ -166,10 +171,13 @@ model TokenTransaction {
 
 // Maintenance mode - singleton model for system state
 model Maintenance {
-  id        Int      @id @default(1)
-  enabled   Boolean  @default(false)
-  message   String?  @db.Text
-  updatedAt DateTime @updatedAt
+  id               Int      @id @default(1)
+  enabled          Boolean  @default(false)
+  message          String?  @db.Text
+  backendDisabled  Boolean  @default(false) @map("backend_disabled")
+  paymentsDisabled Boolean  @default(false) @map("payments_disabled")
+  apisDisabled     Boolean  @default(false) @map("apis_disabled")
+  updatedAt        DateTime @updatedAt
 
   @@map("maintenance")
 }
