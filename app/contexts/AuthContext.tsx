@@ -28,6 +28,7 @@ interface AuthContextType {
   isNewUser: boolean;
   clearNewUser: () => void;
   signInWithGoogle: () => Promise<void>;
+  signInWithGitHub: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   applyAppTokenBalance: (appTokens: number) => void;
@@ -107,11 +108,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [authLoaded, isSignedIn, authUser, fetchUserData]);
 
   const signInWithGoogle = async () => {
-    // Preserve current URL for redirect after auth
     const currentUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
-    await openSignIn({
-      redirectUrl: currentUrl,
-    });
+    await openSignIn({ redirectUrl: currentUrl, provider: "google" });
+  };
+
+  const signInWithGitHub = async () => {
+    const currentUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+    await openSignIn({ redirectUrl: currentUrl, provider: "github" });
   };
 
   const signOut = async () => {
@@ -168,6 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isNewUser,
       clearNewUser,
       signInWithGoogle,
+      signInWithGitHub,
       signOut,
       refreshUserData,
       applyAppTokenBalance
