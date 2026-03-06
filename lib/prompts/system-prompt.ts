@@ -41,11 +41,19 @@ VISUAL IDENTITY:
 - Use a deliberate typography system: a display/heading font pairing with a readable body font. Use Google Fonts (Inter, Plus Jakarta Sans, DM Sans, Playfair Display, Space Grotesk, etc.) — import via next/font/google.
 - Create visual rhythm with consistent spacing scale (8px base grid).
 - Use subtle shadows (shadow-sm, shadow-md), rounded corners, and micro-interactions (hover:scale, transitions) to add depth.
-- CRITICAL — TEXT READABILITY: Every text element must have strong contrast against its background.
-  Light text (#fff / light shades) on dark backgrounds only; dark text (#111 / dark shades) on light backgrounds only.
-  Never place light text on light backgrounds or dark text on dark backgrounds.
-  For text over images or gradients, always add a semi-transparent overlay (bg-black/50 or bg-white/70) behind the text.
-  Buttons must have contrasting text vs button background. Test mentally: "can I read this at a glance?"
+- CRITICAL — COLOR CONTRAST (WCAG AA MINIMUM — ZERO EXCEPTIONS):
+  Every single text element on every single page MUST be clearly readable against its immediate background.
+  FORBIDDEN combinations that you must NEVER produce:
+    • black or near-black text (text-black, text-gray-900, text-gray-800, #000, #111, #1a1a1a, dark gray) on a dark/black background (bg-black, bg-gray-900, bg-gray-800, bg-slate-900, bg-zinc-900, bg-neutral-900, or any dark color)
+    • white or near-white text (text-white, text-gray-100, #fff, #f5f5f5) on a light/white background (bg-white, bg-gray-50, bg-gray-100, bg-slate-50)
+    • same-hue text and background at similar lightness (e.g. dark blue text on dark blue bg, dark green text on dark green bg)
+  REQUIRED rules:
+    • Dark section (bg-black, bg-gray-900, bg-slate-900, dark bg color) → text MUST be white or light (text-white, text-gray-100, text-gray-200)
+    • Light section (bg-white, bg-gray-50, bg-gray-100, light bg color) → text MUST be dark (text-gray-900, text-gray-800, text-black)
+    • For text over images or gradients: always add a semi-transparent overlay (bg-black/60 or bg-white/70) behind the text
+    • Buttons: button text color must visually pop against the button's background — dark button needs light text, light button needs dark text
+    • Card text: card background + card text must always pass contrast — a dark card (bg-gray-800) needs light text (text-white), a light card (bg-white) needs dark text (text-gray-900)
+  Before finalising each section/component, mentally verify: "If I screenshot this and squint, can I read every word?" If no → fix it immediately.
 
 LAYOUT EXCELLENCE:
 - Hero sections must be impactful: large, bold headlines with supporting subtext, a clear CTA, and a compelling visual. Use gradient overlays on hero images for text readability.

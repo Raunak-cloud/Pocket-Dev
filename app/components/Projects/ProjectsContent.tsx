@@ -34,7 +34,9 @@ export default function ProjectsContent({
     if (prompt.startsWith("You are a senior full-stack developer.")) {
       return "Generated project";
     }
-    return prompt;
+    // Strip image/PDF/backend injection blocks appended after the user's clean prompt
+    const cleanPrompt = prompt.replace(/\n\n[🔷🔸📷📄🖼️].*/s, "").trim();
+    return cleanPrompt || "Untitled project";
   };
 
   const formatProjectDate = (value: Date | string | number) => {
