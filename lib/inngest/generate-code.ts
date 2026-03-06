@@ -5768,13 +5768,10 @@ const data = await res.json();`;
     });
 
     // Step 9a: Generate AI feedback summary
-    const aiFeedback = await step.run("generate-feedback", async () => {
+    const aiFeedback = await step.run("generate-feedback-v2", async () => {
       try {
         const genAI = getGeminiClient();
-        const model = genAI.getGenerativeModel({
-          model: MODEL,
-          generationConfig: { maxOutputTokens: 400, temperature: 0.4 },
-        });
+        const model = genAI.getGenerativeModel({ model: MODEL });
 
         const fileList = Object.keys(filesWithImages)
           .filter((f) => f.endsWith(".tsx") || f.endsWith(".ts"))
@@ -5793,11 +5790,12 @@ const data = await res.json();`;
           .slice(0, 15);
 
         const feedbackPrompt = isEditRequest
-          ? `Edit instruction: "${(userInstruction || "").slice(0, 600)}"\nFiles modified: ${fileList.join(", ")}\n\nWrite a concise summary (150-300 words) of exactly what was changed. Use 4-5 bullet points, each 1-2 sentences. Start each with "• ". Be specific: mention components updated, UI changes, behavior changes, and any new features added. Write as if explaining to the user what the AI did for them.`
-          : `User prompt: "${prompt.slice(0, 600)}"\nGenerated pages/files: ${fileList.join(", ")}\n\nWrite a concise summary (150-300 words) of what was built. Use 5-6 bullet points, each 1-2 sentences. Start each with "• ". Cover: pages created, key UI sections, features implemented, design choices, and any integrations. Write as if explaining to the user what the AI built for them.`;
+          ? `Edit instruction: "${(userInstruction || "").slice(0, 600)}"\nFiles modified: ${fileList.join(", ")}\n\nYou MUST write a detailed summary of EXACTLY what was changed. Requirements:\n- Minimum 150 words, target 200-250 words\n- Exactly 4-5 bullet points\n- Each bullet point must be 2-3 sentences long and specific\n- Start each bullet with "• "\n- Cover: which components/files changed, what UI elements were updated, any behavior or logic changes, new features or sections added\n- Write directly to the user ("Your app now has...", "The navigation was updated to...")\n\nDo NOT write fewer than 150 words. Do NOT use vague phrases like "various improvements".\n\nSummary:`
+          : `User prompt: "${prompt.slice(0, 600)}"\nGenerated pages/files: ${fileList.join(", ")}\n\nYou MUST write a detailed summary of what was built. Requirements:\n- Minimum 150 words, target 200-300 words\n- Exactly 5-6 bullet points\n- Each bullet point must be 2-3 sentences long and specific\n- Start each bullet with "• "\n- Cover: pages created, key UI sections (hero, features, CTA, footer), features implemented, design choices (colors, typography, layout), and any integrations or special components\n- Write directly to the user ("Your app includes...", "The homepage features...")\n\nDo NOT write fewer than 150 words. Do NOT use vague phrases like "modern design" without specifics.\n\nSummary:`;
 
         const result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: feedbackPrompt }] }],
+          generationConfig: { maxOutputTokens: 600, temperature: 0.5 },
         });
         return result.response.text().trim();
       } catch {
