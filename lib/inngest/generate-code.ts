@@ -2835,6 +2835,7 @@ function collectNextJsValidationIssues(
     ...collectServerClientBoundaryIssues(files),
     ...collectModuleResolutionIssues(files, dependencies),
     ...collectUndefinedReferenceIssues(files),
+    ...collectMissingUseClientIssues(files),
   ];
 
   const nextClientHooks = [
@@ -2926,9 +2927,325 @@ function collectNextJsValidationIssues(
         });
       }
     }
+
+    // process.env private vars accessed in client components
+    if (isClient) {
+      const privateEnvRe = /\bprocess\.env\.(?!NEXT_PUBLIC_)([A-Z][A-Z0-9_]+)\b/g;
+      let envMatch: RegExpExecArray | null;
+      while ((envMatch = privateEnvRe.exec(content)) !== null) {
+        const varName = envMatch[1];
+        if (varName === "NODE_ENV") continue; // NODE_ENV is safe in client
+        const pos = lineColumnAt(content, envMatch.index);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/private-env-in-client-component",
+          message: `process.env.${varName} is server-only and will be undefined in the browser. Use process.env.NEXT_PUBLIC_${varName} and add NEXT_PUBLIC_${varName} to your .env file.`,
+        });
+        break; // one per file is enough
+      }
+    }
+
+    // useSearchParams() requires a <Suspense> boundary (Next.js 14+)
+    if (isClient && /\buseSearchParams\s*\(/.test(content) && !/\bSuspense\b/.test(content)) {
+      const m = content.match(/\buseSearchParams\s*\(/);
+      if (m) {
+        const pos = lineColumnAt(content, m.index ?? 0);
+        issues.push({
+          path: file.path,
+          line: pos.line,
+          column: pos.column,
+          rule: "next/use-search-params-no-suspense",
+          message:
+            'useSearchParams() must be wrapped in a <Suspense fallback={...}> boundary. Extract the useSearchParams logic into a child component and wrap it in Suspense in the parent.',
+        });
+      }
+    }
+  }
+
+  // Missing export default in Next.js convention files
+  const NEXT_CONVENTION_FILE_RE =
+    /^app\/(?:.+\/)?(?:page|layout|error|not-found|loading|template)\.(tsx|jsx)$/;
+  for (const file of appAndComponentSourceFiles) {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (!NEXT_CONVENTION_FILE_RE.test(normalizedPath)) continue;
+    if (!/\bexport\s+default\b/.test(file.content)) {
+      issues.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        rule: "next/missing-default-export",
+        message: `"${file.path}" is a Next.js convention file but has no default export. Add "export default function ..." — Next.js requires a default export for every page, layout, error, not-found, and loading file.`,
+      });
+    }
+  }
+
+  // Pages Router patterns used in App Router (silently do nothing, confuses the app)
+  const PAGES_ROUTER_EXPORT_RE =
+    /\bexport\s+(?:async\s+)?function\s+(getStaticProps|getServerSideProps|getInitialProps|getStaticPaths)\b/;
+  for (const file of appAndComponentSourceFiles) {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (!normalizedPath.startsWith("app/")) continue;
+    const m = PAGES_ROUTER_EXPORT_RE.exec(file.content);
+    if (m) {
+      const pos = lineColumnAt(file.content, m.index);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "next/pages-router-api-in-app-router",
+        message: `"${m[1]}" is a Pages Router API and does nothing in the App Router. Remove it and use async Server Components or Route Handlers for data fetching instead.`,
+      });
+    }
   }
 
   return issues;
+}
+
+/**
+ * Detects React context providers that are defined in the project but not
+ * wrapped around children in app/layout.tsx. These cause runtime errors like
+ * "useX must be used within a XProvider".
+ */
+function collectMissingProviderIssues(files: GeneratedFile[]): LintIssue[] {
+  const issues: LintIssue[] = [];
+
+  const layoutFile = files.find(
+    (f) => f.path.replace(/\\/g, "/") === "app/layout.tsx",
+  );
+  if (!layoutFile) return issues;
+
+  for (const file of files) {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (normalizedPath === "app/layout.tsx") continue;
+    if (!/\.(tsx|ts|jsx|js)$/.test(normalizedPath)) continue;
+
+    const content = file.content;
+
+    // Only care about files that define a context
+    if (!/\bcreateContext\b/.test(content)) continue;
+
+    // Find all exported *Provider component names (named + default exports)
+    const namedProviderRe =
+      /\bexport\s+(?:function|const|class)\s+(\w+Provider)\b/g;
+    const defaultProviderRe =
+      /\bexport\s+default\s+function\s+(\w+Provider)\b/g;
+
+    const providerNames = new Set<string>();
+    for (const m of content.matchAll(namedProviderRe)) providerNames.add(m[1]);
+    for (const m of content.matchAll(defaultProviderRe))
+      providerNames.add(m[1]);
+
+    for (const name of providerNames) {
+      // Skip PocketAuth-managed providers (already injected by the pipeline)
+      if (["AuthProvider", "SupabaseProvider"].includes(name)) continue;
+
+      // Check if layout.tsx already renders this provider as a JSX element
+      const usedInLayout = new RegExp(`<${name}[\\s>/]`).test(
+        layoutFile.content,
+      );
+      if (!usedInLayout) {
+        issues.push({
+          path: "app/layout.tsx",
+          line: 1,
+          column: 1,
+          rule: "react/missing-context-provider",
+          message: `Context provider "${name}" (from "${normalizedPath}") is never rendered in app/layout.tsx. Wrap {children} with <${name}> so all pages have access to this context.`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Deterministically patches app/layout.tsx to import and wrap missing context
+ * providers. No AI call required — the fix is fully mechanical.
+ */
+function applyDeterministicProviderFixes(
+  files: GeneratedFile[],
+  issues: LintIssue[],
+): GeneratedFile[] {
+  const providerIssues = issues.filter(
+    (i) => i.rule === "react/missing-context-provider",
+  );
+  if (providerIssues.length === 0) return files;
+
+  // Parse provider name + source path from each issue message
+  const missing: Array<{ name: string; sourcePath: string; isDefault: boolean }> =
+    [];
+  for (const issue of providerIssues) {
+    const m = issue.message.match(
+      /provider "(\w+Provider)" \(from "([^"]+)"\)/,
+    );
+    if (!m) continue;
+    const [, name, sourcePath] = m;
+
+    // Determine if the export is default or named
+    const providerFile = files.find(
+      (f) => f.path.replace(/\\/g, "/") === sourcePath,
+    );
+    const isDefault = providerFile
+      ? new RegExp(`\\bexport\\s+default\\s+function\\s+${name}\\b`).test(
+          providerFile.content,
+        )
+      : false;
+
+    missing.push({ name, sourcePath, isDefault });
+  }
+  if (missing.length === 0) return files;
+
+  return files.map((file) => {
+    if (file.path.replace(/\\/g, "/") !== "app/layout.tsx") return file;
+
+    let content = file.content;
+
+    // 1. Add missing imports after the last existing import line
+    for (const { name, sourcePath, isDefault } of missing) {
+      // Build @/ alias path (strip extension)
+      const importPath =
+        "@/" + sourcePath.replace(/\.(tsx|ts|jsx|js)$/, "");
+
+      // Skip if already imported
+      if (
+        content.includes(`"${importPath}"`) ||
+        content.includes(`'${importPath}'`)
+      )
+        continue;
+
+      const importStatement = isDefault
+        ? `import ${name} from "${importPath}";`
+        : `import { ${name} } from "${importPath}";`;
+
+      // Insert after the last import line
+      const lastImportRe =
+        /^import\s[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm;
+      const allImports = [...content.matchAll(lastImportRe)];
+      if (allImports.length > 0) {
+        const last = allImports[allImports.length - 1];
+        const insertAt = last.index! + last[0].length;
+        content =
+          content.slice(0, insertAt) +
+          "\n" +
+          importStatement +
+          content.slice(insertAt);
+      } else {
+        content = importStatement + "\n" + content;
+      }
+    }
+
+    // 2. Wrap {children} with all missing providers (nested outermost → innermost)
+    // Build the nested expression: <P1><P2>{children}</P2></P1>
+    let childrenExpr = "{children}";
+    for (const { name } of [...missing].reverse()) {
+      // Check again after import patch — if already present, skip wrapping
+      if (new RegExp(`<${name}[\\s>/]`).test(content)) continue;
+      childrenExpr = `<${name}>${childrenExpr}</${name}>`;
+    }
+
+    if (childrenExpr !== "{children}") {
+      // Replace the literal {children} JSX expression (not the destructured param)
+      // The destructured param is `{ children }` (with spaces), JSX usage is `{children}`
+      content = content.replace(/\{children\}/g, childrenExpr);
+    }
+
+    return { ...file, content };
+  });
+}
+
+// Packages that are client-only: importing them in a Server Component crashes the build.
+// Matched against the import specifier (from "...").
+const CLIENT_ONLY_IMPORT_RE =
+  /from\s+['"](?:framer-motion|motion\/react|motion\/dist\/[^'"]+|react-hot-toast|react-toastify|react-tooltip|styled-jsx|lottie-react|react-spring|@react-spring\/(?:web|native|three|p5)[^'"]*|swiper(?:\/[^'"]*)?|react-slick|@egjs\/react-flicking|react-beautiful-dnd|react-dnd(?:\/[^'"]*)?|@dnd-kit\/[^'"]+|reactflow|react-flow-renderer|react-confetti|canvas-confetti|tsparticles|@tsparticles\/[^'"]+|react-particles|react-type-animation|typewriter-effect|react-countup|react-intersection-observer|react-use-measure|@use-gesture\/react)['"]/ ;
+
+// React hooks that are definitively client-only (useState, useEffect, etc.)
+const REACT_CLIENT_HOOKS_RE =
+  /\b(useState|useEffect|useRef|useCallback|useMemo|useReducer|useLayoutEffect|useImperativeHandle)\s*\(/;
+
+// Markers that mean the file MUST stay a Server Component
+const SERVER_COMPONENT_MARKERS_RE =
+  /\bexport\s+(?:const\s+metadata\b|async\s+function\s+generateMetadata\b|function\s+generateMetadata\b)|from\s+['"](?:next\/headers|next\/server|server-only)['"]/;
+
+/**
+ * Detects files that use React client-only hooks or import client-only packages
+ * but are missing the "use client" directive — guaranteed build errors.
+ */
+function collectMissingUseClientIssues(files: GeneratedFile[]): LintIssue[] {
+  const issues: LintIssue[] = [];
+
+  for (const file of files) {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (!/\.(tsx|ts|jsx|js)$/.test(normalizedPath)) continue;
+    if (hasUseClientDirective(file.content)) continue;
+    // Files with server-only markers must remain server components — skip
+    if (SERVER_COMPONENT_MARKERS_RE.test(file.content)) continue;
+
+    // Check React hooks
+    const hookMatch = REACT_CLIENT_HOOKS_RE.exec(file.content);
+    if (hookMatch) {
+      const pos = lineColumnAt(file.content, hookMatch.index);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "react/hook-in-server-component",
+        message: `React hook "${hookMatch[1]}()" called in a Server Component (no "use client" directive). Add "use client" at the top of this file.`,
+      });
+      continue; // one issue per file is sufficient
+    }
+
+    // Check client-only package imports
+    // Reset lastIndex for the global-flag-less RE (it's not global, so no issue)
+    const pkgMatch = CLIENT_ONLY_IMPORT_RE.exec(file.content);
+    if (pkgMatch) {
+      const pkgName =
+        pkgMatch[0].match(/['"]([^'"]+)['"]/)?.[1] ?? "client-only package";
+      const pos = lineColumnAt(file.content, pkgMatch.index);
+      issues.push({
+        path: file.path,
+        line: pos.line,
+        column: pos.column,
+        rule: "react/client-only-package-in-server-component",
+        message: `Package "${pkgName}" is client-only but this file has no "use client" directive. Add "use client" at the top.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Deterministically prepends "use client"; to files that need it.
+ * Safe to apply automatically — only targets files confirmed to use
+ * client-side hooks or client-only packages, and never touches files
+ * with server-component markers (metadata exports, server-only imports).
+ */
+function applyDeterministicUseClientFixes(
+  files: GeneratedFile[],
+  issues: LintIssue[],
+): GeneratedFile[] {
+  const rulesToFix = new Set([
+    "react/hook-in-server-component",
+    "react/client-only-package-in-server-component",
+  ]);
+  const filesToFix = new Set(
+    issues
+      .filter((i) => rulesToFix.has(i.rule))
+      .map((i) => i.path.replace(/\\/g, "/")),
+  );
+  if (filesToFix.size === 0) return files;
+
+  return files.map((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (!filesToFix.has(normalizedPath)) return file;
+    if (hasUseClientDirective(file.content)) return file;
+    // Double-check: don't add "use client" to files with server markers
+    if (SERVER_COMPONENT_MARKERS_RE.test(file.content)) return file;
+    console.log(`[UseClientFix] Adding "use client" to ${file.path}`);
+    return { ...file, content: `"use client";\n\n${file.content}` };
+  });
 }
 
 function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
@@ -5269,10 +5586,42 @@ const data = await res.json();`;
     const validatedFiles = nextjsState.files;
     dependencies = nextjsState.dependencies;
 
+    // Step 5.5a: Deterministic context-provider fix
+    // Scans for *Provider components backed by createContext that are missing from
+    // app/layout.tsx and patches the layout file without an AI call.
+    const providerFixedFiles = await step.run("provider-fix", async () => {
+      const missingProviderIssues = collectMissingProviderIssues(validatedFiles);
+      if (missingProviderIssues.length === 0) {
+        console.log("[ProviderFix] No missing providers detected.");
+        return validatedFiles;
+      }
+      console.warn(
+        "[ProviderFix] Missing providers detected:",
+        missingProviderIssues.map((i) => i.message),
+      );
+      return applyDeterministicProviderFixes(validatedFiles, missingProviderIssues);
+    });
+
+    // Step 5.5b: Deterministic "use client" fix
+    // Detects React hooks (useState, useEffect, etc.) and known client-only package
+    // imports in server components, and prepends "use client" automatically.
+    const useClientFixedFiles = await step.run("use-client-fix", async () => {
+      const missingUseClientIssues = collectMissingUseClientIssues(providerFixedFiles);
+      if (missingUseClientIssues.length === 0) {
+        console.log("[UseClientFix] No missing 'use client' directives detected.");
+        return providerFixedFiles;
+      }
+      console.warn(
+        "[UseClientFix] Missing 'use client' detected:",
+        missingUseClientIssues.map((i) => `${i.path}: ${i.message}`),
+      );
+      return applyDeterministicUseClientFixes(providerFixedFiles, missingUseClientIssues);
+    });
+
     // Step 5.5: TypeScript type-checking in E2B sandbox (backend-enabled apps only)
     const hasBackend = integrationRequirements.requiresAuth || integrationRequirements.requiresDatabase;
     const typecheckEnabled = hasBackend && !!process.env.E2B_API_KEY;
-    let typecheckedFiles = validatedFiles;
+    let typecheckedFiles = useClientFixedFiles;
     let previewSandboxId: string | null = null;
 
     if (!hasBackend) {
@@ -5299,12 +5648,12 @@ const data = await res.json();`;
             // 2. Build package.json + tsconfig.json
             const packageJson = buildPackageJsonForTypecheck(
               dependencies,
-              validatedFiles,
+              useClientFixedFiles,
             );
             const tsconfigJson = buildTsconfigForTypecheck();
 
             // 3. Write all files to sandbox
-            console.log(`[E2B Typecheck] Writing ${validatedFiles.length} files to sandbox...`);
+            console.log(`[E2B Typecheck] Writing ${useClientFixedFiles.length} files to sandbox...`);
             await sandbox.files.write(
               "/home/user/project/package.json",
               packageJson,
@@ -5313,7 +5662,7 @@ const data = await res.json();`;
               "/home/user/project/tsconfig.json",
               tsconfigJson,
             );
-            for (const file of validatedFiles) {
+            for (const file of useClientFixedFiles) {
               await sandbox.files.write(
                 `/home/user/project/${file.path}`,
                 file.content,
@@ -5340,12 +5689,12 @@ const data = await res.json();`;
               if (sandbox) {
                 try { await sandbox.kill(); } catch { /* ignore */ }
               }
-              return { files: validatedFiles, sandboxId: null };
+              return { files: useClientFixedFiles, sandboxId: null };
             }
             console.log(`[E2B Typecheck] npm install completed in ${Date.now() - installStart}ms.`);
 
             // 5. Repair loop: tsc → parse errors → repair → rewrite → tsc
-            let workingFiles = validatedFiles;
+            let workingFiles = useClientFixedFiles;
             let workingDeps = dependencies;
 
             for (
@@ -5450,7 +5799,7 @@ const data = await res.json();`;
                 // ignore
               }
             }
-            return { files: validatedFiles, sandboxId: null };
+            return { files: useClientFixedFiles, sandboxId: null };
           }
         },
       );

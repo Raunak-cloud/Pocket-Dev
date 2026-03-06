@@ -104,6 +104,12 @@ ENGINEERING CONTRACT
 - Do not use @apply in generated CSS; use explicit utility classes in markup.
 - If code requires a provider wrapper, ensure app/layout.tsx wraps {children} correctly.
 - Ensure all files parse and compile without TS/JS syntax errors.
+- CRITICAL — "use client" RULES: Any file that uses useState, useEffect, useRef, useCallback, useMemo, useReducer, useLayoutEffect, or any other React hook MUST start with "use client"; — no exceptions. Any file that imports from framer-motion, react-hot-toast, react-toastify, styled-jsx, lottie-react, react-spring, swiper, react-slick, reactflow, react-beautiful-dnd, react-dnd, or any other client-only animation/gesture/UI library MUST start with "use client";
+- CRITICAL — localStorage/window/document: NEVER access localStorage, sessionStorage, window, or document at the module top level or directly in the component body. All browser API access MUST be inside useEffect(() => { ... }, []) or inside event handler functions. Accessing them during SSR causes ReferenceError crashes.
+- CRITICAL — useSearchParams: Any component that calls useSearchParams() MUST be wrapped in a <Suspense fallback={...}> boundary in its parent. Extract the component that uses useSearchParams into a separate child component, then wrap it with <Suspense> in the parent page. This is required by Next.js 14+.
+- CRITICAL — env vars in client components: Never access process.env.SECRET_KEY or any non-NEXT_PUBLIC_ env var inside a client component ("use client"). Those are undefined in the browser. Use process.env.NEXT_PUBLIC_VARNAME for client-accessible values.
+- App Router only: Never export getStaticProps, getServerSideProps, getInitialProps, or getStaticPaths from any file in the app/ directory — these are Pages Router APIs and silently do nothing in App Router. Use async Server Components or Route Handlers instead.
+- Every app/**/page.tsx, app/**/layout.tsx, app/**/error.tsx, app/**/not-found.tsx, and app/**/loading.tsx MUST have a default export. Missing default exports cause immediate build errors.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NAVIGATION + RESPONSIVENESS CONTRACT
