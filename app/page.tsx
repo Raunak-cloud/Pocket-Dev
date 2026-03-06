@@ -5797,48 +5797,53 @@ ${pdfUrlList}
         {/* AI Feedback Modal */}
         {aiFeedback && (
           <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-x-0 bottom-0 z-50 flex items-end justify-center"
             onClick={() => setAiFeedback(null)}
           >
             <div
-              className="bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+              className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[50vh] flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="px-6 pt-6 pb-4 text-center">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-violet-500/30 mb-4">
-                  <svg
-                    className="w-6 h-6 text-violet-300"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.8}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M13 10V3L4 14h7v7l9-11h-7z"
-                    />
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-border-primary shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-violet-500/30">
+                    <svg className="w-4 h-4 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-text-primary leading-tight">
+                      {isEditing ? "What changed" : "What was built"}
+                    </h3>
+                    <p className="text-xs text-text-tertiary">Here's a summary of what the AI did</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAiFeedback(null)}
+                  className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                </div>
-                <h3 className="text-base font-bold text-text-primary mb-1">
-                  {isEditing ? "What changed" : "What was built"}
-                </h3>
-                <p className="text-xs text-text-tertiary mb-4">
-                  Here's a summary of what the AI did
-                </p>
-                <div className="text-left space-y-2.5 mb-5 max-h-72 overflow-y-auto pr-1">
-                  {aiFeedback
-                    .split("\n")
-                    .filter(Boolean)
-                    .map((line, i) => (
-                      <p
-                        key={i}
-                        className={`text-sm leading-relaxed ${line.startsWith("•") ? "text-text-primary font-medium" : "text-text-secondary"}`}
-                      >
-                        {line}
-                      </p>
-                    ))}
-                </div>
+                </button>
+              </div>
+              {/* Scrollable content */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2.5">
+                {aiFeedback
+                  .split("\n")
+                  .filter(Boolean)
+                  .map((line, i) => (
+                    <p
+                      key={i}
+                      className={`text-sm leading-relaxed ${line.startsWith("•") ? "text-text-primary font-medium" : "text-text-secondary"}`}
+                    >
+                      {line}
+                    </p>
+                  ))}
+              </div>
+              {/* Footer */}
+              <div className="px-6 pb-5 pt-3 shrink-0 border-t border-border-primary">
                 <button
                   onClick={() => setAiFeedback(null)}
                   className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium transition"
