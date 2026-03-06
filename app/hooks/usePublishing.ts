@@ -55,7 +55,7 @@ export function usePublishing({
           files: project.files,
           dependencies: project.dependencies,
           projectId: currentProjectId,
-          title: generationPrompt || "Mato App",
+          title: generationPrompt || "Danphe App",
         }),
       });
 

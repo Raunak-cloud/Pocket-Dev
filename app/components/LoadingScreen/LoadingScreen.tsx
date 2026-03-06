@@ -36,7 +36,7 @@ export default function LoadingScreen() {
           </div>
         </div>
 
-        <h1 className="text-2xl font-bold text-text-primary mb-2">Mato</h1>
+        <h1 className="text-2xl font-bold text-text-primary mb-2">Danphe</h1>
         <p className="text-text-tertiary">Initializing...</p>
       </div>
     </div>

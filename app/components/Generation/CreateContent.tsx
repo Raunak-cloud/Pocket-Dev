@@ -208,7 +208,7 @@ export default function CreateContent({
             <Logo size={56} animate />
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold text-text-primary mb-3 tracking-tight">
-            Mato
+            Danphe
           </h1>
           <p className="text-lg text-text-tertiary max-w-md mx-auto mb-6">
             Describe your app and watch it come to life
@@ -685,13 +685,33 @@ export default function CreateContent({
       </form>
 
       {showCustomApisPanel && (
-        <div className="w-full max-w-2xl mt-3">
-          <CustomAPIsSection
-            projectId=""
-            apis={pendingCustomApis}
-            onChange={onPendingCustomApisChange}
-            pendingMode
-          />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setShowCustomApisPanel(false)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div
+            className="relative z-10 w-full max-w-2xl bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border-primary">
+              <h2 className="text-base font-semibold text-text-primary">API Integrations</h2>
+              <button
+                type="button"
+                onClick={() => setShowCustomApisPanel(false)}
+                className="p-1.5 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-5 max-h-[70vh] overflow-y-auto">
+              <CustomAPIsSection
+                projectId=""
+                apis={pendingCustomApis}
+                onChange={onPendingCustomApisChange}
+                pendingMode
+              />
+            </div>
+          </div>
         </div>
       )}
 

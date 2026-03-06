@@ -22,7 +22,7 @@ function SignInContent() {
   return (
     <div className="w-full max-w-sm space-y-4">
       <div className="text-center mb-8">
-        <h1 className="text-2xl font-semibold text-text-primary">Sign in to Mato</h1>
+        <h1 className="text-2xl font-semibold text-text-primary">Sign in to Danphe</h1>
         <p className="text-sm text-text-tertiary mt-1">Choose a provider to continue</p>
       </div>
 

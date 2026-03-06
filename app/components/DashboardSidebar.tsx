@@ -67,10 +67,10 @@ export default function DashboardSidebar({
           {!isCollapsed && (
             <div>
               <span className="font-bold text-text-primary text-base tracking-tight">
-                Mato
+                Danphe
               </span>
               <span className="block text-[10px] text-text-muted font-medium -mt-0.5">
-                Build apps with Mato AI
+                Build apps with Danphe AI
               </span>
             </div>
           )}

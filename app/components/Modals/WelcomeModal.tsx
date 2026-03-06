@@ -216,7 +216,7 @@ export function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
             className="text-2xl font-bold text-text-primary mb-2"
             style={{ animation: "welcome-text-in 0.5s ease-out 0.3s both" }}
           >
-            Welcome to Mato!
+            Welcome to Danphe!
           </h3>
           <p
             className="text-text-tertiary text-sm"

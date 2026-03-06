@@ -10,6 +10,6 @@ export const INNGEST_APP_ID = "mato";
 
 export const inngest = new Inngest({
   id: INNGEST_APP_ID,
-  name: "Mato",
+  name: "Danphe",
   eventKey: process.env.INNGEST_EVENT_KEY,
 });

@@ -13,12 +13,12 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Mato - AI App Generator",
+  title: "Danphe - AI App Generator",
   description: "Generate professional React applications with AI. Describe your app and watch it come to life.",
   keywords: ["AI", "React", "App Generator", "Code Generator", "Web Development"],
-  authors: [{ name: "Mato" }],
+  authors: [{ name: "Danphe" }],
   openGraph: {
-    title: "Mato - AI App Generator",
+    title: "Danphe - AI App Generator",
     description: "Generate professional React applications with AI",
     type: "website",
   },
