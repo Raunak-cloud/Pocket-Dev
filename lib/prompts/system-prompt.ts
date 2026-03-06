@@ -115,7 +115,8 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Mobile menu links must be in a dedicated vertical list container with clear spacing and 44px+ tap targets; no overlap with hero headlines/images.
 - Mobile menu must have a dedicated header row (brand left, close button right) with fixed height and bottom border; menu links must start below this header with explicit top spacing.
 - Brand lockup in mobile header must not wrap into multiple lines or collide with icons; use constrained width with truncate/ellipsis and keep logo/icon + text aligned on one row.
-- Ensure an obvious close action (X button) and lock background scroll while menu is open (restore scroll on close).
+- CRITICAL: The mobile menu MUST always contain a visible X (close) button. Implement it as: a <button> with onClick={() => setIsMenuOpen(false)} rendered in the top-right of the menu overlay. This button must ALWAYS be present — never omit it. Without it users cannot close the menu.
+- Lock background scroll while menu is open (document.body.style.overflow = 'hidden') and restore it on close (document.body.style.overflow = '').
 - If navbar overlays hero images/videos/gradients, it must use a readable surface (semi-opaque background or backdrop blur + border/shadow) and explicit high-contrast nav text/links on both desktop and mobile.
 - Route-aware contrast is mandatory: define explicit navbar states for default, scrolled, menu-open, and non-home-route. Do NOT use one global text color for all states.
 - On non-home routes, navbar must default to a solid readable surface with high-contrast brand/link colors (never transparent-over-light with white text).

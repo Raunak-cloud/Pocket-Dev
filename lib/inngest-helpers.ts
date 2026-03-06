@@ -31,6 +31,7 @@ interface GenerateCodeResult {
   originalPrompt?: string;
   detectedTheme?: SiteTheme;
   sandboxId?: string;
+  aiFeedback?: string | null;
 }
 
 /**
@@ -182,6 +183,7 @@ export async function generateCodeWithInngest(
     previousImageUrls?: string[];
   },
   customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
+  userInstruction?: string,
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -212,6 +214,7 @@ export async function generateCodeWithInngest(
     projectType,
     imageOptions,
     customApis,
+    userInstruction,
   );
 
   onProgress?.("[0/9] Generation started. Waiting for first update...");

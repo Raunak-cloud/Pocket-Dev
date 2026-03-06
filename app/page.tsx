@@ -350,6 +350,7 @@ function ReactGeneratorContent() {
   >(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<
     "mobile" | "tablet" | "desktop"
   >("desktop");
@@ -2514,6 +2515,7 @@ ${schemaContext}
         customApis.length > 0
           ? customApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
           : undefined,
+        editPrompt.trim() || undefined,
       );
 
       setEditProgressMessages((prev) => [
@@ -2558,6 +2560,7 @@ ${schemaContext}
           console.error("Error updating project:", saveError);
         }
       }
+      if (result.aiFeedback) setAiFeedback(result.aiFeedback);
       clearActiveGenerationSession();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Edit failed");
@@ -2817,6 +2820,7 @@ ${pdfUrlList}
 
       setProgressMessages((prev) => [...prev, "Ready to preview!"]);
       setStatus("success");
+      if (result.aiFeedback) setAiFeedback(result.aiFeedback);
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
       clearActiveGenerationSession();
     } catch (err) {
@@ -5770,6 +5774,36 @@ ${pdfUrlList}
                   />
                 </svg>
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* AI Feedback Modal */}
+        {aiFeedback && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setAiFeedback(null)}>
+            <div className="bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              <div className="px-6 pt-6 pb-4 text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-violet-500/30 mb-4">
+                  <svg className="w-6 h-6 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-bold text-text-primary mb-1">
+                  {isEditing ? "What changed" : "What was built"}
+                </h3>
+                <p className="text-xs text-text-tertiary mb-4">Here's a summary of what the AI did</p>
+                <div className="text-left space-y-2.5 mb-5 max-h-80 overflow-y-auto">
+                  {aiFeedback.split("\n").filter(Boolean).map((line, i) => (
+                    <p key={i} className="text-sm text-text-secondary leading-relaxed">{line}</p>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setAiFeedback(null)}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium transition"
+                >
+                  Got it
+                </button>
+              </div>
             </div>
           </div>
         )}

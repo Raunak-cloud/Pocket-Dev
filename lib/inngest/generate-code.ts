@@ -3079,18 +3079,18 @@ function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue[] {
 
     // Detect mobile menu with no explicit close (X) button inside the overlay
     const hasCloseButtonInOverlay = navFiles.some((f) => {
-      // Must have: a button that calls close/setIsMenuOpen(false) AND an X icon inside or near the menu panel
-      const hasCloseCall =
-        /setIsMenuOpen\s*\(\s*false\s*\)|setMenuOpen\s*\(\s*false\s*\)|closeMenu\s*\(|onClose\s*\(/.test(
+      // Must have a button with setIsMenuOpen(false) — NOT just a toggle — AND an X icon
+      const hasExplicitCloseCall =
+        /setIsMenuOpen\s*\(\s*false\s*\)|setMenuOpen\s*\(\s*false\s*\)|setIsOpen\s*\(\s*false\s*\)|closeMenu\s*\(\s*\)|handleClose\s*\(\s*\)/.test(
           f.content,
         );
       const hasXIcon =
-        /<X\s|<XIcon\s|lucide.*[^a-z]X[^a-z]|aria-label\s*=\s*["'](?:close|close menu|dismiss)["']/i.test(
+        /<X[\s/>]|<XIcon[\s/>]|"M6 18[Ll]18 6|"M6 18[Ll]12 12[Ll]18 6|aria-label\s*=\s*["'](?:close|close menu|dismiss)["']|M18 6L6 18M6 6l12 12/i.test(
           f.content,
         );
       const usesSheetOrDrawer =
         /<(?:Sheet|SheetContent|Drawer|DrawerContent)\b/.test(f.content);
-      return (hasCloseCall && hasXIcon) || usesSheetOrDrawer;
+      return (hasExplicitCloseCall && hasXIcon) || usesSheetOrDrawer;
     });
     if (hasMenuToggleLogic && !hasCloseButtonInOverlay) {
       issues.push({
@@ -4508,6 +4508,7 @@ export const generateCodeFunction = inngest.createFunction(
     const preserveExistingImages = (event.data as Record<string, unknown>)?.preserveExistingImages as boolean | undefined;
     const previousImageUrls = (event.data as Record<string, unknown>)?.previousImageUrls as string[] | undefined;
     const customApis = (event.data as Record<string, unknown>)?.customApis as Array<{ name: string; slug: string; baseUrl: string; description?: string | null }> | undefined;
+    const userInstruction = (event.data as Record<string, unknown>)?.userInstruction as string | undefined;
 
     try {
     const userProjectType = (event.data as Record<string, unknown>)?.projectType as "website" | "dashboard" | undefined;
@@ -5766,7 +5767,45 @@ const data = await res.json();`;
       return createdProject.id;
     });
 
-    // Step 9: Notify completion via API
+    // Step 9a: Generate AI feedback summary
+    const aiFeedback = await step.run("generate-feedback", async () => {
+      try {
+        const genAI = getGeminiClient();
+        const model = genAI.getGenerativeModel({
+          model: MODEL,
+          generationConfig: { maxOutputTokens: 400, temperature: 0.4 },
+        });
+
+        const fileList = Object.keys(filesWithImages)
+          .filter((f) => f.endsWith(".tsx") || f.endsWith(".ts"))
+          .map((f) =>
+            f
+              .replace(/^(src\/)?app\//, "")
+              .replace(/\/page\.(tsx|ts)$/, "")
+              .replace(/\.(tsx|ts)$/, ""),
+          )
+          .filter(
+            (f) =>
+              !["layout", "globals", "types", "utils", "middleware", "PocketText", "PocketAuth"].some((s) =>
+                f.includes(s),
+              ),
+          )
+          .slice(0, 15);
+
+        const feedbackPrompt = isEditRequest
+          ? `Edit instruction: "${(userInstruction || "").slice(0, 600)}"\nFiles modified: ${fileList.join(", ")}\n\nWrite a concise summary (150-300 words) of exactly what was changed. Use 4-5 bullet points, each 1-2 sentences. Start each with "• ". Be specific: mention components updated, UI changes, behavior changes, and any new features added. Write as if explaining to the user what the AI did for them.`
+          : `User prompt: "${prompt.slice(0, 600)}"\nGenerated pages/files: ${fileList.join(", ")}\n\nWrite a concise summary (150-300 words) of what was built. Use 5-6 bullet points, each 1-2 sentences. Start each with "• ". Cover: pages created, key UI sections, features implemented, design choices, and any integrations. Write as if explaining to the user what the AI built for them.`;
+
+        const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: feedbackPrompt }] }],
+        });
+        return result.response.text().trim();
+      } catch {
+        return null;
+      }
+    });
+
+    // Step 9b: Notify completion via API
     await step.run("notify-completion", async () => {
       await sendProgress(projectId, "[9/9] Finalizing your app...");
       const url = getInngestStatusApiUrl();
@@ -5791,6 +5830,7 @@ const data = await res.json();`;
             detectedTheme: detectedTheme,
             sandboxId: previewSandboxId,
             savedProjectId,
+            aiFeedback,
           },
         }),
       });
@@ -5820,6 +5860,7 @@ const data = await res.json();`;
       projectType: detectedProjectType,
       sandboxId: previewSandboxId,
       savedProjectId,
+      aiFeedback,
     };
 
     } catch (err) {
