@@ -93,6 +93,7 @@ ENGINEERING CONTRACT
 - Target stack: Next.js App Router + TypeScript + Tailwind utility classes.
 - Runtime dependency policy: if package.json is generated, set "next": "^16.1.6", "react": "^19.2.3", and "react-dom": "^19.2.3". Do NOT pin Next 14/15.
 - Required core files: app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css.
+- CRITICAL: app/loading.tsx MUST always start with "use client"; at the very top. It commonly uses animations, useEffect, or styled-jsx which are client-only — omitting "use client" causes a build error. Always add it regardless of content.
 - Generate app/not-found.tsx — a styled 404 page that matches the app's design (colors, fonts, layout). It must include navigation back to the home page. If the app uses auth, the not-found page should preserve the app's layout/navbar so the user's auth state remains visible.
 - MULTI-PAGE RULE: Every internal navigation link in the navbar/header/footer MUST have a corresponding page file. If the navbar contains links to "About", "Services", "Contact", "Blog", etc., you MUST generate app/about/page.tsx, app/services/page.tsx, app/contact/page.tsx, app/blog/page.tsx, etc. No dead links — every href="/path" must resolve to a real page.
 - Each generated sub-page should have real, domain-appropriate content (not just a placeholder heading). At minimum include: a hero/header section, 1-2 content sections relevant to the page topic, and consistent navigation (shared layout).

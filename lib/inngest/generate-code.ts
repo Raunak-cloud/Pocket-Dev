@@ -1683,7 +1683,9 @@ html, body {
   if (!fileMap.has("app/loading.tsx")) {
     files.push({
       path: "app/loading.tsx",
-      content: `export default function Loading() {
+      content: `"use client";
+
+export default function Loading() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       {/* Background effects */}

@@ -5792,9 +5792,9 @@ ${pdfUrlList}
                   {isEditing ? "What changed" : "What was built"}
                 </h3>
                 <p className="text-xs text-text-tertiary mb-4">Here's a summary of what the AI did</p>
-                <div className="text-left space-y-2.5 mb-5 max-h-80 overflow-y-auto">
+                <div className="text-left space-y-2.5 mb-5 max-h-72 overflow-y-auto pr-1">
                   {aiFeedback.split("\n").filter(Boolean).map((line, i) => (
-                    <p key={i} className="text-sm text-text-secondary leading-relaxed">{line}</p>
+                    <p key={i} className={`text-sm leading-relaxed ${line.startsWith("•") ? "text-text-primary font-medium" : "text-text-secondary"}`}>{line}</p>
                   ))}
                 </div>
                 <button
