@@ -109,6 +109,10 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         options: {
           redirectTo: callback,
           skipBrowserRedirect: true,
+          queryParams: {
+            // Force account picker on every sign-in for both Google and GitHub
+            prompt: "select_account",
+          },
         },
       });
       if (error) throw error;

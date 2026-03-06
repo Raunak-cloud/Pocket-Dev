@@ -295,9 +295,7 @@ function extractStableImageUrls(
     let tagMatch: RegExpExecArray | null = tagRe.exec(file.content);
     while (tagMatch) {
       const tag = tagMatch[0];
-      const srcMatch = tag.match(
-        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
-      );
+      const srcMatch = tag.match(/\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i);
       if (srcMatch) {
         const src = srcMatch[1].trim();
         if (
@@ -463,7 +461,9 @@ function ReactGeneratorContent() {
   >("website");
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [customApis, setCustomApis] = useState<CustomApiConfig[]>([]);
-  const [pendingCustomApis, setPendingCustomApis] = useState<CustomApiConfig[]>([]);
+  const [pendingCustomApis, setPendingCustomApis] = useState<CustomApiConfig[]>(
+    [],
+  );
   const [userStripeConnectStatus, setUserStripeConnectStatus] = useState<
     string | null
   >(null);
@@ -483,7 +483,10 @@ function ReactGeneratorContent() {
   const persistActiveGenerationSession = useCallback(
     (session: ActiveGenerationSession) => {
       if (typeof window === "undefined") return;
-      localStorage.setItem(ACTIVE_GENERATION_STORAGE_KEY, JSON.stringify(session));
+      localStorage.setItem(
+        ACTIVE_GENERATION_STORAGE_KEY,
+        JSON.stringify(session),
+      );
     },
     [],
   );
@@ -515,7 +518,9 @@ function ReactGeneratorContent() {
           backendEnabled: parsed.backendEnabled === true,
           paymentsEnabled: parsed.paymentsEnabled === true,
           startedAt:
-            typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),
+            typeof parsed.startedAt === "number"
+              ? parsed.startedAt
+              : Date.now(),
           projectId:
             typeof parsed.projectId === "string" ? parsed.projectId : null,
         };
@@ -944,8 +949,8 @@ function ReactGeneratorContent() {
       restoreLastProjectCheckedRef.current = false;
       loadSavedProjects();
     } else {
-      // Keep active generation session in localStorage during auth rehydration.
-      // Clearing here can race with refresh and prevent resume in production.
+      // User signed out — clear persisted project so it doesn't auto-restore on next sign-in.
+      clearLastOpenedProjectId();
       setSavedProjects([]);
     }
   }, [authLoading, user]);
@@ -983,21 +988,19 @@ function ReactGeneratorContent() {
       }
 
       try {
-        const result = await waitForInngestCompletion<ReactProject & {
-          savedProjectId?: string;
-          sandboxId?: string;
-        }>(
-          session.runId,
-          "generate.completed",
-          (message) => {
-            if (cancelled) return;
-            if (session.mode === "edit") {
-              setEditProgressMessages((prev) => [...prev, message]);
-            } else {
-              setProgressMessages((prev) => [...prev, message]);
-            }
-          },
-        );
+        const result = await waitForInngestCompletion<
+          ReactProject & {
+            savedProjectId?: string;
+            sandboxId?: string;
+          }
+        >(session.runId, "generate.completed", (message) => {
+          if (cancelled) return;
+          if (session.mode === "edit") {
+            setEditProgressMessages((prev) => [...prev, message]);
+          } else {
+            setProgressMessages((prev) => [...prev, message]);
+          }
+        });
 
         if (cancelled) return;
 
@@ -1007,7 +1010,10 @@ function ReactGeneratorContent() {
         });
         const projectWithInitialPrompt =
           session.mode === "generation"
-            ? withInitialGenerationPrompt(projectWithIntegrations, session.prompt)
+            ? withInitialGenerationPrompt(
+                projectWithIntegrations,
+                session.prompt,
+              )
             : projectWithIntegrations;
 
         setProject(projectWithInitialPrompt);
@@ -1672,7 +1678,7 @@ function ReactGeneratorContent() {
     loadEditHistory(savedProject.id, savedProject.config);
     // Load custom APIs for this project
     fetch(`/api/user-apis?projectId=${savedProject.id}`)
-      .then((r) => r.ok ? r.json() : { apis: [] })
+      .then((r) => (r.ok ? r.json() : { apis: [] }))
       .then((data) => setCustomApis(data.apis ?? []))
       .catch(() => setCustomApis([]));
   };
@@ -1926,9 +1932,7 @@ function ReactGeneratorContent() {
 
     // Cancel the Inngest job if it's running
     if (projectIdToCancel) {
-      console.log(
-        `[App] Cancelling generation job: ${projectIdToCancel}`,
-      );
+      console.log(`[App] Cancelling generation job: ${projectIdToCancel}`);
       await cancelInngestRun(projectIdToCancel, "manual");
     }
   };
@@ -1985,7 +1989,11 @@ function ReactGeneratorContent() {
         pendingCustomApis.length * CUSTOM_API_INTEGRATION_COST,
     );
   const getEditAppCost = () =>
-    roundToken(BASE_EDIT_APP_COST + getEditBackendAddOnCosts().total + customApis.length * CUSTOM_API_INTEGRATION_COST);
+    roundToken(
+      BASE_EDIT_APP_COST +
+        getEditBackendAddOnCosts().total +
+        customApis.length * CUSTOM_API_INTEGRATION_COST,
+    );
 
   const confirmGenerationStart = async () => {
     const generationCost = getGenerationAppCost();
@@ -2513,7 +2521,12 @@ ${schemaContext}
           previousImageUrls,
         },
         customApis.length > 0
-          ? customApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
+          ? customApis.map((a) => ({
+              name: a.name,
+              slug: a.slug,
+              baseUrl: a.baseUrl,
+              description: a.description,
+            }))
           : undefined,
         editPrompt.trim() || undefined,
       );
@@ -2698,7 +2711,12 @@ ${pdfUrlList}
         generationProjectType,
         undefined, // imageOptions
         pendingCustomApis.length > 0
-          ? pendingCustomApis.map((a) => ({ name: a.name, slug: a.slug, baseUrl: a.baseUrl, description: a.description }))
+          ? pendingCustomApis.map((a) => ({
+              name: a.name,
+              slug: a.slug,
+              baseUrl: a.baseUrl,
+              description: a.description,
+            }))
           : undefined,
       );
 
@@ -3916,19 +3934,19 @@ ${pdfUrlList}
                                     <path
                                       strokeLinecap="round"
                                       strokeLinejoin="round"
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                                  />
-                                </svg>
-                                <span className="sr-only">Publish</span>
-                              </>
-                            )}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => setShowDomainModal(true)}
-                            aria-label="Published"
-                            className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
-                          >
+                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                                    />
+                                  </svg>
+                                  <span className="sr-only">Publish</span>
+                                </>
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setShowDomainModal(true)}
+                              aria-label="Published"
+                              className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                            >
                               <svg
                                 className="w-3.5 h-3.5"
                                 fill="none"
@@ -3939,21 +3957,21 @@ ${pdfUrlList}
                                 <path
                                   strokeLinecap="round"
                                   strokeLinejoin="round"
-                                d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                              />
-                            </svg>
-                            <span className="sr-only">Published</span>
-                          </button>
-                        )
-                      ) : (
-                        <button
-                          onClick={publishProject}
-                          disabled={isPublishing || !currentProjectId}
-                          aria-label="Publish"
-                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {isPublishing ? (
-                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                  d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                                />
+                              </svg>
+                              <span className="sr-only">Published</span>
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            onClick={publishProject}
+                            disabled={isPublishing || !currentProjectId}
+                            aria-label="Publish"
+                            className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isPublishing ? (
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                             ) : (
                               <>
                                 <svg
@@ -4281,15 +4299,15 @@ ${pdfUrlList}
                             stroke="currentColor"
                             strokeWidth={2}
                           >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                          />
-                        </svg>
-                        Published
-                      </button>
-                    )
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
+                            />
+                          </svg>
+                          Published
+                        </button>
+                      )
                     ) : (
                       <button
                         onClick={publishProject}
@@ -4815,9 +4833,7 @@ ${pdfUrlList}
               {/* Device Frame Container */}
               <div
                 className={`h-full flex items-center justify-center ${
-                  isMobileViewport
-                    ? "p-0"
-                    : "p-2 sm:p-4"
+                  isMobileViewport ? "p-0" : "p-2 sm:p-4"
                 } ${
                   previewMode === "desktop" || isMobileViewport
                     ? ""
@@ -4829,10 +4845,10 @@ ${pdfUrlList}
                     isMobileViewport
                       ? "w-full"
                       : previewMode === "mobile"
-                      ? "w-full max-w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
-                      : previewMode === "tablet"
-                        ? "w-full max-w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
-                        : "w-full"
+                        ? "w-full max-w-[375px] rounded-[2rem] border-[8px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
+                        : previewMode === "tablet"
+                          ? "w-full max-w-[768px] rounded-[1.5rem] border-[6px] border-slate-700 shadow-2xl shadow-black/60 overflow-hidden"
+                          : "w-full"
                   }`}
                 >
                   {/* Device Notch for Mobile */}
@@ -5780,22 +5796,48 @@ ${pdfUrlList}
 
         {/* AI Feedback Modal */}
         {aiFeedback && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setAiFeedback(null)}>
-            <div className="bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setAiFeedback(null)}
+          >
+            <div
+              className="bg-bg-secondary border border-border-primary rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="px-6 pt-6 pb-4 text-center">
                 <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-violet-500/30 mb-4">
-                  <svg className="w-6 h-6 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  <svg
+                    className="w-6 h-6 text-violet-300"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
                   </svg>
                 </div>
                 <h3 className="text-base font-bold text-text-primary mb-1">
                   {isEditing ? "What changed" : "What was built"}
                 </h3>
-                <p className="text-xs text-text-tertiary mb-4">Here's a summary of what the AI did</p>
+                <p className="text-xs text-text-tertiary mb-4">
+                  Here's a summary of what the AI did
+                </p>
                 <div className="text-left space-y-2.5 mb-5 max-h-72 overflow-y-auto pr-1">
-                  {aiFeedback.split("\n").filter(Boolean).map((line, i) => (
-                    <p key={i} className={`text-sm leading-relaxed ${line.startsWith("•") ? "text-text-primary font-medium" : "text-text-secondary"}`}>{line}</p>
-                  ))}
+                  {aiFeedback
+                    .split("\n")
+                    .filter(Boolean)
+                    .map((line, i) => (
+                      <p
+                        key={i}
+                        className={`text-sm leading-relaxed ${line.startsWith("•") ? "text-text-primary font-medium" : "text-text-secondary"}`}
+                      >
+                        {line}
+                      </p>
+                    ))}
                 </div>
                 <button
                   onClick={() => setAiFeedback(null)}
@@ -5843,9 +5885,12 @@ ${pdfUrlList}
             const baseCost = isGeneration
               ? BASE_GENERATION_APP_COST
               : BASE_EDIT_APP_COST;
-            const apiCount = isGeneration ? pendingCustomApis.length : customApis.length;
+            const apiCount = isGeneration
+              ? pendingCustomApis.length
+              : customApis.length;
             const apiCost = roundToken(apiCount * CUSTOM_API_INTEGRATION_COST);
-            const totalCost = baseCost + authCost + databaseCost + paymentCost + apiCost;
+            const totalCost =
+              baseCost + authCost + databaseCost + paymentCost + apiCost;
             const appBalance = userData?.appTokens || 0;
 
             const handleConfirm = () => {
@@ -6065,8 +6110,8 @@ ${pdfUrlList}
                 </h3>
                 <p className="text-text-tertiary text-sm">
                   {showCancelConfirm === "generation"
-                    ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost."
-                    : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost."}
+                    ? "The AI is still generating your app. Are you sure you want to cancel? Progress will be lost and tokens wont be refunder."
+                    : "The AI is still applying your edits. Are you sure you want to cancel? Changes will be lost and tokens wont be refunded."}
                 </p>
                 {showCancelConfirm === "edit" &&
                   Date.now() - editStartTimeRef.current < 10000 && (
@@ -6558,7 +6603,9 @@ ${pdfUrlList}
   };
 
   const isGenerationFullScreenProgress =
-    activeSection === "create" && status === "loading" && !isGenerationMinimized;
+    activeSection === "create" &&
+    status === "loading" &&
+    !isGenerationMinimized;
 
   // Show loading screen while auth state is being resolved
   if (authLoading) {
@@ -6669,7 +6716,7 @@ ${pdfUrlList}
               ? "overflow-hidden"
               : isGenerationFullScreenProgress
                 ? "items-stretch justify-stretch px-0 py-0 sm:px-2 sm:py-2 overflow-hidden"
-              : "items-center justify-center px-4 py-12"
+                : "items-center justify-center px-4 py-12"
           }`}
         >
           {renderContent()}
