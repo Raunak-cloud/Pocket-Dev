@@ -24,7 +24,7 @@ type AuthClientContext = {
   user: AuthClientUser | null;
   isLoaded: boolean;
   isSignedIn: boolean;
-  openSignIn: (opts?: { redirectUrl?: string }) => Promise<void>;
+  openSignIn: (opts?: { redirectUrl?: string; provider?: "google" | "github" }) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -96,15 +96,16 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   }, [supabase]);
 
   const openSignIn = useCallback(
-    async (opts?: { redirectUrl?: string }) => {
+    async (opts?: { redirectUrl?: string; provider?: "google" | "github" }) => {
       const redirectUrl = opts?.redirectUrl || "/";
+      const provider = opts?.provider ?? "google";
       const origin = resolveAuthRedirectOrigin();
       const callback = `${origin}/auth/callback?next=${encodeURIComponent(
         redirectUrl,
       )}`;
 
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
+        provider,
         options: {
           redirectTo: callback,
           skipBrowserRedirect: true,
