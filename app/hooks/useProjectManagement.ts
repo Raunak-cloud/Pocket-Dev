@@ -36,7 +36,7 @@ export function useProjectManagement(props: UseProjectManagementProps) {
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
 
-  const saveProjectToFirestore = async (
+  const saveProjectToSupabase = async (
     projectData: ReactProject,
     projectPrompt: string,
     authIntegrationCost: number = 0,
@@ -82,7 +82,7 @@ export function useProjectManagement(props: UseProjectManagementProps) {
     }
   };
 
-  const updateProjectInFirestore = async (
+  const updateProjectInSupabase = async (
     projectId: string,
     projectData: ReactProject,
   ): Promise<void> => {
@@ -172,8 +172,8 @@ export function useProjectManagement(props: UseProjectManagementProps) {
     savedProjects,
     loadingProjects,
     setSavedProjects,
-    saveProjectToFirestore,
-    updateProjectInFirestore,
+    saveProjectToSupabase,
+    updateProjectInSupabase,
     loadSavedProjects,
     deleteProject,
   };

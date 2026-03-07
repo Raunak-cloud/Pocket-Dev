@@ -11,7 +11,7 @@ datasource db {
   directUrl = env("DIRECT_DATABASE_URL")
 }
 
-// User model - migrated from Firebase Auth + Firestore users collection
+// User model
 model User {
   id                  String              @id @default(cuid())
   authUserId          String              @unique @map("authUserId") // Supabase auth user ID
@@ -43,7 +43,7 @@ model User {
   @@map("users")
 }
 
-// Project model - migrated from Firestore projects collection
+// Project model
 model Project {
   id              String    @id @default(cuid())
   userId          String
@@ -118,7 +118,7 @@ model SupabaseProjectPool {
   @@map("supabase_project_pool")
 }
 
-// Support Ticket model - migrated from Firestore supportTickets collection
+// Support Ticket model
 model SupportTicket {
   id                      String    @id @default(cuid())
   userId                  String
@@ -146,7 +146,7 @@ model SupportTicket {
   @@map("support_tickets")
 }
 
-// Token Transaction model - migrated from Firestore tokenTransactions collection
+// Token Transaction model
 model TokenTransaction {
   id            String    @id @default(cuid())
   userId        String

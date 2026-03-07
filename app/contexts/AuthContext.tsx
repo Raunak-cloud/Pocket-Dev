@@ -156,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Create a compatible user object for components expecting Firebase user
+  // Create a compatible user object for components expecting a user
   const compatibleUser: CompatibleUser | null = authUser ? {
     uid: authUser.id,
     email: authUser.email || null,

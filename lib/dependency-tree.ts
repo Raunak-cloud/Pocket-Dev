@@ -157,7 +157,7 @@ export function inferTargetFiles(
   return candidates;
 }
 
-/** Serialise tree to a compact JSON string for storage (e.g., Firestore config). */
+/** Serialise tree to a compact JSON string for storage (e.g., project config). */
 export function serializeDependencyTree(tree: ProjectDependencyTree): string {
   return JSON.stringify(tree);
 }

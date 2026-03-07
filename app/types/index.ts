@@ -25,7 +25,7 @@ export interface UploadedFile {
   name: string;
   type: string;
   dataUrl: string;
-  downloadUrl?: string; // Firebase Storage URL
+  downloadUrl?: string; // Storage URL
 }
 
 export interface SavedProject {

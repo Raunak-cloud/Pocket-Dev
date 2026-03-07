@@ -11,6 +11,25 @@ function toSlug(name: string): string {
     .slice(0, 64);
 }
 
+function sanitizeSingleLineText(value: unknown, maxLen = 200): string {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/```/g, "` ` `")
+    .replace(/\r?\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+function sanitizeHeaderName(value: unknown): string {
+  return sanitizeSingleLineText(value, 80).replace(/[^A-Za-z0-9-]/g, "");
+}
+
+function sanitizeQueryParamName(value: unknown): string {
+  return sanitizeSingleLineText(value, 80).replace(/[^A-Za-z0-9_.-]/g, "");
+}
+
 /** GET /api/user-apis?projectId=xxx — list APIs for a project (no apiKey in response) */
 export async function GET(request: NextRequest) {
   try {
@@ -68,8 +87,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { projectId, name, baseUrl, authType, authHeaderName, authParamName, apiKey, description } = body;
+    const body = (await request.json()) as Record<string, unknown>;
+    const projectId =
+      typeof body.projectId === "string" ? body.projectId.trim() : "";
+    const name = sanitizeSingleLineText(body.name, 120);
+    const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+    const authType =
+      typeof body.authType === "string" ? body.authType.trim() : "";
+    const authHeaderName = sanitizeHeaderName(body.authHeaderName);
+    const authParamName = sanitizeQueryParamName(body.authParamName);
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const description = sanitizeSingleLineText(body.description, 600);
 
     if (!projectId || !name || !baseUrl || !authType) {
       return NextResponse.json({ error: "projectId, name, baseUrl, and authType are required" }, { status: 400 });
@@ -108,7 +136,8 @@ export async function POST(request: NextRequest) {
       slug = `${slug}-${i}`;
     }
 
-    const encryptedKey = apiKey && authType !== "none" ? encryptApiKey(apiKey) : null;
+    const encryptedKey =
+      apiKey && authType !== "none" ? encryptApiKey(apiKey) : null;
 
     const api = await prisma.customApi.create({
       data: {
@@ -150,8 +179,18 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { id, projectId, name, baseUrl, authType, authHeaderName, authParamName, apiKey, description } = body;
+    const body = (await request.json()) as Record<string, unknown>;
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const projectId =
+      typeof body.projectId === "string" ? body.projectId.trim() : "";
+    const name = sanitizeSingleLineText(body.name, 120);
+    const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+    const authType =
+      typeof body.authType === "string" ? body.authType.trim() : "";
+    const authHeaderName = sanitizeHeaderName(body.authHeaderName);
+    const authParamName = sanitizeQueryParamName(body.authParamName);
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    const description = sanitizeSingleLineText(body.description, 600);
 
     if (!id || !projectId || !name || !baseUrl || !authType) {
       return NextResponse.json({ error: "id, projectId, name, baseUrl, and authType are required" }, { status: 400 });
