@@ -38,7 +38,7 @@ export function TokenPurchaseModal({
   const tokensToReceive = amount;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-bg-secondary border border-border-secondary rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col my-auto">
         {/* Modal Header */}
         <div className="relative px-6 pt-8 pb-4 text-center flex-shrink-0">

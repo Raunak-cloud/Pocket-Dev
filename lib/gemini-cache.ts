@@ -12,8 +12,8 @@ import { GoogleAICacheManager } from "@google/generative-ai/server";
 
 // Use the stable model prefix required by the caching API.
 // We try the project's primary model first; on failure we fall back to 1.5-flash.
-const CACHE_MODEL_PRIMARY = "models/gemini-2.0-flash";
-const CACHE_MODEL_FALLBACK = "models/gemini-1.5-flash";
+const CACHE_MODEL_PRIMARY = "models/gemini-3-flash-preview";
+const CACHE_MODEL_FALLBACK = "models/gemini-3-flash-preview";
 const CACHE_TTL_SECONDS = 3600; // 1 hour
 // Skip caching for tiny projects — the overhead isn't worth it.
 const MIN_CACHE_CHARS = 8_000;
@@ -24,7 +24,9 @@ function getCacheManager(): GoogleAICacheManager {
   return new GoogleAICacheManager(apiKey);
 }
 
-function buildFileContext(files: Array<{ path: string; content: string }>): string {
+function buildFileContext(
+  files: Array<{ path: string; content: string }>,
+): string {
   return files.map((f) => `=== FILE: ${f.path} ===\n${f.content}`).join("\n\n");
 }
 
@@ -78,17 +80,31 @@ export async function createProjectCache(
 
     // Try primary model first, fall back to 1.5-flash
     try {
-      const name = await tryCreateCache(cacheManager, CACHE_MODEL_PRIMARY, fileContext);
+      const name = await tryCreateCache(
+        cacheManager,
+        CACHE_MODEL_PRIMARY,
+        fileContext,
+      );
       console.log(`[GeminiCache] Created (${CACHE_MODEL_PRIMARY}): ${name}`);
       return name;
     } catch (primaryErr) {
-      console.warn(`[GeminiCache] Primary model failed, trying fallback:`, primaryErr);
-      const name = await tryCreateCache(cacheManager, CACHE_MODEL_FALLBACK, fileContext);
+      console.warn(
+        `[GeminiCache] Primary model failed, trying fallback:`,
+        primaryErr,
+      );
+      const name = await tryCreateCache(
+        cacheManager,
+        CACHE_MODEL_FALLBACK,
+        fileContext,
+      );
       console.log(`[GeminiCache] Created (${CACHE_MODEL_FALLBACK}): ${name}`);
       return name;
     }
   } catch (err) {
-    console.warn("[GeminiCache] Cache creation failed — will use standard generation:", err);
+    console.warn(
+      "[GeminiCache] Cache creation failed — will use standard generation:",
+      err,
+    );
     return null;
   }
 }

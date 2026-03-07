@@ -276,8 +276,8 @@ export default function AnalyticsContent() {
   const revenueData = overview.revenue;
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-[1400px] mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="max-w-[1400px] mx-auto w-full min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -322,7 +322,7 @@ export default function AnalyticsContent() {
         </div>
 
         {/* Stat Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <MetricCard
             label="Visitors"
             value={formatCompact(overview.totalVisitors)}
@@ -351,19 +351,21 @@ export default function AnalyticsContent() {
             icon={<IconZap />}
             color="amber"
           />
-          <MetricCard
-            label={`Revenue (${revenueData.selectedYear})`}
-            value={formatCurrency(revenueData.yearlyTotal)}
-            icon={<IconDollar />}
-            color="green"
-            sparkData={revenueData.monthly.map((m) => m.revenue)}
-          />
+          <div className="col-span-2 lg:col-span-1 min-w-0">
+            <MetricCard
+              label={`Revenue (${revenueData.selectedYear})`}
+              value={formatCurrency(revenueData.yearlyTotal)}
+              icon={<IconDollar />}
+              color="green"
+              sparkData={revenueData.monthly.map((m) => m.revenue)}
+            />
+          </div>
         </div>
 
         {/* Traffic Chart */}
         {overview.daily.length > 0 && (
           <ChartCard title="Traffic Overview" subtitle="Visitors and pageviews over time">
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="99%" height={260}>
               <AreaChart data={overview.daily}>
                 <defs>
                   <linearGradient id="fillPageviews" x1="0" y1="0" x2="0" y2="1">
@@ -378,7 +380,7 @@ export default function AnalyticsContent() {
                 <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} vertical={false} />
                 <XAxis
                   dataKey="date"
-                  tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                  tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                   tickFormatter={(v: string) => {
                     const d = new Date(v + "T00:00:00");
                     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -386,12 +388,14 @@ export default function AnalyticsContent() {
                   axisLine={false}
                   tickLine={false}
                   dy={8}
+                  interval="preserveStartEnd"
+                  minTickGap={40}
                 />
                 <YAxis
-                  tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                  tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
-                  width={40}
+                  width={36}
                   tickFormatter={(v: number) => formatCompact(v)}
                 />
                 <Tooltip
@@ -449,20 +453,24 @@ export default function AnalyticsContent() {
               </select>
             }
           >
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={revenueData.monthly} barGap={2}>
+            <ResponsiveContainer width="99%" height={220}>
+              <BarChart data={revenueData.monthly} barGap={2} margin={{ left: -10, right: 4, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} vertical={false} />
                 <XAxis
                   dataKey="month"
-                  tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                  tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
+                  angle={-35}
+                  textAnchor="end"
+                  dy={4}
+                  interval={0}
                 />
                 <YAxis
-                  tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                  tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
-                  width={50}
+                  width={42}
                   tickFormatter={(v: number) => `$${v}`}
                 />
                 <Tooltip
@@ -487,21 +495,23 @@ export default function AnalyticsContent() {
           {/* Token Usage */}
           {overview.tokenUsage.length > 0 && (
             <ChartCard title="Token Usage" subtitle="Credits earned vs tokens spent">
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={overview.tokenUsage} barGap={2}>
+              <ResponsiveContainer width="99%" height={220}>
+                <BarChart data={overview.tokenUsage} barGap={2} margin={{ left: -10, right: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} vertical={false} />
                   <XAxis
                     dataKey="date"
-                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                    tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                     axisLine={false}
                     tickLine={false}
                     tickFormatter={(v: string) => v.slice(5)}
+                    interval="preserveStartEnd"
+                    minTickGap={36}
                   />
                   <YAxis
-                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                    tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                     axisLine={false}
                     tickLine={false}
-                    width={40}
+                    width={36}
                   />
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
@@ -592,7 +602,7 @@ function ChartCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-5">
+    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-5 overflow-hidden min-w-0">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-4 sm:mb-5">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
@@ -648,7 +658,7 @@ function MetricCard({
   const c = colorMap[color] || colorMap.indigo;
 
   return (
-    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-4 relative overflow-hidden">
+    <div className="bg-bg-secondary/50 border border-border-primary/30 rounded-2xl p-3 sm:p-4 relative overflow-hidden min-w-0 h-full">
       {/* Sparkline background */}
       {sparkData && sparkData.length > 2 && (
         <div className="absolute bottom-0 left-0 right-0 h-12 opacity-30">
@@ -789,7 +799,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
         <ChartCard title="Devices" subtitle="Visitor device breakdown">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
             <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="99%" height="100%">
                 <PieChart>
                   <Pie
                     data={detail.devices}
@@ -832,7 +842,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
         <ChartCard title="Browsers" subtitle="Browser distribution">
           <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
             <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="99%" height="100%">
                 <PieChart>
                   <Pie
                     data={detail.browsers}

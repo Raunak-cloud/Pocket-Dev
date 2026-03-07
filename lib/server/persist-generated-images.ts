@@ -77,10 +77,7 @@ export function resolveImageGenConfig(): ImageGenConfig {
       "prunaai/z-image-turbo") as ReplicateModelName,
     defaultWidth: parseInt(process.env.IMAGE_WIDTH || "1024", 10),
     defaultHeight: parseInt(process.env.IMAGE_HEIGHT || "1024", 10),
-    concurrencyLimit: parseInt(
-      process.env.IMAGE_CONCURRENCY_LIMIT || "4",
-      10,
-    ),
+    concurrencyLimit: parseInt(process.env.IMAGE_CONCURRENCY_LIMIT || "4", 10),
     enableLlmPromptEnhancement:
       process.env.DISABLE_LLM_PROMPT_ENHANCEMENT !== "true",
     maxRetries: parseInt(process.env.IMAGE_MAX_RETRIES || "5", 10),
@@ -189,7 +186,9 @@ function extractSurroundingContext(
   return content.slice(from, to);
 }
 
-export function collectImageReferences(files: GeneratedFile[]): ImageReference[] {
+export function collectImageReferences(
+  files: GeneratedFile[],
+): ImageReference[] {
   const refs: ImageReference[] = [];
   const seenSources = new Set<string>();
   const supabaseHost = getSupabaseHost();
@@ -203,12 +202,13 @@ export function collectImageReferences(files: GeneratedFile[]): ImageReference[]
     let tagMatch: RegExpExecArray | null = tagRe.exec(content);
     while (tagMatch) {
       const tag = tagMatch[0];
-      const srcMatch = tag.match(
-        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
-      );
+      const srcMatch = tag.match(/\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i);
       if (srcMatch) {
         const source = srcMatch[1].trim();
-        if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+        if (
+          shouldReplaceSource(source, supabaseHost) &&
+          !seenSources.has(source)
+        ) {
           seenSources.add(source);
           globalIndex++;
           const altMatch = tag.match(
@@ -235,7 +235,10 @@ export function collectImageReferences(files: GeneratedFile[]): ImageReference[]
     let cssMatch: RegExpExecArray | null = cssUrlRe.exec(content);
     while (cssMatch) {
       const source = cssMatch[1];
-      if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+      if (
+        shouldReplaceSource(source, supabaseHost) &&
+        !seenSources.has(source)
+      ) {
         seenSources.add(source);
         globalIndex++;
         refs.push({
@@ -281,7 +284,10 @@ export function collectImageReferences(files: GeneratedFile[]): ImageReference[]
     let urlMatch: RegExpExecArray | null = remoteUrlRe.exec(content);
     while (urlMatch) {
       const source = urlMatch[0].replace(/[),.;]+$/, "");
-      if (shouldReplaceSource(source, supabaseHost) && !seenSources.has(source)) {
+      if (
+        shouldReplaceSource(source, supabaseHost) &&
+        !seenSources.has(source)
+      ) {
         seenSources.add(source);
         globalIndex++;
         refs.push({
@@ -487,7 +493,7 @@ async function generateImagePromptsBatch(
   try {
     const gemini = new GoogleGenerativeAI(apiKey);
     const model = gemini.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-3-flash-preview",
       generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.7,
@@ -695,7 +701,9 @@ async function generateReplicateImage(
     prompt,
   };
 
-  console.log(`[Replicate API] Model: "${options.model}" (${options.width}x${options.height})`);
+  console.log(
+    `[Replicate API] Model: "${options.model}" (${options.width}x${options.height})`,
+  );
   console.log(`[Replicate API] Prompt: "${prompt.slice(0, 150)}..."`);
 
   const output = await replicate.run(options.model, { input });
@@ -712,7 +720,16 @@ export async function generateReplicateImageWithRetry(args: {
   maxRetries: number;
   retryDelayMs: number;
 }): Promise<string> {
-  const { replicate, prompt, source, width, height, model, maxRetries, retryDelayMs } = args;
+  const {
+    replicate,
+    prompt,
+    source,
+    width,
+    height,
+    model,
+    maxRetries,
+    retryDelayMs,
+  } = args;
 
   let attempt = 0;
   while (true) {
@@ -728,7 +745,8 @@ export async function generateReplicateImageWithRetry(args: {
       }
 
       attempt++;
-      const backoffMs = retryDelayMs * Math.pow(1.5, attempt) + Math.random() * 3000;
+      const backoffMs =
+        retryDelayMs * Math.pow(1.5, attempt) + Math.random() * 3000;
       console.warn(
         `[Image Pipeline] Rate limited for "${source}" (retry ${attempt}/${maxRetries}) - waiting ${Math.round(backoffMs / 1000)}s...`,
       );
@@ -752,10 +770,7 @@ async function generateImagesInParallel(
   const results = await Promise.allSettled(
     prompts.map((item, i) =>
       limiter(async () => {
-        const dimensions = getAspectRatioDimensions(
-          item.aspectRatio,
-          config,
-        );
+        const dimensions = getAspectRatioDimensions(item.aspectRatio, config);
 
         console.log(
           `[Image Pipeline] Generating ${i + 1}/${prompts.length}: ${item.source} (${item.aspectRatio})`,
@@ -788,9 +803,7 @@ async function generateImagesInParallel(
     const result = results[i];
     if (result.status === "fulfilled") {
       replacements.set(result.value.source, result.value.url);
-      console.log(
-        `[Image Pipeline] Generated ${i + 1}/${prompts.length}`,
-      );
+      console.log(`[Image Pipeline] Generated ${i + 1}/${prompts.length}`);
     } else {
       console.error(
         `[Image Pipeline] Failed ${i + 1}/${prompts.length} for "${prompts[i].source}":`,
@@ -798,11 +811,7 @@ async function generateImagesInParallel(
       );
       replacements.set(
         prompts[i].source,
-        createFallbackImageDataUri(
-          prompts[i].source,
-          prompts[i].prompt,
-          i + 1,
-        ),
+        createFallbackImageDataUri(prompts[i].source, prompts[i].prompt, i + 1),
       );
     }
   }
@@ -893,7 +902,10 @@ export function createFallbackImageDataUri(
   const hueA = Math.abs(hash) % 360;
   const hueB = (hueA + 72) % 360;
   const hueC = (hueA + 144) % 360;
-  const label = (prompt || `Image ${index}`).replace(/\s+/g, " ").trim().slice(0, 220);
+  const label = (prompt || `Image ${index}`)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
   const safeLabel = label
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -929,9 +941,7 @@ function collectOrderedImgSources(files: GeneratedFile[]): string[] {
     let tagMatch: RegExpExecArray | null = tagRe.exec(file.content);
     while (tagMatch) {
       const tag = tagMatch[0];
-      const srcMatch = tag.match(
-        /\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i,
-      );
+      const srcMatch = tag.match(/\bsrc\s*=\s*(?:\{)?["']([^"']+)["'](?:\})?/i);
       if (srcMatch && srcMatch[1]) {
         out.push(srcMatch[1].trim());
       }

@@ -455,6 +455,8 @@ function ReactGeneratorContent() {
   const [isRecording, setIsRecording] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const voiceFinalTextRef = useRef<string>("");
+  const voiceBasePromptRef = useRef<string>("");
   const generationCancelledRef = useRef(false);
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -2094,8 +2096,7 @@ function ReactGeneratorContent() {
   const getEditAppCost = () =>
     roundToken(
       BASE_EDIT_APP_COST +
-        getEditBackendAddOnCosts().total +
-        customApis.length * CUSTOM_API_INTEGRATION_COST,
+        getEditBackendAddOnCosts().total,
     );
 
   const confirmGenerationStart = async () => {
@@ -3079,16 +3080,33 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
+    // Capture existing prompt text and reset accumulated final transcript
+    voiceBasePromptRef.current = prompt;
+    voiceFinalTextRef.current = "";
+
     recognition.onstart = () => {
       setIsRecording(true);
       setVoiceError(null);
     };
 
     recognition.onresult = (event: any) => {
-      const transcript = Array.from(event.results)
-        .map((result: any) => result[0].transcript)
-        .join("");
-      setPrompt(transcript);
+      // Only process results from resultIndex onward to avoid reprocessing
+      // finalized results and causing duplicates on mobile
+      let newFinal = "";
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          newFinal += result[0].transcript;
+        } else {
+          interim += result[0].transcript;
+        }
+      }
+      voiceFinalTextRef.current += newFinal;
+      const base = voiceBasePromptRef.current
+        ? voiceBasePromptRef.current + " "
+        : "";
+      setPrompt(base + voiceFinalTextRef.current + interim);
     };
 
     recognition.onerror = (event: any) => {
@@ -3108,6 +3126,12 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
     recognition.onend = () => {
       setIsRecording(false);
+      // When recording ends, finalize — strip trailing space from base+final join
+      const base = voiceBasePromptRef.current
+        ? voiceBasePromptRef.current + " "
+        : "";
+      const full = (base + voiceFinalTextRef.current).trim();
+      if (full) setPrompt(full);
     };
 
     recognitionRef.current = recognition;
@@ -3899,6 +3923,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
               isCollapsed={isSidebarCollapsed}
               onToggleCollapse={setIsSidebarCollapsed}
               onBuyTokens={() => {
+                setIsMobileMenuOpen(false);
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
               }}
@@ -3925,6 +3950,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   if (collapsed) setIsMobileMenuOpen(false);
                 }}
                 onBuyTokens={() => {
+                  setIsMobileMenuOpen(false);
                   setTokenPurchaseAmount(0);
                   setShowTokenPurchaseModal(true);
                 }}
@@ -3968,7 +3994,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   </button>
 
                   {!isMobileViewport && (
-                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
+                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-700 dark:text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
                       <svg
                         className="w-3 h-3 text-violet-500"
                         fill="none"
@@ -6669,7 +6695,12 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         </span>
                         <span className="text-[10px] text-text-faint">|</span>
                         <span className="text-[10px] text-text-muted">
-                          {ticket.createdAt.toLocaleDateString("en-US", {
+                          {(ticket.createdAt instanceof Date
+                            ? ticket.createdAt
+                            : typeof (ticket.createdAt as { toDate?: () => Date }).toDate === "function"
+                            ? (ticket.createdAt as { toDate: () => Date }).toDate()
+                            : new Date(ticket.createdAt as string | number)
+                          ).toLocaleDateString("en-US", {
                             month: "short",
                             day: "numeric",
                             year: "numeric",
@@ -6913,6 +6944,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={setIsSidebarCollapsed}
             onBuyTokens={() => {
+              setIsMobileMenuOpen(false);
               setTokenPurchaseAmount(0);
               setShowTokenPurchaseModal(true);
             }}
@@ -6939,6 +6971,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                 if (collapsed) setIsMobileMenuOpen(false);
               }}
               onBuyTokens={() => {
+                setIsMobileMenuOpen(false);
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
               }}
@@ -6990,7 +7023,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-violet-300 bg-violet-500/15 border border-violet-500/30"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-violet-700 dark:text-violet-300 bg-violet-500/15 border border-violet-500/30"
               title="Buy app tokens"
             >
               {formatTokens(userData?.appTokens || 0)}
@@ -7001,7 +7034,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         {/* Main content */}
         <main
           className={`flex-1 flex flex-col relative z-10 ${
-            activeSection === "support" || activeSection === "admin"
+            activeSection === "support" || activeSection === "admin" || activeSection === "analytics"
               ? "overflow-hidden"
               : isGenerationFullScreenProgress
                 ? "items-stretch justify-stretch px-0 py-0 sm:px-2 sm:py-2 overflow-hidden"
