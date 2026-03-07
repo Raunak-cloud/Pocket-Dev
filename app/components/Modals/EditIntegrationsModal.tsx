@@ -12,6 +12,7 @@ interface EditIntegrationsModalProps {
   projectId?: string;
   customApis?: CustomApiConfig[];
   onCustomApisChange?: (apis: CustomApiConfig[]) => void;
+  systemDisabledFeatures?: { backend: boolean; payments: boolean; apis: boolean };
 }
 
 export function EditIntegrationsModal({
@@ -24,6 +25,7 @@ export function EditIntegrationsModal({
   projectId,
   customApis = [],
   onCustomApisChange,
+  systemDisabledFeatures = { backend: false, payments: false, apis: false },
 }: EditIntegrationsModalProps) {
   if (!isOpen) return null;
 
@@ -78,6 +80,7 @@ export function EditIntegrationsModal({
 
         <div className="p-4 sm:p-6 overflow-y-auto flex-1">
           <div className="space-y-3">
+            {!systemDisabledFeatures.backend && (
             <button
               type="button"
               onClick={() => onBackendChange(!backendEnabled)}
@@ -147,7 +150,9 @@ export function EditIntegrationsModal({
                 </div>
               </div>
             </button>
+            )}
 
+            {!systemDisabledFeatures.payments && (
             <button
               type="button"
               onClick={onTogglePayments}
@@ -216,9 +221,10 @@ export function EditIntegrationsModal({
                 </div>
               </div>
             </button>
+            )}
 
             {/* Custom APIs */}
-            {projectId && (
+            {!systemDisabledFeatures.apis && projectId && (
               <CustomAPIsSection
                 projectId={projectId}
                 apis={customApis}

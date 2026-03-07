@@ -3081,7 +3081,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     recognition.lang = "en-US";
 
     // Capture existing prompt text and reset accumulated final transcript
-    voiceBasePromptRef.current = prompt;
+    voiceBasePromptRef.current = prompt.trim();
     voiceFinalTextRef.current = "";
 
     recognition.onstart = () => {
@@ -3090,23 +3090,36 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     };
 
     recognition.onresult = (event: any) => {
-      // Only process results from resultIndex onward to avoid reprocessing
-      // finalized results and causing duplicates on mobile
-      let newFinal = "";
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      // Mobile speech engines often resend previously finalized chunks.
+      // Rebuild final+interim from the full result set each event to avoid duplicates.
+      let finalTranscript = "";
+      let interimTranscript = "";
+
+      const normalizeChunk = (chunk: string) =>
+        chunk.replace(/\s+/g, " ").trim();
+
+      for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
+        const chunk = normalizeChunk(result?.[0]?.transcript ?? "");
+        if (!chunk) continue;
+
         if (result.isFinal) {
-          newFinal += result[0].transcript;
+          finalTranscript += `${finalTranscript ? " " : ""}${chunk}`;
         } else {
-          interim += result[0].transcript;
+          interimTranscript += `${interimTranscript ? " " : ""}${chunk}`;
         }
       }
-      voiceFinalTextRef.current += newFinal;
-      const base = voiceBasePromptRef.current
-        ? voiceBasePromptRef.current + " "
-        : "";
-      setPrompt(base + voiceFinalTextRef.current + interim);
+
+      voiceFinalTextRef.current = finalTranscript;
+      const mergedPrompt = [
+        voiceBasePromptRef.current,
+        finalTranscript,
+        interimTranscript,
+      ]
+        .filter((part) => part && part.trim().length > 0)
+        .join(" ")
+        .trim();
+      setPrompt(mergedPrompt);
     };
 
     recognition.onerror = (event: any) => {
@@ -3127,10 +3140,10 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     recognition.onend = () => {
       setIsRecording(false);
       // When recording ends, finalize — strip trailing space from base+final join
-      const base = voiceBasePromptRef.current
-        ? voiceBasePromptRef.current + " "
-        : "";
-      const full = (base + voiceFinalTextRef.current).trim();
+      const full = [voiceBasePromptRef.current, voiceFinalTextRef.current]
+        .filter((part) => part && part.trim().length > 0)
+        .join(" ")
+        .trim();
       if (full) setPrompt(full);
     };
 
@@ -5485,7 +5498,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                     </div>
                     {/* Token cost */}
 
-                    {/* Add Integrations Button */}
+                    {/* Add Integrations Button — hidden when all features are admin-disabled */}
+                    {!(systemDisabledFeatures.backend && systemDisabledFeatures.payments && systemDisabledFeatures.apis) && (
                     <button
                       type="button"
                       onClick={() => setShowEditIntegrationsModal(true)}
@@ -5527,6 +5541,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         </svg>
                       )}
                     </button>
+                    )}
 
                     {/* Link Selection UI */}
                     {linkSelectMode && selectedButton && (
@@ -5737,45 +5752,49 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
                   {/* Mobile/Tablet: Layout */}
                   <div className="flex lg:hidden flex-col gap-2.5">
-                    {/* Backend selector for mobile edit */}
-                    <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs font-semibold text-slate-700 dark:text-text-muted">
-                          Integrations:
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setShowEditIntegrationsModal(true)}
-                          disabled={isEditing}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                            isEditBackendSelected
-                              ? "bg-violet-100 text-violet-900 border border-violet-300 dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30"
-                              : "bg-slate-100 text-slate-800 border border-slate-300 hover:border-slate-400 dark:bg-bg-tertiary/50 dark:text-text-tertiary dark:border-border-secondary dark:hover:border-text-faint"
-                          } disabled:opacity-50`}
-                        >
-                          <svg
-                            className="w-3 h-3 flex-shrink-0"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={1.5}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
-                            />
-                          </svg>
-                          {isEditBackendSelected ? "Configured" : "Configure"}
-                        </button>
-                      </div>
-                    </div>
-                    {isEditBackendSelected && (
-                      <div className="flex flex-wrap gap-1.5 px-1">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-900 border border-violet-300 rounded-md text-xs dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30">
-                          Backend enabled (Auth + Database)
-                        </span>
-                      </div>
+                    {/* Backend selector for mobile edit — hidden when all features are admin-disabled */}
+                    {!(systemDisabledFeatures.backend && systemDisabledFeatures.payments && systemDisabledFeatures.apis) && (
+                      <>
+                        <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-semibold text-slate-700 dark:text-text-muted">
+                              Integrations:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowEditIntegrationsModal(true)}
+                              disabled={isEditing}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
+                                isEditBackendSelected
+                                  ? "bg-violet-100 text-violet-900 border border-violet-300 dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30"
+                                  : "bg-slate-100 text-slate-800 border border-slate-300 hover:border-slate-400 dark:bg-bg-tertiary/50 dark:text-text-tertiary dark:border-border-secondary dark:hover:border-text-faint"
+                              } disabled:opacity-50`}
+                            >
+                              <svg
+                                className="w-3 h-3 flex-shrink-0"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={1.5}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                                />
+                              </svg>
+                              {isEditBackendSelected ? "Configured" : "Configure"}
+                            </button>
+                          </div>
+                        </div>
+                        {isEditBackendSelected && (
+                          <div className="flex flex-wrap gap-1.5 px-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-900 border border-violet-300 rounded-md text-xs dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30">
+                              Backend enabled (Auth + Database)
+                            </span>
+                          </div>
+                        )}
+                      </>
                     )}
                     <div className="flex items-end gap-2 min-w-0">
                       <button
@@ -6217,6 +6236,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             projectId={currentProjectId ?? undefined}
             customApis={customApis}
             onCustomApisChange={setCustomApis}
+            systemDisabledFeatures={systemDisabledFeatures}
           />
         )}
 
@@ -6989,7 +7009,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0">
         <BackgroundEffects />
 
         {user && (
@@ -7033,7 +7053,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
         {/* Main content */}
         <main
-          className={`flex-1 flex flex-col relative z-10 ${
+          className={`flex-1 flex flex-col relative z-10 min-w-0 ${
             activeSection === "support" || activeSection === "admin" || activeSection === "analytics"
               ? "overflow-hidden"
               : isGenerationFullScreenProgress
@@ -7282,6 +7302,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           projectId={currentProjectId ?? undefined}
           customApis={customApis}
           onCustomApisChange={setCustomApis}
+          systemDisabledFeatures={systemDisabledFeatures}
         />
       )}
 

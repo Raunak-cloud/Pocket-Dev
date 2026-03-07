@@ -276,7 +276,7 @@ export default function AnalyticsContent() {
   const revenueData = overview.revenue;
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin">
       <div className="max-w-[1400px] mx-auto w-full min-w-0 p-3 sm:p-6 space-y-4 sm:space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -286,7 +286,7 @@ export default function AnalyticsContent() {
               Track your published projects&apos; performance
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full sm:w-auto flex-wrap items-center gap-2 min-w-0">
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -303,12 +303,12 @@ export default function AnalyticsContent() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.016 4.656v4.992" />
               </svg>
             </button>
-            <div className="flex gap-1 bg-bg-tertiary/60 rounded-xl p-1 border border-border-primary/30 overflow-x-auto">
+            <div className="flex w-full sm:w-auto min-w-0 gap-1 bg-bg-tertiary/60 rounded-xl p-1 border border-border-primary/30 overflow-x-auto">
               {(["7d", "30d", "90d"] as Range[]).map((r) => (
                 <button
                   key={r}
                   onClick={() => setRange(r)}
-                  className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                  className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap shrink-0 ${
                     range === r
                       ? "bg-bg-secondary text-text-primary shadow-sm border border-border-primary/40"
                       : "text-text-muted hover:text-text-secondary"
@@ -322,7 +322,7 @@ export default function AnalyticsContent() {
         </div>
 
         {/* Stat Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 lg:grid-cols-5 gap-3">
           <MetricCard
             label="Visitors"
             value={formatCompact(overview.totalVisitors)}
@@ -428,7 +428,7 @@ export default function AnalyticsContent() {
                 />
               </AreaChart>
             </ResponsiveContainer>
-            <div className="flex items-center gap-5 mt-3 px-1">
+            <div className="flex flex-wrap items-center gap-4 mt-3 px-1">
               <LegendDot color="#6366f1" label="Pageviews" />
               <LegendDot color="#8b5cf6" label="Visitors" />
             </div>
@@ -482,11 +482,11 @@ export default function AnalyticsContent() {
                 <Bar dataKey="premiumRevenue" fill="#10b981" name="Premium" radius={[4, 4, 0, 0]} maxBarSize={32} />
               </BarChart>
             </ResponsiveContainer>
-            <div className="flex items-center gap-5 mt-3 px-1">
+            <div className="flex flex-wrap items-center gap-4 mt-3 px-1">
               <LegendDot color="#6366f1" label="Token Revenue" />
               <LegendDot color="#10b981" label="Premium" />
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="mt-4 grid grid-cols-1 min-[420px]:grid-cols-2 gap-3">
               <MiniStat label="Yearly" value={formatCurrencyPrecise(revenueData.yearlyTotal)} />
               <MiniStat label="Lifetime" value={formatCurrencyPrecise(revenueData.lifetimeTotal)} />
             </div>
@@ -521,7 +521,7 @@ export default function AnalyticsContent() {
                   <Bar dataKey="deductions" fill="#ef4444" name="Spent" radius={[4, 4, 0, 0]} maxBarSize={32} />
                 </BarChart>
               </ResponsiveContainer>
-              <div className="flex items-center gap-5 mt-3 px-1">
+              <div className="flex flex-wrap items-center gap-4 mt-3 px-1">
                 <LegendDot color="#10b981" label="Credits" />
                 <LegendDot color="#ef4444" label="Spent" />
               </div>
@@ -797,7 +797,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
       {/* Devices */}
       {detail.devices.length > 0 && (
         <ChartCard title="Devices" subtitle="Visitor device breakdown">
-          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+          <div className="flex flex-col sm:flex-row items-stretch gap-4 sm:gap-6">
             <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
               <ResponsiveContainer width="99%" height="100%">
                 <PieChart>
@@ -820,7 +820,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex-1 space-y-2">
+            <div className="flex-1 min-w-0 space-y-2">
               {detail.devices.map((d, i) => {
                 const total = detail.devices.reduce((s, x) => s + x.count, 0);
                 const pct = total > 0 ? Math.round((d.count / total) * 100) : 0;
@@ -840,7 +840,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
       {/* Browsers */}
       {detail.browsers.length > 0 && (
         <ChartCard title="Browsers" subtitle="Browser distribution">
-          <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
+          <div className="flex flex-col sm:flex-row items-stretch gap-4 sm:gap-6">
             <div className="w-[140px] h-[140px] sm:w-[160px] sm:h-[160px] shrink-0">
               <ResponsiveContainer width="99%" height="100%">
                 <PieChart>
@@ -863,7 +863,7 @@ function ProjectDetailPanel({ detail, loading }: { detail: ProjectDetail | null;
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="flex-1 space-y-2">
+            <div className="flex-1 min-w-0 space-y-2">
               {detail.browsers.map((b, i) => {
                 const total = detail.browsers.reduce((s, x) => s + x.count, 0);
                 const pct = total > 0 ? Math.round((b.count / total) * 100) : 0;
