@@ -919,7 +919,7 @@ function ReactGeneratorContent() {
     "An e-commerce store with product listings and cart",
     "A fitness tracker app with workout logs and progress charts",
     "A recipe sharing platform with search and categories",
-    "A portfolio site with project gallery and blog",
+    "A real estate listings site with property search and filters",
   ];
   const [, setTypingPlaceholder] = useState("");
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
@@ -1142,7 +1142,7 @@ function ReactGeneratorContent() {
 
     const target = savedProjects.find((p) => p.id === lastOpenedProjectId);
     if (!target) return;
-    openSavedProject(target);
+    openSavedProject(target, { skipPreviewStart: true });
   }, [
     authLoading,
     user,
@@ -1750,7 +1750,7 @@ function ReactGeneratorContent() {
   };
 
   // Open a saved project
-  const openSavedProject = (savedProject: SavedProject) => {
+  const openSavedProject = (savedProject: SavedProject, opts?: { skipPreviewStart?: boolean }) => {
     setProject({
       files: savedProject.files,
       dependencies: savedProject.dependencies || {},
@@ -1783,8 +1783,10 @@ function ReactGeneratorContent() {
     setStatus("success");
     setActiveSection("create");
     setShowEditHistory(false);
-    // Force preview to re-initialize with new project data
-    setPreviewKey((prev) => prev + 1);
+    // Force preview to re-initialize with new project data (unless restoring silently on reload)
+    if (!opts?.skipPreviewStart) {
+      setPreviewKey((prev) => prev + 1);
+    }
     // Load edit history
     loadEditHistory(savedProject.id, savedProject.config);
     // Load custom APIs for this project
@@ -2460,6 +2462,7 @@ ${schemaContext}
     }
     setShowTokenConfirmModal(null);
     setIsEditing(true);
+    setIsMobileEditPanelOpen(false);
     editStartTimeRef.current = Date.now();
     setError("");
     setEditProgressMessages([]);
@@ -5202,7 +5205,31 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         : "h-full"
                     }
                   >
-                    {isMobileViewport ||
+                    {previewKey === 0 ? (
+                      /* Idle state — project restored from last session, not yet running */
+                      <div className="h-full flex flex-col items-center justify-center gap-5 bg-bg-secondary/60 p-8">
+                        <div className="flex flex-col items-center gap-3 text-center">
+                          <div className="w-14 h-14 rounded-2xl bg-bg-tertiary border border-border-secondary flex items-center justify-center">
+                            <svg className="w-7 h-7 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+                            </svg>
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-text-primary">Preview not running</p>
+                            <p className="text-xs text-text-muted mt-1">App was restored from your last session</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setPreviewKey((prev) => prev + 1)}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 active:scale-[0.98] text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+                          </svg>
+                          Run Preview
+                        </button>
+                      </div>
+                    ) : isMobileViewport ||
                     inferProjectIntegrations(project).hasBackend ? (
                       <E2BSandboxPreview
                         project={project}
