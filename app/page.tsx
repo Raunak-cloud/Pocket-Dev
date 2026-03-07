@@ -452,11 +452,15 @@ function ReactGeneratorContent() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Voice recording state
-  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTarget, setRecordingTarget] = useState<
+    "create" | "edit" | null
+  >(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const voiceFinalTextRef = useRef<string>("");
   const voiceBasePromptRef = useRef<string>("");
+  const voiceTargetRef = useRef<"create" | "edit">("create");
+  const lastVoiceResultSignatureRef = useRef<string>("");
   const generationCancelledRef = useRef(false);
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -3058,8 +3062,61 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
   };
 
   // Voice recording functions
-  const startRecording = () => {
-    // Clear any previous errors
+  const normalizeVoiceChunk = (chunk: string) =>
+    chunk.replace(/\s+/g, " ").trim();
+
+  const mergeVoicePartsByOverlap = (parts: string[]) => {
+    const cleaned = parts
+      .map(normalizeVoiceChunk)
+      .filter((part) => part.length > 0);
+
+    if (cleaned.length === 0) return "";
+    let merged = cleaned[0];
+
+    for (let i = 1; i < cleaned.length; i++) {
+      const incoming = cleaned[i];
+      if (!incoming) continue;
+      if (!merged) {
+        merged = incoming;
+        continue;
+      }
+
+      const leftWords = merged.split(" ");
+      const rightWords = incoming.split(" ");
+      const maxOverlap = Math.min(leftWords.length, rightWords.length, 12);
+      let overlap = 0;
+
+      for (let n = maxOverlap; n > 0; n--) {
+        const leftSuffix = leftWords.slice(-n).join(" ");
+        const rightPrefix = rightWords.slice(0, n).join(" ");
+        if (leftSuffix === rightPrefix) {
+          overlap = n;
+          break;
+        }
+      }
+
+      if (overlap === rightWords.length) {
+        continue;
+      }
+
+      merged = [...leftWords, ...rightWords.slice(overlap)].join(" ");
+    }
+
+    return normalizeVoiceChunk(merged);
+  };
+
+  const applyVoiceTranscriptToTarget = (
+    target: "create" | "edit",
+    text: string,
+  ) => {
+    if (target === "edit") {
+      setEditPrompt(text);
+      return;
+    }
+    setPrompt(text);
+  };
+
+  const startVoiceRecording = (target: "create" | "edit") => {
     setVoiceError(null);
 
     // Check if browser supports speech recognition
@@ -3075,40 +3132,81 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // No-op: stale recognizer
+      }
+      recognitionRef.current = null;
+    }
 
-    // Capture existing prompt text and reset accumulated final transcript
-    voiceBasePromptRef.current = prompt.trim();
+    const userAgent =
+      typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const isAndroid = /android/i.test(userAgent);
+
+    const recognition = new SpeechRecognition();
+    // Android Chrome has longstanding duplicate/flicker issues with
+    // continuous + interim streams, so keep its stream final-only.
+    recognition.continuous = !isAndroid;
+    recognition.interimResults = !isAndroid;
+    recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
+
+    voiceTargetRef.current = target;
+    voiceBasePromptRef.current =
+      target === "edit" ? editPrompt.trim() : prompt.trim();
     voiceFinalTextRef.current = "";
+    lastVoiceResultSignatureRef.current = "";
 
     recognition.onstart = () => {
-      setIsRecording(true);
+      setRecordingTarget(target);
       setVoiceError(null);
     };
 
     recognition.onresult = (event: any) => {
-      // Mobile speech engines often resend previously finalized chunks.
-      // Rebuild final+interim from the full result set each event to avoid duplicates.
-      let finalTranscript = "";
-      let interimTranscript = "";
-
-      const normalizeChunk = (chunk: string) =>
-        chunk.replace(/\s+/g, " ").trim();
+      // Rebuild transcript from complete result list each callback.
+      // Then merge adjacent segments by overlap to absorb Android repeats.
+      const finalParts: string[] = [];
+      const interimParts: string[] = [];
 
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
-        const chunk = normalizeChunk(result?.[0]?.transcript ?? "");
+        const chunk = normalizeVoiceChunk(result?.[0]?.transcript ?? "");
         if (!chunk) continue;
 
-        if (result.isFinal) {
-          finalTranscript += `${finalTranscript ? " " : ""}${chunk}`;
-        } else {
-          interimTranscript += `${interimTranscript ? " " : ""}${chunk}`;
+        const confidence =
+          typeof result?.[0]?.confidence === "number"
+            ? result[0].confidence
+            : 0;
+        const treatAsFinal = result.isFinal && (!isAndroid || confidence > 0);
+
+        if (treatAsFinal) {
+          finalParts.push(chunk);
+        } else if (!isAndroid) {
+          interimParts.push(chunk);
         }
       }
+
+      // Some Android builds may report confidence=0 even for final chunks.
+      // If we filtered everything out, fall back to all final chunks.
+      if (isAndroid && finalParts.length === 0) {
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (!result.isFinal) continue;
+          const chunk = normalizeVoiceChunk(result?.[0]?.transcript ?? "");
+          if (!chunk) continue;
+          finalParts.push(chunk);
+        }
+      }
+
+      const finalTranscript = mergeVoicePartsByOverlap(finalParts);
+      const interimTranscript = mergeVoicePartsByOverlap(interimParts);
+      const signature = `${finalTranscript}|${interimTranscript}`;
+      if (signature === lastVoiceResultSignatureRef.current) {
+        return;
+      }
+      lastVoiceResultSignatureRef.current = signature;
 
       voiceFinalTextRef.current = finalTranscript;
       const mergedPrompt = [
@@ -3119,12 +3217,14 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         .filter((part) => part && part.trim().length > 0)
         .join(" ")
         .trim();
-      setPrompt(mergedPrompt);
+
+      applyVoiceTranscriptToTarget(voiceTargetRef.current, mergedPrompt);
     };
 
     recognition.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error);
-      setIsRecording(false);
+      setRecordingTarget(null);
+      recognitionRef.current = null;
       if (event.error === "not-allowed") {
         setVoiceError(
           "Microphone access denied. Please allow microphone access in your browser settings and try again.",
@@ -3138,13 +3238,17 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     };
 
     recognition.onend = () => {
-      setIsRecording(false);
-      // When recording ends, finalize — strip trailing space from base+final join
+      const targetToApply = voiceTargetRef.current;
+      setRecordingTarget(null);
+      recognitionRef.current = null;
+
       const full = [voiceBasePromptRef.current, voiceFinalTextRef.current]
         .filter((part) => part && part.trim().length > 0)
         .join(" ")
         .trim();
-      if (full) setPrompt(full);
+      if (full) {
+        applyVoiceTranscriptToTarget(targetToApply, full);
+      }
     };
 
     recognitionRef.current = recognition;
@@ -3156,8 +3260,13 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       recognitionRef.current.stop();
       recognitionRef.current = null;
     }
-    setIsRecording(false);
+    setRecordingTarget(null);
   };
+
+  const startRecording = () => startVoiceRecording("create");
+  const startEditRecording = () => startVoiceRecording("edit");
+  const isRecording = recordingTarget === "create";
+  const isEditRecording = recordingTarget === "edit";
 
   const replaceNthTextInProject = (
     sourceProject: ReactProject,
@@ -5367,6 +5476,46 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   </div>
                 )}
 
+                {voiceError && (
+                  <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-300 dark:bg-red-500/10 dark:border-red-500/30 rounded-xl flex items-start gap-3">
+                    <svg
+                      className="w-4 h-4 text-red-700 dark:text-red-300 flex-shrink-0 mt-0.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                      />
+                    </svg>
+                    <p className="text-xs text-red-800 dark:text-red-300 font-medium flex-1">
+                      {voiceError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setVoiceError(null)}
+                      className="text-red-700 hover:text-red-800 dark:text-red-300 dark:hover:text-red-200 transition"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+
                 {/* Edit Form */}
                 <form
                   onSubmit={handleEdit}
@@ -5490,10 +5639,48 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         disabled={isEditing}
                         className="flex-1 min-h-[140px] px-4 py-4 bg-transparent text-text-primary placeholder-text-muted/80 focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
                       />
-                      <div className="flex items-center justify-between px-4 py-2.5 bg-bg-tertiary/20 border-t border-border-primary">
+                      <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-bg-tertiary/20 border-t border-border-primary">
                         <p className="text-xs text-text-muted">
                           0.20 token cost per edit
                         </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            isEditRecording ? stopRecording() : startEditRecording()
+                          }
+                          disabled={isEditing}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-50 ${
+                            isEditRecording
+                              ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse"
+                              : "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"
+                          }`}
+                          title={isEditRecording ? "Stop voice input" : "Voice input"}
+                        >
+                          {isEditRecording ? (
+                            <svg
+                              className="w-4 h-4"
+                              fill="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <rect x="6" y="6" width="12" height="12" rx="2" />
+                            </svg>
+                          ) : (
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={1.7}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+                              />
+                            </svg>
+                          )}
+                          <span>{isEditRecording ? "Stop" : "Voice"}</span>
+                        </button>
                       </div>
                     </div>
                     {/* Token cost */}
@@ -5844,6 +6031,43 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                           style={{ minHeight: "42px", maxHeight: "120px" }}
                         />
                       </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          isEditRecording ? stopRecording() : startEditRecording()
+                        }
+                        disabled={isEditing}
+                        className={`flex-shrink-0 p-2.5 rounded-xl transition disabled:opacity-50 ${
+                          isEditRecording
+                            ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse"
+                            : "text-text-muted hover:text-text-secondary bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary"
+                        }`}
+                        title={isEditRecording ? "Stop voice input" : "Voice input"}
+                      >
+                        {isEditRecording ? (
+                          <svg
+                            className="w-4 h-4"
+                            fill="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.7}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+                            />
+                          </svg>
+                        )}
+                      </button>
                       <button
                         type="submit"
                         disabled={isEditSubmitDisabled}

@@ -32,7 +32,9 @@
       "Bash(npx prisma:*)",
       "Bash(grep:*)",
       "Bash(done)",
-      "Bash(npx dotenv-cli:*)"
+      "Bash(npx dotenv-cli:*)",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)"
     ]
   }
 }
