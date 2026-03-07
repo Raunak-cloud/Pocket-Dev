@@ -36,7 +36,7 @@ export function EditIntegrationsModal({
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/20 to-blue-500/20 border border-violet-500/30 flex items-center justify-center">
               <svg
-                className="w-5 h-5 text-violet-300"
+                className="w-5 h-5 text-violet-600 dark:text-violet-300"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -95,7 +95,7 @@ export function EditIntegrationsModal({
                   className={`w-10 h-10 rounded-lg flex items-center justify-center ${backendEnabled ? "bg-violet-500/20" : "bg-bg-tertiary"}`}
                 >
                   <svg
-                    className={`w-5 h-5 ${backendEnabled ? "text-violet-300" : "text-text-tertiary"}`}
+                    className={`w-5 h-5 ${backendEnabled ? "text-violet-600 dark:text-violet-300" : "text-text-tertiary"}`}
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -118,13 +118,13 @@ export function EditIntegrationsModal({
                     patterns.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-blue-500/15 text-blue-300 border border-blue-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-blue-100 text-blue-700 border border-blue-300 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/25">
                       Authentication
                     </span>
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-emerald-100 text-emerald-700 border border-emerald-300 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/25">
                       Database
                     </span>
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-violet-500/15 text-violet-300 border border-violet-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-violet-100 text-violet-700 border border-violet-300 dark:bg-violet-500/15 dark:text-violet-300 dark:border-violet-500/25">
                       Protected Data
                     </span>
                   </div>
@@ -167,7 +167,7 @@ export function EditIntegrationsModal({
                   className={`w-10 h-10 rounded-lg flex items-center justify-center ${paymentsEnabled ? "bg-amber-500/20" : "bg-bg-tertiary"}`}
                 >
                   <svg
-                    className={`w-5 h-5 ${paymentsEnabled ? "text-amber-300" : "text-text-tertiary"}`}
+                    className={`w-5 h-5 ${paymentsEnabled ? "text-amber-600 dark:text-amber-300" : "text-text-tertiary"}`}
                     fill="none"
                     viewBox="0 0 24 24"
                     stroke="currentColor"
@@ -189,13 +189,13 @@ export function EditIntegrationsModal({
                     success/cancel pages, and buy buttons on pricing sections.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/25">
                       Stripe Checkout
                     </span>
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/25">
                       Payment Pages
                     </span>
-                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                    <span className="px-2 py-1 rounded-md text-[11px] bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/25">
                       Buy Buttons
                     </span>
                   </div>

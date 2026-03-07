@@ -75,6 +75,7 @@ interface CreateContentProps {
   error: string;
   prompt: string;
   uploadedFiles: UploadedFile[];
+  isUploadingFiles: boolean;
   fileInputRef: React.RefObject<HTMLInputElement>;
   backendEnabled: boolean;
   isRecording: boolean;
@@ -115,6 +116,7 @@ export default function CreateContent({
   error,
   prompt,
   uploadedFiles,
+  isUploadingFiles,
   fileInputRef,
   backendEnabled,
   isRecording,
@@ -352,31 +354,92 @@ export default function CreateContent({
         <div className="w-full mb-4">
           <div className="flex flex-wrap gap-2 justify-center">
             {uploadedFiles.map((file, idx) => (
-              <div
-                key={idx}
-                className="inline-flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-sm"
-              >
-                <span className="text-xs text-text-secondary">{file.name}</span>
-                <button
-                  onClick={() => removeFile(idx)}
-                  className="text-text-muted hover:text-red-400 transition"
+              file.type.startsWith("image/") ? (
+                <div
+                  key={idx}
+                  className="relative w-20 h-20 rounded-xl overflow-hidden border border-border-secondary bg-bg-tertiary/40"
                 >
-                  <svg
-                    className="w-3 h-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2}
+                  <img
+                    src={file.downloadUrl || file.dataUrl}
+                    alt={file.name || `Uploaded image ${idx + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeFile(idx)}
+                    className="absolute top-1 right-1 p-1 rounded-md bg-black/65 text-white hover:bg-black/80 transition"
+                    title="Remove image"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
+                    <svg
+                      className="w-3 h-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={idx}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-sm"
+                >
+                  <span className="text-xs text-text-secondary">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(idx)}
+                    className="text-text-muted hover:text-red-400 transition"
+                  >
+                    <svg
+                      className="w-3 h-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              )
             ))}
+          </div>
+        </div>
+      )}
+
+      {isUploadingFiles && (
+        <div className="w-full max-w-3xl mb-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/25 text-xs text-blue-300">
+            <svg
+              className="w-3.5 h-3.5 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            Uploading files...
           </div>
         </div>
       )}
@@ -512,22 +575,45 @@ export default function CreateContent({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="p-2 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition"
+                disabled={isUploadingFiles}
+                className="p-2 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Attach files"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
-                  />
-                </svg>
+                {isUploadingFiles ? (
+                  <svg
+                    className="w-5 h-5 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
+                    />
+                  </svg>
+                )}
               </button>
               <button
                 type="button"
@@ -644,10 +730,10 @@ export default function CreateContent({
             </div>
             <button
               type="submit"
-              disabled={!prompt.trim() || checkingAuthIntent}
+              disabled={!prompt.trim() || checkingAuthIntent || isUploadingFiles}
               className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {checkingAuthIntent ? (
+              {checkingAuthIntent || isUploadingFiles ? (
                 <svg
                   className="w-4 h-4 animate-spin"
                   fill="none"
@@ -682,7 +768,11 @@ export default function CreateContent({
                   />
                 </svg>
               )}
-              {checkingAuthIntent ? "Checking..." : "Generate"}
+              {isUploadingFiles
+                ? "Uploading files..."
+                : checkingAuthIntent
+                  ? "Checking..."
+                  : "Generate"}
             </button>
           </div>
         </div>

@@ -498,6 +498,8 @@ function ReactGeneratorContent() {
   const [editClarificationHistory, setEditClarificationHistory] = useState<
     Array<{ question: string; answer: string }>
   >([]);
+  const [isPromptFileUploading, setIsPromptFileUploading] = useState(false);
+  const [isEditFileUploading, setIsEditFileUploading] = useState(false);
   const { startUpload } = useSupabaseUploads();
 
   const persistActiveGenerationSession = useCallback(
@@ -1898,6 +1900,7 @@ function ReactGeneratorContent() {
       const files = e.target.files;
       if (!files || !user) return;
       const fileArray = Array.from(files);
+      setIsPromptFileUploading(true);
 
       try {
         const dataUrlResults = await Promise.all(
@@ -1930,9 +1933,10 @@ function ReactGeneratorContent() {
       } catch (error) {
         console.error("Error uploading file:", error);
         setError("Failed to upload files. Please try again.");
+      } finally {
+        setIsPromptFileUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
       }
-
-      if (fileInputRef.current) fileInputRef.current.value = "";
     },
     [user, startUpload],
   );
@@ -1946,6 +1950,7 @@ function ReactGeneratorContent() {
       const files = e.target.files;
       if (!files || !user) return;
       const fileArray = Array.from(files);
+      setIsEditFileUploading(true);
 
       try {
         const dataUrlResults = await Promise.all(
@@ -1978,9 +1983,10 @@ function ReactGeneratorContent() {
       } catch (error) {
         console.error("Error uploading file:", error);
         setError("Failed to upload files. Please try again.");
+      } finally {
+        setIsEditFileUploading(false);
+        if (editFileInputRef.current) editFileInputRef.current.value = "";
       }
-
-      if (editFileInputRef.current) editFileInputRef.current.value = "";
     },
     [user, startUpload],
   );
@@ -3014,7 +3020,13 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!prompt.trim() || status === "loading" || checkingAuthIntent) return;
+    if (
+      !prompt.trim() ||
+      status === "loading" ||
+      checkingAuthIntent ||
+      isPromptFileUploading
+    )
+      return;
     // Block backend/auth/database intent in text prompts; force integration button.
     if (prompt.trim()) {
       setCheckingAuthIntent(true);
@@ -4007,7 +4019,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     (total, ticket) => total + (ticket.unreadAdminMessageCount || 0),
     0,
   );
-  const isEditBusy = isEditing || checkingAuthIntent || checkingEditClarity;
+  const isEditBusy =
+    isEditing || checkingAuthIntent || checkingEditClarity || isEditFileUploading;
   const isEditSubmitDisabled =
     (!editPrompt.trim() && !isEditBackendSelected) || isEditBusy;
   const editPromptCount = editPrompt.trim().length;
@@ -5223,38 +5236,88 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
               </div>
             </div>
 
-            {isMobileViewport && isMobileEditPanelOpen && (
-              <button
-                type="button"
-                onClick={() => setIsMobileEditPanelOpen(false)}
-                className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[1px]"
-                aria-label="Close edit panel"
-              />
-            )}
-
-            {/* Edit Panel - Right on desktop, Bottom on mobile/tablet */}
+            {/* Edit Panel - Right on desktop, Full-screen overlay on mobile */}
             {(!isMobileViewport && !isFullPreview) ||
             (isMobileViewport && isMobileEditPanelOpen) ? (
               <div
-                className={`flex-shrink-0 border-border-primary bg-bg-secondary/80 backdrop-blur-lg flex flex-col min-h-0 overflow-hidden ${
+                className={`flex-shrink-0 border-border-primary bg-bg-secondary flex flex-col min-h-0 overflow-hidden ${
                   isMobileViewport
-                    ? "fixed inset-x-0 bottom-0 z-50 h-[70vh] rounded-t-2xl border-t shadow-2xl"
-                    : "lg:w-[clamp(14rem,22vw,18.5rem)] border-t lg:border-t-0 lg:border-l"
+                    ? "fixed inset-0 z-50"
+                    : "lg:w-[clamp(14rem,22vw,18.5rem)] border-t lg:border-t-0 lg:border-l backdrop-blur-lg bg-bg-secondary/80"
                 }`}
               >
-                {/* Panel Header - Desktop only */}
+                {/* Mobile Header */}
                 {isMobileViewport && (
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
-                    <h3 className="text-sm font-semibold text-text-primary">
-                      Edit Website
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => setIsMobileEditPanelOpen(false)}
-                      className="inline-flex items-center h-8 gap-1 px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
-                    >
-                      Close
-                    </button>
+                  <div className="flex-shrink-0 border-b border-border-primary/60">
+                    <div className="flex items-center justify-between px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/30 flex items-center justify-center">
+                          <svg
+                            className="w-4.5 h-4.5 text-blue-400"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                            />
+                          </svg>
+                        </div>
+                        <div>
+                          <h3 className="text-base font-semibold text-text-primary leading-tight">
+                            Edit Website
+                          </h3>
+                          <p className="text-[11px] text-text-muted">0.20 token per edit</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {editHistory.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowEditHistory(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-bg-tertiary/80 hover:bg-bg-tertiary border border-border-secondary text-xs font-medium text-text-secondary transition"
+                          >
+                            <svg
+                              className="w-3.5 h-3.5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={1.5}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            </svg>
+                            {editHistory.length}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setIsMobileEditPanelOpen(false)}
+                          className="p-2 text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary rounded-xl transition"
+                          aria-label="Close edit panel"
+                        >
+                          <svg
+                            className="w-5 h-5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M6 18L18 6M6 6l12 12"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -5314,30 +5377,74 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   className="hidden"
                 />
 
+                {isEditFileUploading && (
+                  <div className="px-4 py-2 border-b border-border-primary">
+                    <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/25 text-xs text-blue-300">
+                      <svg
+                        className="w-3.5 h-3.5 animate-spin"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                      Uploading files...
+                    </div>
+                  </div>
+                )}
+
                 {/* Uploaded edit files */}
                 {editFiles.length > 0 && (
                   <div className="px-4 py-2 border-b border-border-primary">
                     <div className="flex flex-wrap gap-2">
                       {editFiles.map((file, idx) => (
-                        <div
-                          key={idx}
-                          className="inline-flex items-center gap-1.5 px-2 py-1 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-xs"
-                        >
-                          {file.type.startsWith("image/") ? (
-                            <svg
-                              className="w-3 h-3 text-blue-400"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
+                        file.type.startsWith("image/") ? (
+                          <div
+                            key={idx}
+                            className="relative w-14 h-14 rounded-lg overflow-hidden border border-border-secondary bg-bg-tertiary/40"
+                          >
+                            <img
+                              src={file.downloadUrl || file.dataUrl}
+                              alt={file.name || `Uploaded image ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeEditFile(idx)}
+                              className="absolute top-0.5 right-0.5 p-0.5 rounded bg-black/65 text-white hover:bg-black/80 transition"
+                              title="Remove image"
                             >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                              />
-                            </svg>
-                          ) : (
+                              <svg
+                                className="w-3 h-3"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M6 18L18 6M6 6l12 12"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            key={idx}
+                            className="inline-flex items-center gap-1.5 px-2 py-1 bg-bg-tertiary/50 border border-border-secondary rounded-lg text-xs"
+                          >
                             <svg
                               className="w-3 h-3 text-red-400"
                               fill="none"
@@ -5351,30 +5458,30 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                                 d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
                               />
                             </svg>
-                          )}
-                          <span className="text-text-secondary max-w-[80px] truncate">
-                            {file.name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => removeEditFile(idx)}
-                            className="text-text-muted hover:text-red-400 transition"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
+                            <span className="text-text-secondary max-w-[80px] truncate">
+                              {file.name}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeEditFile(idx)}
+                              className="text-text-muted hover:text-red-400 transition"
                             >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            </svg>
-                          </button>
-                        </div>
+                              <svg
+                                className="w-3 h-3"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M6 18L18 6M6 6l12 12"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        )
                       ))}
                     </div>
                   </div>
@@ -5827,37 +5934,48 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {editFiles.map((file, idx) => (
-                            <div
-                              key={idx}
-                              className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-bg-tertiary/70 border border-border-secondary rounded-lg text-xs group hover:border-red-500/40 transition"
-                            >
-                              <svg
-                                className="w-3.5 h-3.5 text-text-muted"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2}
+                            file.type.startsWith("image/") ? (
+                              <div
+                                key={idx}
+                                className="relative w-16 h-16 rounded-lg overflow-hidden border border-border-secondary bg-bg-tertiary/40"
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                <img
+                                  src={file.downloadUrl || file.dataUrl}
+                                  alt={file.name || `Uploaded image ${idx + 1}`}
+                                  className="w-full h-full object-cover"
                                 />
-                              </svg>
-                              <span className="text-text-secondary max-w-[120px] truncate">
-                                {file.name}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditFiles(
-                                    editFiles.filter((_, i) => i !== idx),
-                                  )
-                                }
-                                className="p-0.5 rounded hover:bg-red-500/20 text-text-muted hover:text-red-400 transition"
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditFiles(
+                                      editFiles.filter((_, i) => i !== idx),
+                                    )
+                                  }
+                                  className="absolute top-1 right-1 p-0.5 rounded bg-black/65 text-white hover:bg-black/80 transition"
+                                  title="Remove image"
+                                >
+                                  <svg
+                                    className="w-3 h-3"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M6 18L18 6M6 6l12 12"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            ) : (
+                              <div
+                                key={idx}
+                                className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-bg-tertiary/70 border border-border-secondary rounded-lg text-xs group hover:border-red-500/40 transition"
                               >
                                 <svg
-                                  className="w-3 h-3"
+                                  className="w-3.5 h-3.5 text-text-muted"
                                   fill="none"
                                   viewBox="0 0 24 24"
                                   stroke="currentColor"
@@ -5866,11 +5984,37 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                                   <path
                                     strokeLinecap="round"
                                     strokeLinejoin="round"
-                                    d="M6 18L18 6M6 6l12 12"
+                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                                   />
                                 </svg>
-                              </button>
-                            </div>
+                                <span className="text-text-secondary max-w-[120px] truncate">
+                                  {file.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditFiles(
+                                      editFiles.filter((_, i) => i !== idx),
+                                    )
+                                  }
+                                  className="p-0.5 rounded hover:bg-red-500/20 text-text-muted hover:text-red-400 transition"
+                                >
+                                  <svg
+                                    className="w-3 h-3"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M6 18L18 6M6 6l12 12"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            )
                           ))}
                         </div>
                       </div>
@@ -5881,24 +6025,48 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                       <button
                         type="button"
                         onClick={() => editFileInputRef.current?.click()}
-                        disabled={isEditing}
+                        disabled={isEditing || isEditFileUploading}
                         className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-bg-secondary border-2 border-border-secondary hover:border-blue-500/40 hover:bg-bg-tertiary text-text-secondary hover:text-text-primary text-sm font-medium rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Attach image or PDF"
                       >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
-                          />
-                        </svg>
-                        <span className="hidden sm:inline">Attach</span>
+                        {isEditFileUploading ? (
+                          <svg
+                            className="w-4 h-4 animate-spin"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                          >
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            />
+                            <path
+                              className="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                            />
+                          </svg>
+                        )}
+                        <span className="hidden sm:inline">
+                          {isEditFileUploading ? "Uploading..." : "Attach"}
+                        </span>
                       </button>
                       <button
                         type="submit"
@@ -5937,183 +6105,206 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                     </div>
                   </div>
 
-                  {/* Mobile/Tablet: Layout */}
-                  <div className="flex lg:hidden flex-col gap-2.5">
-                    {/* Backend selector for mobile edit — hidden when all features are admin-disabled */}
+                  {/* Mobile: Full-screen layout */}
+                  <div className="flex lg:hidden flex-col flex-1 min-h-0 gap-3">
+                    {/* Integrations button */}
                     {!(systemDisabledFeatures.backend && systemDisabledFeatures.payments && systemDisabledFeatures.apis) && (
-                      <>
-                        <div className="px-2 py-1.5 rounded-lg border border-border-secondary bg-bg-tertiary/45">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-xs font-semibold text-slate-700 dark:text-text-muted">
-                              Integrations:
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setShowEditIntegrationsModal(true)}
-                              disabled={isEditing}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition ${
-                                isEditBackendSelected
-                                  ? "bg-violet-100 text-violet-900 border border-violet-300 dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30"
-                                  : "bg-slate-100 text-slate-800 border border-slate-300 hover:border-slate-400 dark:bg-bg-tertiary/50 dark:text-text-tertiary dark:border-border-secondary dark:hover:border-text-faint"
-                              } disabled:opacity-50`}
-                            >
-                              <svg
-                                className="w-3 h-3 flex-shrink-0"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
-                                />
-                              </svg>
-                              {isEditBackendSelected ? "Configured" : "Configure"}
-                            </button>
-                          </div>
-                        </div>
-                        {isEditBackendSelected && (
-                          <div className="flex flex-wrap gap-1.5 px-1">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-900 border border-violet-300 rounded-md text-xs dark:bg-violet-600/20 dark:text-violet-300 dark:border-violet-500/30">
-                              Backend enabled (Auth + Database)
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <div className="flex items-end gap-2 min-w-0">
                       <button
                         type="button"
-                        onClick={() => editFileInputRef.current?.click()}
+                        onClick={() => setShowEditIntegrationsModal(true)}
                         disabled={isEditing}
-                        className="flex-shrink-0 p-2.5 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary rounded-xl transition disabled:opacity-50"
-                        title="Attach file"
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={1.5}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
-                          />
-                        </svg>
-                      </button>
-                      <div className="flex-1 min-w-0 relative">
-                        <textarea
-                          value={editPrompt}
-                          onChange={(e) => setEditPrompt(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              if (
-                                (editPrompt.trim() || isEditBackendSelected) &&
-                                !isEditing
-                              )
-                                handleEdit(e);
-                            }
-                          }}
-                          maxLength={2000}
-                          placeholder={
-                            isEditBackendSelected
-                              ? "Instructions (optional)..."
-                              : "Describe changes..."
-                          }
-                          rows={1}
-                          disabled={isEditing}
-                          className="w-full px-3 py-2.5 bg-bg-tertiary/55 border border-border-secondary rounded-xl text-text-primary placeholder-text-muted focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 resize-none text-sm disabled:opacity-50"
-                          style={{ minHeight: "42px", maxHeight: "120px" }}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          isEditRecording ? stopRecording() : startEditRecording()
-                        }
-                        disabled={isEditing}
-                        className={`flex-shrink-0 p-2.5 rounded-xl transition disabled:opacity-50 ${
-                          isEditRecording
-                            ? "text-red-500 bg-red-500/10 hover:text-red-400 hover:bg-red-500/20 animate-pulse"
-                            : "text-text-muted hover:text-text-secondary bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary"
+                        className={`w-full inline-flex items-center gap-2.5 px-4 py-3.5 rounded-2xl text-sm font-medium border transition-all disabled:opacity-50 ${
+                          isEditBackendSelected
+                            ? "bg-violet-100 text-violet-700 border-violet-300 hover:bg-violet-200 dark:bg-violet-500/12 dark:text-violet-300 dark:border-violet-500/40 dark:hover:bg-violet-500/18"
+                            : "bg-bg-tertiary/50 text-text-secondary border-border-secondary hover:border-violet-500/40 hover:text-text-primary"
                         }`}
-                        title={isEditRecording ? "Stop voice input" : "Voice input"}
                       >
-                        {isEditRecording ? (
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isEditBackendSelected ? "bg-violet-200 dark:bg-violet-500/20" : "bg-bg-tertiary"}`}>
                           <svg
-                            className="w-4 h-4"
-                            fill="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <rect x="6" y="6" width="12" height="12" rx="2" />
-                          </svg>
-                        ) : (
-                          <svg
-                            className="w-4 h-4"
+                            className={`w-4 h-4 ${isEditBackendSelected ? "text-violet-600 dark:text-violet-300" : "text-text-muted"}`}
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
-                            strokeWidth={1.7}
+                            strokeWidth={1.8}
                           >
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+                              d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
                             />
+                          </svg>
+                        </div>
+                        <span className="flex-1 text-left">
+                          {isEditBackendSelected ? "Integrations configured" : "Add Integrations"}
+                        </span>
+                        {isEditBackendSelected ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-violet-200 text-violet-700 text-xs font-semibold border border-violet-300 dark:bg-violet-500/20 dark:text-violet-300 dark:border-violet-500/30">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                            On
+                          </span>
+                        ) : (
+                          <svg className="w-4 h-4 text-text-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Textarea — fills remaining space */}
+                    <div className="flex-1 min-h-0 relative overflow-hidden rounded-2xl border border-border-secondary bg-bg-tertiary/40 focus-within:border-blue-500/50 focus-within:ring-2 focus-within:ring-blue-500/15 transition">
+                      <textarea
+                        value={editPrompt}
+                        onChange={(e) => setEditPrompt(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            if (
+                              (editPrompt.trim() || isEditBackendSelected) &&
+                              !isEditing
+                            )
+                              handleEdit(e);
+                          }
+                        }}
+                        maxLength={2000}
+                        placeholder={
+                          isEditBackendSelected
+                            ? "Add instructions (optional)..."
+                            : "Describe the changes you want to make..."
+                        }
+                        disabled={isEditing}
+                        className="w-full h-full px-4 py-4 bg-transparent text-text-primary placeholder-text-muted/80 focus:outline-none resize-none text-sm leading-relaxed disabled:opacity-50"
+                      />
+                      <span className="absolute bottom-3 right-3 text-[10px] text-text-faint pointer-events-none tabular-nums">
+                        {editPromptCount} / 2000
+                      </span>
+                    </div>
+
+                    {/* Attached files preview */}
+                    {editFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {editFiles.map((file, idx) => (
+                          file.type.startsWith("image/") ? (
+                            <div
+                              key={idx}
+                              className="relative w-14 h-14 rounded-xl overflow-hidden border border-border-secondary bg-bg-tertiary/40"
+                            >
+                              <img
+                                src={file.downloadUrl || file.dataUrl}
+                                alt={file.name || `Image ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeEditFile(idx)}
+                                className="absolute top-0.5 right-0.5 p-0.5 rounded bg-black/65 text-white hover:bg-black/80 transition"
+                              >
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          ) : (
+                            <div
+                              key={idx}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-bg-tertiary/60 border border-border-secondary rounded-xl text-xs"
+                            >
+                              <svg className="w-3 h-3 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                              </svg>
+                              <span className="text-text-secondary max-w-[100px] truncate">{file.name}</span>
+                              <button type="button" onClick={() => removeEditFile(idx)} className="text-text-muted hover:text-red-400 transition">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Bottom action row */}
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => editFileInputRef.current?.click()}
+                        disabled={isEditing || isEditFileUploading}
+                        className="flex-shrink-0 p-3 bg-bg-tertiary/60 border border-border-secondary hover:bg-bg-tertiary hover:border-text-faint text-text-secondary rounded-xl transition disabled:opacity-50"
+                        title="Attach image or PDF"
+                      >
+                        {isEditFileUploading ? (
+                          <svg
+                            className="w-5 h-5 animate-spin"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                          >
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            />
+                            <path
+                              className="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                            />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                          </svg>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => isEditRecording ? stopRecording() : startEditRecording()}
+                        disabled={isEditing}
+                        className={`flex-shrink-0 p-3 rounded-xl border transition disabled:opacity-50 ${
+                          isEditRecording
+                            ? "text-red-400 bg-red-500/15 border-red-500/30 animate-pulse"
+                            : "text-text-muted bg-bg-tertiary/60 border-border-secondary hover:bg-bg-tertiary hover:text-text-secondary"
+                        }`}
+                        title={isEditRecording ? "Stop voice input" : "Voice input"}
+                      >
+                        {isEditRecording ? (
+                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                            <rect x="6" y="6" width="12" height="12" rx="2" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.7}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
                           </svg>
                         )}
                       </button>
                       <button
                         type="submit"
                         disabled={isEditSubmitDisabled}
-                        className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 active:scale-[0.98] text-white text-sm font-semibold rounded-xl shadow-lg shadow-blue-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                       >
                         {isEditing ? (
                           <>
                             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span className="hidden sm:inline">
-                              Updating...
-                            </span>
+                            <span>Updating...</span>
                           </>
                         ) : checkingAuthIntent || checkingEditClarity ? (
                           <>
                             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span className="hidden sm:inline">
-                              Checking...
-                            </span>
+                            <span>Analyzing...</span>
                           </>
                         ) : (
                           <>
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M13 10V3L4 14h7v7l9-11h-7z"
-                              />
+                            <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                             </svg>
-                            <span className="hidden sm:inline">Edit</span>
+                            <span>Apply Edit</span>
                           </>
                         )}
                       </button>
-                    </div>
-                    <div className="flex items-center justify-between px-1">
-                      <p className="text-[11px] text-text-muted">
-                        0.20 token cost per edit
-                      </p>
-                      <p className="text-[11px] text-text-muted">
-                        {editPromptCount} / 2000
-                      </p>
                     </div>
                   </div>
                 </form>
@@ -6723,6 +6914,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         error={error}
         prompt={prompt}
         uploadedFiles={uploadedFiles}
+        isUploadingFiles={isPromptFileUploading}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         backendEnabled={isGenerationBackendSelected}
         isRecording={isRecording}
@@ -7267,7 +7459,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-violet-700 dark:text-violet-300 bg-violet-500/15 border border-violet-500/30"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-violet-700 bg-violet-100 border border-violet-300 dark:text-violet-200 dark:bg-violet-500/25 dark:border-violet-500/50"
               title="Buy app tokens"
             >
               {formatTokens(userData?.appTokens || 0)}
