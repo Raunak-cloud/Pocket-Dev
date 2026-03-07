@@ -5053,6 +5053,10 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         onTextEdited={handlePreviewTextEdited}
                         onImageSelected={handlePreviewImageSelected}
                         onButtonSelected={handlePreviewButtonSelected}
+                        onExpired={() => {
+                          setPreviewSandboxId("create-new");
+                          setPreviewKey((prev) => prev + 1);
+                        }}
                       />
                     ) : (
                       <WebContainerPreview
