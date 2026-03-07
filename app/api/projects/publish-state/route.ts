@@ -42,6 +42,8 @@ export async function PUT(req: Request) {
           ? { publishedAt: publishedAt ? new Date(publishedAt) : null }
           : {}),
         ...(customDomain !== undefined ? { customDomain } : {}),
+        // Preserve updatedAt so publish state changes don't look like code changes
+        updatedAt: project.updatedAt,
       },
     });
 
