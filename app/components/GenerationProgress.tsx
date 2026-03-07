@@ -10,6 +10,7 @@ interface GenerationProgressProps {
   onViewDetails?: () => void;
   isMinimized?: boolean;
   onToggleMinimize?: () => void;
+  minimizedPositionClass?: string;
 }
 
 interface ProgressStep {
@@ -203,6 +204,7 @@ export default function GenerationProgress({
   onCancel,
   isMinimized = false,
   onToggleMinimize,
+  minimizedPositionClass = "fixed bottom-6 right-6 z-50",
 }: GenerationProgressProps) {
   const isEditMode = prompt.toLowerCase().startsWith("editing:");
   const cleanPrompt = isEditMode
@@ -243,7 +245,7 @@ export default function GenerationProgress({
     return (
       <button
         onClick={onToggleMinimize}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 bg-bg-secondary/90 backdrop-blur-xl border border-border-secondary/50 rounded-2xl shadow-2xl shadow-blue-500/10 hover:border-blue-500/30 hover:shadow-blue-500/20 transition-all duration-300 group"
+        className={`${minimizedPositionClass} flex items-center gap-3 px-5 py-3.5 bg-bg-secondary/90 backdrop-blur-xl border border-border-secondary/50 rounded-2xl shadow-2xl shadow-blue-500/10 hover:border-blue-500/30 hover:shadow-blue-500/20 transition-all duration-300 group`}
       >
         <div className="relative">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 flex items-center justify-center ring-1 ring-white/5">

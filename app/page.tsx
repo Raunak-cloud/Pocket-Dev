@@ -4472,6 +4472,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
               <div className="flex flex-wrap items-center justify-between gap-2">
                 {!isMobileViewport && (
                   <>
+                    <div className="flex items-center gap-1.5">
                     <div className="inline-flex items-center gap-1 bg-bg-tertiary/50 rounded-lg p-1">
                       <button
                         onClick={() => setPreviewMode("mobile")}
@@ -4542,6 +4543,22 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                           />
                         </svg>
                       </button>
+                    </div>
+
+                    {isEditing && isEditMinimized && (
+                      <button
+                        onClick={() => setIsEditMinimized(false)}
+                        className="inline-flex items-center gap-2.5 px-4 py-2 rounded-lg bg-blue-500/15 border border-blue-500/30 hover:bg-blue-500/25 hover:border-blue-500/50 transition-all duration-200"
+                      >
+                        <div className="w-2.5 h-2.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-pulse flex-shrink-0" />
+                        <span className="text-sm font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap">
+                          Editing in progress
+                        </span>
+                        <span className="text-sm text-blue-600/70 dark:text-blue-400/70 whitespace-nowrap">
+                          · Click to view
+                        </span>
+                      </button>
+                    )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -4838,23 +4855,6 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                 </div>
               )}
 
-              {/* Editing minimized banner */}
-              {isEditing && isEditMinimized && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
-                  <button
-                    onClick={() => setIsEditMinimized(false)}
-                    className="flex items-center gap-3 px-4 py-2 bg-blue-900/40 border-2 border-dashed border-blue-500/40 rounded-lg hover:bg-blue-900/60 transition backdrop-blur-sm"
-                  >
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-                    <span className="text-sm text-text-primary font-medium">
-                      Editing in progress...
-                    </span>
-                    <span className="text-xs text-blue-300">
-                      (Click to view)
-                    </span>
-                  </button>
-                </div>
-              )}
 
               {/* Device Frame Container */}
               <div
@@ -5827,7 +5827,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             onClick={() => setAiFeedback(null)}
           >
             <div
-              className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[70vh] flex flex-col overflow-hidden"
+              className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[100dvh] flex flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -7182,6 +7182,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             setShowCancelConfirm("edit");
           }}
           isMinimized={true}
+          minimizedPositionClass="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
           onToggleMinimize={() => {
             setActiveSection("create");
             setIsEditMinimized(false);
