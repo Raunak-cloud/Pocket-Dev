@@ -27,16 +27,22 @@ export default function ProjectsContent({
       typeof configRecord[INITIAL_GENERATION_PROMPT_CONFIG_KEY] === "string"
         ? String(configRecord[INITIAL_GENERATION_PROMPT_CONFIG_KEY]).trim()
         : "";
-    if (initialPrompt) return initialPrompt;
+    const stripInjection = (text: string) =>
+      text
+        // Match correctly-stored emoji (u flag for proper Unicode handling)
+        .replace(/\n+[🔷🔸📷📄🖼️📊🚨][\s\S]*/u, "")
+        // Match garbled/mojibake emoji followed by known injection keywords
+        .replace(/\n+.{0,8}(?:CRITICAL\s*[-–]\s*User has uploaded|PDF CONTENT EXTRACTION|CURRENT DATABASE SCHEMA|CRITICAL REQUIREMENT)[\s\S]*/i, "")
+        .trim();
+
+    if (initialPrompt) return stripInjection(initialPrompt) || "Untitled project";
 
     const prompt = savedProject.prompt?.trim() || "";
     if (!prompt) return "Untitled project";
     if (prompt.startsWith("You are a senior full-stack developer.")) {
       return "Generated project";
     }
-    // Strip image/PDF/backend injection blocks appended after the user's clean prompt
-    const cleanPrompt = prompt.replace(/\n\n[🔷🔸📷📄🖼️][\s\S]*/, "").trim();
-    return cleanPrompt || "Untitled project";
+    return stripInjection(prompt) || "Untitled project";
   };
 
   const formatProjectDate = (value: Date | string | number) => {
