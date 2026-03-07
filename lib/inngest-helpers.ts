@@ -185,6 +185,10 @@ export async function generateCodeWithInngest(
   customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
   userInstruction?: string,
   pdfAttachments?: Array<{ name: string; url: string }>,
+  cachedContentName?: string,
+  existingFiles?: Array<{ path: string; content: string }>,
+  isEdit?: boolean,
+  cachedEditPrompt?: string,
 ): Promise<GenerateCodeResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
@@ -217,6 +221,10 @@ export async function generateCodeWithInngest(
     customApis,
     userInstruction,
     pdfAttachments,
+    cachedContentName,
+    existingFiles,
+    isEdit,
+    cachedEditPrompt,
   );
 
   onProgress?.("[0/9] Generation started. Waiting for first update...");

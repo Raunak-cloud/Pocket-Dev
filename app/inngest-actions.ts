@@ -32,6 +32,10 @@ export async function triggerCodeGeneration(
   customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
   userInstruction?: string,
   pdfAttachments?: Array<{ name: string; url: string }>,
+  cachedContentName?: string,
+  existingFiles?: Array<{ path: string; content: string }>,
+  isEdit?: boolean,
+  cachedEditPrompt?: string,
 ) {
   // Enforce per-user ban and system-level feature restrictions
   const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
@@ -81,6 +85,10 @@ export async function triggerCodeGeneration(
       customApis: effectiveCustomApis,
       userInstruction,
       pdfAttachments,
+      cachedContentName,
+      existingFiles,
+      isEdit,
+      cachedEditPrompt,
     },
   });
 

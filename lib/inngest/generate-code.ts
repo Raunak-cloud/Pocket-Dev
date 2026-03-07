@@ -7,6 +7,7 @@
 
 import { inngest } from "@/lib/inngest-client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleAICacheManager } from "@google/generative-ai/server";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
 import { generateImagesFunction } from "@/lib/inngest/generate-images";
@@ -390,6 +391,44 @@ async function generateWithGemini(
   });
 
   return result.response.text();
+}
+
+/** Generate using a Gemini context cache — no need to resend existing files in the prompt. */
+async function generateWithGeminiCached(
+  cacheName: string,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not found");
+
+  const cacheManager = new GoogleAICacheManager(apiKey);
+  const cachedContent = await cacheManager.get(cacheName);
+
+  const gemini = new GoogleGenerativeAI(apiKey);
+  const model = gemini.getGenerativeModelFromCachedContent(cachedContent, {
+    systemInstruction: systemPrompt,
+    generationConfig: {
+      maxOutputTokens: MAX_TOKENS,
+      temperature: 0.7,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const result = await model.generateContent(userPrompt);
+  return result.response.text();
+}
+
+/** Merge partial AI output (changed files only) with the full existing file set. */
+function mergeWithExistingFiles(
+  existingFiles: Array<{ path: string; content: string }>,
+  returnedFiles: Array<{ path: string; content: string }>,
+): Array<{ path: string; content: string }> {
+  const returnedPaths = new Set(returnedFiles.map((f) => f.path));
+  return [
+    ...existingFiles.filter((f) => !returnedPaths.has(f.path)),
+    ...returnedFiles,
+  ];
 }
 
 async function sendProgress(projectId: string, message: string) {
@@ -3493,35 +3532,54 @@ const data = await res.json();`;
       },
     );
 
-    // Step 2: Generate with Gemini
+    const cachedContentName = (event.data as Record<string, unknown>)?.cachedContentName as string | undefined;
+    const cachedEditPrompt = (event.data as Record<string, unknown>)?.cachedEditPrompt as string | undefined;
+    const existingFilesRaw = (event.data as Record<string, unknown>)?.existingFiles as Array<{ path: string; content: string }> | undefined;
+
+    // Step 2: Generate with Gemini (cached fast path for edits, standard path otherwise)
     const generatedText = await step.run("generate-with-gemini", async () => {
-      // Progress + cancel check inside the step so they don't eat into replay overhead
       await sendProgress(projectId, "[2/9] Generating your app...");
       if (await checkIfCancelled(projectId)) {
         throw new Error("Generation cancelled by user");
       }
-      console.log("Using Gemini 3 Flash Preview...");
 
       try {
-        // Pick system prompt based on request type and detected project type:
-        // - Edits: REPAIR_SYSTEM_PROMPT (minimal, targeted changes)
-        // - Dashboard/app: DASHBOARD_SYSTEM_PROMPT
-        // - Website: SYSTEM_PROMPT (design-agency)
         let generationSystemPrompt = isEditRequest
           ? REPAIR_SYSTEM_PROMPT
           : detectedProjectType === "dashboard"
             ? DASHBOARD_SYSTEM_PROMPT
             : SYSTEM_PROMPT;
 
-        // Append Supabase API reference when backend/auth is enabled
         if (integrationRequirements.requiresAuth || integrationRequirements.requiresDatabase) {
           generationSystemPrompt += "\n" + SUPABASE_API_REFERENCE;
         }
 
-        const text = await generateWithGemini(generationSystemPrompt, finalUserPrompt, pdfAttachments);
+        // Fast path: use Gemini context cache — no need to resend all files
+        if (isEditRequest && cachedContentName) {
+          console.log(`[CachedEdit] Using context cache: ${cachedContentName}`);
+          await sendProgress(projectId, "[2/9] Applying edit with cached context...");
+          try {
+            // Use the minimal cached prompt (no file contents) when available;
+            // fall back to the full prompt if not provided.
+            const promptForCache = cachedEditPrompt ?? String(finalUserPrompt);
+            const text = await generateWithGeminiCached(
+              cachedContentName,
+              String(generationSystemPrompt),
+              promptForCache,
+            );
+            console.log("[CachedEdit] Response length:", text.length, "chars");
+            return text;
+          } catch (cacheErr) {
+            console.warn("[CachedEdit] Cache miss or expired — falling back to standard generation:", cacheErr);
+            // Fall through to standard generation below
+          }
+        }
+
+        // Standard path
+        console.log("Using Gemini 3 Flash Preview...");
+        const text = await generateWithGemini(String(generationSystemPrompt), String(finalUserPrompt), pdfAttachments);
         console.log("Gemini response length:", text.length, "chars");
         console.log("Response preview:", text.substring(0, 200) + "...");
-
         return text;
       } catch (error) {
         console.error("Gemini API error:", error);
@@ -3587,8 +3645,13 @@ const data = await res.json();`;
         throw new Error(`Unable to parse and normalize AI response: ${reason}`);
       }
 
+      // Merge partial output with existing files when the cached edit path returned only changed files
+      const mergedFiles = (isEditRequest && existingFilesRaw && existingFilesRaw.length > 0)
+        ? mergeWithExistingFiles(existingFilesRaw, normalizedProject.files)
+        : normalizedProject.files;
+
       let files = ensureRequiredFiles(
-        normalizedProject.files,
+        mergedFiles,
         normalizedProject.dependencies,
         integrationRequirements,
         managedAuthConfig,

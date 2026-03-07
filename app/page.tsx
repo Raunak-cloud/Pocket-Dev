@@ -19,6 +19,8 @@ import { useAuth } from "./contexts/AuthContext";
 import SignInModal from "./components/SignInModal";
 import DashboardSidebar from "./components/DashboardSidebar";
 import GenerationProgress from "./components/GenerationProgress";
+import DependencyTreeViewer from "./components/DependencyTreeViewer";
+import { buildDependencyTree } from "@/lib/dependency-tree";
 import MaintenanceToggle from "./components/MaintenanceToggle";
 import { persistGeneratedImages } from "@/lib/persist-images";
 import { useSupabaseUploads } from "@/lib/supabase-uploads";
@@ -42,6 +44,7 @@ import { useGitHubExport } from "./hooks/useGitHubExport";
 import { useEditorExport } from "./hooks/useEditorExport";
 import {
   buildEditPrompt,
+  buildCachedEditPrompt,
   buildImageUploadSection,
   buildPdfUploadSection,
   buildSchemaContextSection,
@@ -366,6 +369,11 @@ function ReactGeneratorContent() {
   const [previewKey, setPreviewKey] = useState(0);
   const [previewSandboxId, setPreviewSandboxId] = useState<string | null>(null);
   const [showCodeViewer, setShowCodeViewer] = useState(false);
+  const [showDependencyTree, setShowDependencyTree] = useState(false);
+  const [showDeveloperDropdown, setShowDeveloperDropdown] = useState(false);
+  const [geminiCacheId, setGeminiCacheId] = useState<string | null>(null);
+  const [dependencyTree, setDependencyTree] = useState<import("@/lib/dependency-tree").ProjectDependencyTree | null>(null);
+  const [aiFeedbackIsNewGen, setAiFeedbackIsNewGen] = useState(false);
   const [textEditMode, setTextEditMode] = useState(false);
   const [imageSelectMode, setImageSelectMode] = useState(false);
   const [linkSelectMode, setLinkSelectMode] = useState(false);
@@ -1180,6 +1188,82 @@ function ReactGeneratorContent() {
     if (previewMode !== "mobile") setPreviewMode("mobile");
     if (!isFullPreview) setIsFullPreview(true);
   }, [isMobileViewport, previewMode, isFullPreview]);
+
+  // Session-level Gemini context cache — create/refresh when project changes, cleanup on unmount
+  useEffect(() => {
+    let cancelled = false;
+    const prevCacheId = geminiCacheId;
+
+    async function initCache() {
+      if (!project?.files?.length) return;
+
+      // Build dependency tree (synchronous, cheap)
+      setDependencyTree(buildDependencyTree(project.files));
+
+      // Total file content size check — skip caching for very large projects to avoid Inngest payload issues
+      const totalSize = project.files.reduce((acc, f) => acc + f.content.length, 0);
+      if (totalSize > 400_000) return;
+
+      try {
+        const res = await fetch("/api/gemini-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: project.files }),
+        });
+        if (cancelled) return;
+        const data = await res.json() as { cacheName: string | null };
+        setGeminiCacheId(data.cacheName ?? null);
+      } catch {
+        if (!cancelled) setGeminiCacheId(null);
+      }
+    }
+
+    void initCache();
+
+    // Delete the previous cache if the project changed
+    if (prevCacheId) {
+      void fetch("/api/gemini-cache", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cacheName: prevCacheId }),
+      }).catch(() => {});
+    }
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId]);
+
+  // Delete the Gemini cache when the user closes/navigates away
+  useEffect(() => {
+    const cleanup = () => {
+      if (!geminiCacheId) return;
+      void fetch("/api/gemini-cache", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cacheName: geminiCacheId }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    window.addEventListener("beforeunload", cleanup);
+    return () => {
+      window.removeEventListener("beforeunload", cleanup);
+      cleanup();
+    };
+  }, [geminiCacheId]);
+
+  // Close developer dropdown when clicking outside
+  useEffect(() => {
+    if (!showDeveloperDropdown) return;
+    const handle = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".developer-dropdown")) {
+        setShowDeveloperDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [showDeveloperDropdown]);
 
   // Close edit/export dropdowns when clicking outside
   useEffect(() => {
@@ -2445,6 +2529,23 @@ ${schemaContext}
 
     editFullPrompt += buildCriticalRequirementSection(existingFilePaths);
 
+    // Build a minimal prompt for the cached fast path (no file contents — cache has them).
+    // Only built when a cache is active and there are no PDF attachments
+    // (PDFs can't be sent via the cached generation path).
+    const hasPdfs = editFiles.some((f) => f.type === "application/pdf");
+    let cachedEditPrompt: string | undefined;
+    if (geminiCacheId && !hasPdfs) {
+      cachedEditPrompt = buildCachedEditPrompt({ userRequest, existingFilePaths });
+      if (editFiles.some((f) => f.type.startsWith("image/"))) {
+        cachedEditPrompt += buildImageUploadSection(
+          editFiles.filter((f) => f.type.startsWith("image/")),
+        );
+      }
+      if (schemaContext) cachedEditPrompt += buildSchemaContextSection(schemaContext);
+      if (backendSelectedForEdit) cachedEditPrompt += buildBackendRequirementPrompt("existing", schemaContext);
+      if (paymentsEnabledForEdit) cachedEditPrompt += buildPaymentRequirementPrompt("existing");
+    }
+
     // Save current project state as a snapshot before applying the edit
     let currentEditHistory = editHistory;
     if (currentProjectId && user) {
@@ -2548,6 +2649,11 @@ ${schemaContext}
             }))
           : undefined,
         editPrompt.trim() || undefined,
+        undefined, // pdfAttachments
+        geminiCacheId ?? undefined,
+        geminiCacheId ? project.files : undefined, // pass existing files for merge only when using cache
+        true, // isEdit
+        cachedEditPrompt,
       );
 
       setEditProgressMessages((prev) => [
@@ -2570,8 +2676,16 @@ ${schemaContext}
       setProject(mergedProject);
       syncIntegrationSelectionFromProject(mergedProject);
       setPreviewSandboxId(result.sandboxId ?? null);
-      // Force preview re-init after AI edit to avoid stale iframe/HMR state.
-      setPreviewKey((prev) => prev + 1);
+      // Only do a full container restart if dependencies changed — new packages
+      // require a fresh npm install. For unchanged deps the HMR file-sync
+      // (Effect 2 in WebContainerPreview) handles the update without killing
+      // the running server, which avoids the "Unable to connect to port 3000" flash.
+      const depsChanged =
+        JSON.stringify(project.dependencies ?? {}) !==
+        JSON.stringify(mergedProject.dependencies ?? {});
+      if (depsChanged) {
+        setPreviewKey((prev) => prev + 1);
+      }
       setEditPrompt("");
       clearEditClarificationState();
       setEditFiles([]); // Clear edit files after successful edit
@@ -2592,7 +2706,7 @@ ${schemaContext}
           console.error("Error updating project:", saveError);
         }
       }
-      if (result.aiFeedback) setAiFeedback(result.aiFeedback);
+      if (result.aiFeedback) { setAiFeedback(result.aiFeedback); setAiFeedbackIsNewGen(false); }
       clearActiveGenerationSession();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Edit failed");
@@ -2864,7 +2978,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
       setProgressMessages((prev) => [...prev, "Ready to preview!"]);
       setStatus("success");
-      if (result.aiFeedback) setAiFeedback(result.aiFeedback);
+      if (result.aiFeedback) { setAiFeedback(result.aiFeedback); setAiFeedbackIsNewGen(true); }
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion
       clearActiveGenerationSession();
     } catch (err) {
@@ -3828,7 +3942,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
               <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                 <div
                   className={`flex items-center gap-2 pb-1 sm:pb-0 ${
-                    isMobileViewport ? "overflow-visible" : "overflow-x-auto"
+                    isMobileViewport || showDeveloperDropdown ? "overflow-visible" : "overflow-x-auto"
                   }`}
                 >
                   <button
@@ -4044,26 +4158,52 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   )}
 
                   {!isMobileViewport && (
-                    <button
-                      onClick={() => setShowCodeViewer(true)}
-                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
-                      title="View project code"
-                    >
-                      <svg
-                        className="w-3.5 h-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
+                    <div className="relative developer-dropdown">
+                      <button
+                        onClick={() => setShowDeveloperDropdown((v) => !v)}
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                          showDeveloperDropdown
+                            ? "text-violet-300 bg-violet-500/15 border border-violet-500/30"
+                            : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
+                        }`}
+                        title="Developer tools"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-                        />
-                      </svg>
-                      Code
-                    </button>
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                        Developer
+                        <svg className={`w-3 h-3 transition-transform ${showDeveloperDropdown ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showDeveloperDropdown && (
+                        <div className="absolute top-full left-0 mt-1 w-48 bg-bg-secondary border border-border-primary rounded-xl shadow-xl z-30 overflow-hidden py-1">
+                          <button
+                            onClick={() => { setShowCodeViewer(true); setShowDeveloperDropdown(false); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition text-left"
+                          >
+                            <svg className="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            </svg>
+                            Code
+                          </button>
+                          <button
+                            onClick={() => { setShowDependencyTree(true); setShowDeveloperDropdown(false); }}
+                            disabled={!dependencyTree}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                            </svg>
+                            Dependency Tree
+                            {geminiCacheId && (
+                              <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Context cached" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {!isMobileViewport && (
@@ -4545,28 +4685,11 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                       </button>
                     </div>
 
-                    {isEditing && isEditMinimized && (
-                      <button
-                        onClick={() => setIsEditMinimized(false)}
-                        className="inline-flex items-center gap-2.5 px-4 py-2 rounded-lg bg-blue-500/15 border border-blue-500/30 hover:bg-blue-500/25 hover:border-blue-500/50 transition-all duration-200"
-                      >
-                        <div className="w-2.5 h-2.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-pulse flex-shrink-0" />
-                        <span className="text-sm font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap">
-                          Editing in progress
-                        </span>
-                        <span className="text-sm text-blue-600/70 dark:text-blue-400/70 whitespace-nowrap">
-                          · Click to view
-                        </span>
-                      </button>
-                    )}
-                    </div>
-
-                    <div className="flex items-center gap-2">
                       <button
                         onClick={() => setIsFullPreview((prev) => !prev)}
                         className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
                           isFullPreview
-                            ? "text-blue-300 bg-blue-600/20 border border-blue-500/30"
+                            ? "text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-600/20 border border-blue-400 dark:border-blue-500/30"
                             : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
                         }`}
                         title={
@@ -4600,7 +4723,33 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                           {isFullPreview ? "Exit Full Preview" : "Full Preview"}
                         </span>
                       </button>
+
+                    {isEditing && isEditMinimized && (
+                      <button
+                        onClick={() => setIsEditMinimized(false)}
+                        className="relative inline-flex items-center gap-2.5 px-4 py-2 rounded-lg bg-blue-500/15 border border-blue-500/30 hover:bg-blue-500/25 hover:border-blue-500/50 transition-all duration-200 overflow-hidden"
+                        style={{ animation: "editPillGlow 2s ease-in-out infinite" }}
+                      >
+                        {/* shimmer sweep */}
+                        <span
+                          aria-hidden
+                          className="pointer-events-none absolute inset-y-0 w-1/2 rounded-lg"
+                          style={{
+                            background: "linear-gradient(105deg, transparent 20%, rgba(147,197,253,0.35) 50%, transparent 80%)",
+                            animation: "editPillShimmer 2.4s ease-in-out infinite",
+                          }}
+                        />
+                        <div className="w-2.5 h-2.5 bg-blue-500 dark:bg-blue-400 rounded-full animate-pulse flex-shrink-0 relative z-10" />
+                        <span className="text-sm font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap relative z-10">
+                          Editing in progress
+                        </span>
+                        <span className="text-sm text-blue-600/70 dark:text-blue-400/70 whitespace-nowrap relative z-10">
+                          · Click to view
+                        </span>
+                      </button>
+                    )}
                     </div>
+
                   </>
                 )}
               </div>
@@ -5854,6 +6003,64 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   </svg>
                 </button>
               </div>
+              {/* Integration warnings — shown only after new generation */}
+              {aiFeedbackIsNewGen && (() => {
+                const stored = project ? readStoredIntegrations(project) : null;
+                const hasBackend = stored?.backendEnabled === true;
+                const hasPayments = stored?.paymentsEnabled === true;
+                const hasApis = customApis.length > 0;
+                const warnings: Array<{ color: string; icon: string; text: string }> = [];
+
+                if (!hasBackend) {
+                  warnings.push({
+                    color: "amber",
+                    icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z",
+                    text: "Backend (auth & database), payments, and custom API integrations won't work — these must be enabled before generation, not after.",
+                  });
+                } else {
+                  if (!hasPayments) {
+                    warnings.push({
+                      color: "orange",
+                      icon: "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z",
+                      text: "Payment integration wasn't enabled — Stripe features won't work in this build. Add payments before generating to include them.",
+                    });
+                  }
+                  if (!hasApis) {
+                    warnings.push({
+                      color: "blue",
+                      icon: "M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+                      text: "Custom API integrations weren't enabled — external API connections won't work. Add APIs before generating to use them.",
+                    });
+                  }
+                }
+
+                if (warnings.length === 0) return null;
+                return (
+                  <div className="px-6 pt-4 space-y-2.5 shrink-0">
+                    {warnings.map((w, i) => (
+                      <div key={i} className={`flex gap-3 px-4 py-3 rounded-xl border ${
+                        w.color === "amber" ? "bg-amber-50 border-amber-300 dark:bg-amber-500/10 dark:border-amber-500/25" :
+                        w.color === "orange" ? "bg-orange-50 border-orange-300 dark:bg-orange-500/10 dark:border-orange-500/25" :
+                        "bg-blue-50 border-blue-300 dark:bg-blue-500/10 dark:border-blue-500/25"
+                      }`}>
+                        <svg className={`w-4 h-4 mt-0.5 shrink-0 ${
+                          w.color === "amber" ? "text-amber-600 dark:text-amber-400" :
+                          w.color === "orange" ? "text-orange-600 dark:text-orange-400" :
+                          "text-blue-600 dark:text-blue-400"
+                        }`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d={w.icon} />
+                        </svg>
+                        <p className={`text-xs leading-relaxed ${
+                          w.color === "amber" ? "text-amber-800 dark:text-amber-300" :
+                          w.color === "orange" ? "text-orange-800 dark:text-orange-300" :
+                          "text-blue-800 dark:text-blue-300"
+                        }`}>{w.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
               {/* Scrollable content */}
               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2.5">
                 {aiFeedback
@@ -6215,6 +6422,15 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             files={project.files}
             onClose={() => setShowCodeViewer(false)}
             onSaveFiles={handleCodeViewerSave}
+          />
+        )}
+
+        {/* Dependency Tree Modal */}
+        {showDependencyTree && project && dependencyTree && (
+          <DependencyTreeViewer
+            files={project.files}
+            tree={dependencyTree}
+            onClose={() => setShowDependencyTree(false)}
           />
         )}
       </div>
@@ -7196,6 +7412,15 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           files={project.files}
           onClose={() => setShowCodeViewer(false)}
           onSaveFiles={handleCodeViewerSave}
+        />
+      )}
+
+      {/* Dependency Tree Modal */}
+      {showDependencyTree && project && dependencyTree && (
+        <DependencyTreeViewer
+          files={project.files}
+          tree={dependencyTree}
+          onClose={() => setShowDependencyTree(false)}
         />
       )}
     </div>

@@ -112,6 +112,8 @@ ENGINEERING CONTRACT
 - Do not use @apply in generated CSS; use explicit utility classes in markup.
 - If code requires a provider wrapper, ensure app/layout.tsx wraps {children} correctly.
 - Ensure all files parse and compile without TS/JS syntax errors.
+- NEVER create barrel/index files that re-export other files. Always use direct file imports (e.g. import { Button } from './components/Button', not from './components').
+- NEVER use dynamic imports: import(\`./dir/\${var}\`) or import(variable). Use static imports only.
 - CRITICAL — "use client" RULES: Any file that uses useState, useEffect, useRef, useCallback, useMemo, useReducer, useLayoutEffect, or any other React hook MUST start with "use client"; — no exceptions. Any file that imports from framer-motion, react-hot-toast, react-toastify, styled-jsx, lottie-react, react-spring, swiper, react-slick, reactflow, react-beautiful-dnd, react-dnd, or any other client-only animation/gesture/UI library MUST start with "use client";
 - CRITICAL — localStorage/window/document: NEVER access localStorage, sessionStorage, window, or document at the module top level or directly in the component body. All browser API access MUST be inside useEffect(() => { ... }, []) or inside event handler functions. Accessing them during SSR causes ReferenceError crashes.
 - CRITICAL — useSearchParams: Any component that calls useSearchParams() MUST be wrapped in a <Suspense fallback={...}> boundary in its parent. Extract the component that uses useSearchParams into a separate child component, then wrap it with <Suspense> in the parent page. This is required by Next.js 14+.
@@ -127,6 +129,7 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Header/navbar must stay pinned (sticky/fixed + top-0) and remain above content (high z-index).
 - Mobile menu must render on top of content, have readable contrast, and occupy full phone height (h-screen/min-h-screen/100dvh/inset-y-0).
 - Mobile menu open state must use a dedicated full-screen overlay layer (fixed inset-0, very high z-index) with an opaque or near-opaque menu surface (bg-white/95 for light mode, dark:bg-slate-900/95 for dark mode). Underlying hero/content must not visually compete with menu links.
+- CRITICAL — MOBILE MENU MUST USE position:fixed: The mobile menu overlay container MUST always use Tailwind class "fixed" (CSS position:fixed), never "absolute". Using "absolute" causes the menu to scroll with the page and bleed behind content when the user has already scrolled down. The correct pattern is: <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-slate-900"> ... </div>. This is a hard requirement — an absolutely-positioned mobile menu is a critical UX bug.
 - Mobile menu links must be in a dedicated vertical list container with clear spacing and 44px+ tap targets; no overlap with hero headlines/images.
 - Mobile menu must have a dedicated header row (brand left, close button right) with fixed height and bottom border; menu links must start below this header with explicit top spacing.
 - Brand lockup in mobile header must not wrap into multiple lines or collide with icons; use constrained width with truncate/ellipsis and keep logo/icon + text aligned on one row.

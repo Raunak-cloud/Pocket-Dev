@@ -46,7 +46,18 @@ TAILWIND CSS RULES (CRITICAL - VIOLATIONS CAUSE BUILD ERRORS):
 - NEVER use @apply with custom class names like bg-primary, text-secondary, bg-accent — these WILL crash the build
 - ONLY use @apply with built-in Tailwind utilities: @apply px-4 py-2 bg-blue-600 text-white rounded-lg
 - Use standard Tailwind color classes (blue-600, gray-900, emerald-500, etc.) instead of custom names
-- Keep globals.css simple — just @tailwind base/components/utilities. Put styles in className attributes.`;
+- Keep globals.css simple — just @tailwind base/components/utilities. Put styles in className attributes.
+
+MOBILE MENU RULE (CRITICAL):
+- If you touch ANY navigation or mobile menu component, ensure the mobile menu overlay uses CSS position:fixed (Tailwind class "fixed"), NEVER "absolute". An absolutely-positioned menu scrolls with the page and bleeds behind content when the user has scrolled. Correct pattern: <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-slate-900">
+- Do NOT add overflow-y-auto or overflow-scroll to nav, header, or mobile menu wrapper elements — this creates nested scrollbars and breaks layout.
+- The mobile menu overlay must use inset-0 (covers full viewport), a high z-index (z-50 minimum), and an opaque background so no page content is visible behind it.
+- The mobile menu MUST always have a visible X close button: <button onClick={() => setIsMenuOpen(false)}>.
+
+IMPORT RULES (CRITICAL — violations break the dependency tree and increase edit time):
+- NEVER create barrel/index files that re-export other files (no: export { Button } from './Button')
+- NEVER use dynamic imports: import(\`./dir/\${var}\`) or import(variable)
+- ALWAYS use direct file imports: import { Button } from './components/Button' (not from './components')`;
 }
 
 export function buildImageUploadSection(imageFiles: UploadedFileInfo[]): string {
@@ -106,6 +117,39 @@ STRICT DATABASE RULES:
 - Every supabase.from("table_name") in code must have a matching CREATE TABLE in supabase/schema.sql.
 - Preserve existing RLS policies. Add new ones for new tables.
 - Column types must match what the code inserts/selects.`;
+}
+
+/**
+ * Minimal edit prompt used when Gemini already has the full codebase via context cache.
+ * Do NOT include file contents here — the cache handles that.
+ */
+export function buildCachedEditPrompt(args: {
+  userRequest: string;
+  existingFilePaths: string;
+}): string {
+  const { userRequest, existingFilePaths } = args;
+  return `USER EDIT REQUEST:
+${userRequest}
+
+CRITICAL — MINIMAL CHANGES ONLY:
+- Make the MINIMUM code change needed. Do NOT refactor, restyle, or touch unrelated code.
+- Do NOT add features the user did not ask for.
+- Keep existing image URLs, nav links, and page structure unchanged unless explicitly requested.
+- If the request involves auth state: use supabase.auth.getUser() — do NOT use placeholder booleans.
+
+RETURN FORMAT:
+- Return ONLY the files you modified. Do NOT include unchanged files.
+- The project contains these files: ${existingFilePaths}
+- Your response MUST be valid JSON in the standard project format (files array + dependencies object).
+
+MOBILE MENU: If you touch navigation/mobile menu — (1) overlay must use "fixed inset-0 z-50", never "absolute"; (2) no overflow-y-auto/scroll on nav/header/menu wrappers; (3) always include a visible X close button inside the overlay.
+
+IMPORT RULES:
+- NEVER create barrel exports (export { X } from './X')
+- NEVER use dynamic imports
+- ALWAYS use direct file imports
+
+TAILWIND: Never use @apply with custom class names. Use built-in Tailwind utilities only.`;
 }
 
 export function buildCriticalRequirementSection(existingFilePaths: string): string {

@@ -55,6 +55,18 @@ body {
   font-family: var(--font-sans);
 }
 
+/* ── editing-in-progress pill animations ── */
+@keyframes editPillGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); border-color: rgba(59, 130, 246, 0.30); }
+  50%       { box-shadow: 0 0 8px 2px rgba(59, 130, 246, 0.35); border-color: rgba(59, 130, 246, 0.70); }
+}
+@keyframes editPillShimmer {
+  0%   { transform: translateX(-200%); opacity: 0; }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateX(200%); opacity: 0; }
+}
+
 /* ── cursor blink ── */
 @keyframes blink {
   0%, 100% { opacity: 1; }
