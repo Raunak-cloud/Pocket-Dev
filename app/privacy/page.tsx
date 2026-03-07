@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 const EFFECTIVE_DATE = "March 7, 2026";
 const CONTACT_EMAIL = "raunak.vision@gmail.com";
 const APP_NAME = "Danphe";
-const APP_URL = "https://pocket-dev-lac.vercel.app";
+const APP_URL = "https://danphe.io";
 
 export default function PrivacyPage() {
   return (

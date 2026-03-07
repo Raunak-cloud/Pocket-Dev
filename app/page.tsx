@@ -347,13 +347,29 @@ function ReactGeneratorContent() {
   } = useAuth();
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState("");
+  // Read any in-flight session from localStorage synchronously so the correct
+  // screen (progress / edit overlay) shows on the very first render, before
+  // auth even resolves — eliminating the 3-second flash of the main page.
+  const peekSession = (): ActiveGenerationSession | null => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(ACTIVE_GENERATION_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as ActiveGenerationSession) : null;
+    } catch {
+      return null;
+    }
+  };
+  const _initialSession = peekSession();
+
   const [status, setStatus] = useState<
     "idle" | "loading" | "success" | "error"
-  >("idle");
+  >(_initialSession?.mode === "generation" ? "loading" : "idle");
   const [project, setProject] = useState<ReactProject | null>(null);
   const [error, setError] = useState("");
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [progressMessages, setProgressMessages] = useState<string[]>([]);
+  const [progressMessages, setProgressMessages] = useState<string[]>(
+    _initialSession?.mode === "generation" ? ["Resuming generation in background..."] : [],
+  );
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [pendingGeneration, setPendingGeneration] = useState(false);
   const [activeSection, setActiveSection] = useState("create");
@@ -362,12 +378,18 @@ function ReactGeneratorContent() {
   );
   const [isGenerationMinimized, setIsGenerationMinimized] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
-  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [generationPrompt, setGenerationPrompt] = useState(
+    _initialSession?.mode === "generation" ? _initialSession.prompt : "",
+  );
   const [currentGenerationProjectId, setCurrentGenerationProjectId] = useState<
     string | null
   >(null);
-  const [editPrompt, setEditPrompt] = useState("");
-  const [isEditing, setIsEditing] = useState(false);
+  const [editPrompt, setEditPrompt] = useState(
+    _initialSession?.mode === "edit" ? _initialSession.prompt : "",
+  );
+  const [isEditing, setIsEditing] = useState(
+    _initialSession?.mode === "edit",
+  );
   const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<
     "mobile" | "tablet" | "desktop"
@@ -406,7 +428,7 @@ function ReactGeneratorContent() {
     useState(false);
   const [imageRegenerationPrompt, setImageRegenerationPrompt] = useState("");
   const [editProgressMessages, setEditProgressMessages] = useState<string[]>(
-    [],
+    _initialSession?.mode === "edit" ? ["Resuming edit in background..."] : [],
   );
   const [isEditMinimized, setIsEditMinimized] = useState(false);
   const [editFiles, setEditFiles] = useState<UploadedFile[]>([]);
@@ -1028,7 +1050,7 @@ function ReactGeneratorContent() {
 
       if (session.mode === "edit") {
         setIsEditing(true);
-        setIsEditMinimized(true);
+        setIsEditMinimized(false);
         setEditPrompt(session.prompt);
         setEditProgressMessages(["Resuming edit in background..."]);
       } else {
@@ -1727,6 +1749,10 @@ function ReactGeneratorContent() {
   };
 
   const handleNewProjectClick = () => {
+    if (isEditing) {
+      setError("An edit is currently in progress. Please wait for it to finish before starting a new app.");
+      return;
+    }
     const confirmed = window.confirm(
       "Start a new app? Make sure you publish any changes you want live before continuing.",
     );
@@ -2587,40 +2613,15 @@ ${schemaContext}
       if (paymentsEnabledForEdit) cachedEditPrompt += buildPaymentRequirementPrompt("existing");
     }
 
-    // Save current project state as a snapshot before applying the edit
-    let currentEditHistory = editHistory;
-    if (currentProjectId && user) {
-      try {
-        const editPromptText =
-          editPrompt.trim() ||
-          (backendSelectedForEdit ? "Add backend integration" : "Edit");
-        const historyId = `local_${Date.now()}_${Math.random()
-          .toString(36)
-          .slice(2, 8)}`;
-        const nextHistory = [
-          ...editHistory,
-          {
-            id: historyId,
-            prompt: editPromptText,
-            files: project.files,
-            dependencies: project.dependencies || {},
-            timestamp: new Date(),
-          },
-        ].slice(-MAX_EDIT_HISTORY_ENTRIES);
-        currentEditHistory = nextHistory;
-        setEditHistory(nextHistory);
-
-        const projectWithHistory = applyEditHistoryToProject(
-          project,
-          nextHistory,
-        );
-        setProject(projectWithHistory);
-        updateSavedProjectCache(currentProjectId, projectWithHistory);
-        await updateProjectInSupabase(currentProjectId, projectWithHistory);
-      } catch (historyError) {
-        console.error("Error saving edit history:", historyError);
-      }
-    }
+    // Capture the old project state NOW (before Inngest overwrites it) so we
+    // can build a rollback snapshot after a successful edit.
+    const preEditFiles = project.files;
+    const preEditDependencies = project.dependencies || {};
+    const editPromptText =
+      editPrompt.trim() ||
+      (backendSelectedForEdit ? "Add backend integration" : "Edit");
+    // currentEditHistory starts as the existing history; snapshot is appended only on success
+    const currentEditHistory = editHistory;
 
     try {
       const runProjectId =
@@ -2703,10 +2704,21 @@ ${schemaContext}
       ]);
 
       // Images are now generated in the Inngest pipeline — result.files already has real URLs
-      const mergedProjectBase = applyEditHistoryToProject(
-        result,
-        currentEditHistory,
-      );
+      // Build the rollback snapshot NOW (after successful generation) using the pre-edit files
+      const historyId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const nextHistory = [
+        ...currentEditHistory,
+        {
+          id: historyId,
+          prompt: editPromptText,
+          files: preEditFiles,
+          dependencies: preEditDependencies,
+          timestamp: new Date(),
+        },
+      ].slice(-MAX_EDIT_HISTORY_ENTRIES);
+      setEditHistory(nextHistory);
+
+      const mergedProjectBase = applyEditHistoryToProject(result, nextHistory);
       const mergedProject = withStoredIntegrations(mergedProjectBase, {
         backendEnabled:
           backendSelectedForEdit ||
@@ -4344,8 +4356,10 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
                         <button
                           onClick={handleNewProjectClick}
-                          aria-label="New project"
-                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                          aria-label={isEditing ? "Edit in progress — cannot start new app" : "New project"}
+                          disabled={isEditing}
+                          title={isEditing ? "Edit in progress — wait for it to finish" : undefined}
+                          className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <svg
                             className="w-3.5 h-3.5"
@@ -4719,7 +4733,9 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
                     <button
                       onClick={handleNewProjectClick}
-                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition"
+                      disabled={isEditing}
+                      title={isEditing ? "Edit in progress — wait for it to finish" : undefined}
+                      className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-text-secondary bg-bg-tertiary hover:bg-border-secondary rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <svg
                         className="w-3.5 h-3.5"
@@ -7935,8 +7951,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           />
         )}
 
-      {/* Floating edit progress indicator (when on other sections or minimized while editing) */}
-      {isEditing && (activeSection !== "create" || isEditMinimized) && (
+      {/* Floating edit progress indicator (when on other sections, minimized, or no project loaded yet) */}
+      {isEditing && (activeSection !== "create" || isEditMinimized || !project) && (
         <GenerationProgress
           prompt={`Editing: ${editPrompt}`}
           progressMessages={editProgressMessages}

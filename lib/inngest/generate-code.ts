@@ -4580,12 +4580,41 @@ const data = await res.json();`;
       const existing = await withPrismaRetry(() =>
         prisma.project.findUnique({
           where: { id: projectId },
-          select: { id: true, userId: true },
+          select: { id: true, userId: true, files: true, dependencies: true, config: true, imageCache: true },
         }),
       );
 
       // Edit flow: projectId is already a DB project id.
+      // Build a history entry from the OLD files before overwriting, so the
+      // rollback snapshot is saved server-side even if the browser closes.
       if (existing && existing.userId === owner.id) {
+        const EDIT_HISTORY_KEY = "__pocketEditHistory";
+        const MAX_HISTORY = 10;
+
+        // Parse existing history from config
+        const existingConfig = (existing.config && typeof existing.config === "object" && !Array.isArray(existing.config))
+          ? existing.config as Record<string, unknown>
+          : {};
+        const existingHistory: unknown[] = Array.isArray(existingConfig[EDIT_HISTORY_KEY])
+          ? (existingConfig[EDIT_HISTORY_KEY] as unknown[])
+          : [];
+
+        // Build a new history entry from the old project files
+        const historyEntryPrompt = userInstruction?.trim() || "Edit";
+        const newHistoryEntry = {
+          id: `srv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          prompt: historyEntryPrompt,
+          files: existing.files,
+          dependencies: existing.dependencies ?? {},
+          timestamp: new Date().toISOString(),
+        };
+
+        const updatedHistory = [...existingHistory, newHistoryEntry].slice(-MAX_HISTORY) as unknown as import("@prisma/client").Prisma.InputJsonValue[];
+        const updatedConfig: import("@prisma/client").Prisma.InputJsonObject = {
+          ...existingConfig as import("@prisma/client").Prisma.InputJsonObject,
+          [EDIT_HISTORY_KEY]: updatedHistory,
+        };
+
         await withPrismaRetry(() =>
           prisma.project.update({
             where: { id: existing.id },
@@ -4593,6 +4622,8 @@ const data = await res.json();`;
               files: filesWithImages,
               dependencies,
               lintReport: finalLint.lintReport,
+              config: updatedConfig,
+              ...(existing.imageCache != null ? { imageCache: existing.imageCache } : {}),
               updatedAt: new Date(),
             },
           }),
