@@ -459,8 +459,8 @@ async function upsertVercelEnvVars(
 
 export async function POST(request: NextRequest) {
   try {
-    if (!VERCEL_TOKEN || !VERCEL_TEAM_ID) {
-      throw new Error("VERCEL_TOKEN or VERCEL_TEAM_ID not configured");
+    if (!VERCEL_TOKEN) {
+      throw new Error("VERCEL_TOKEN not configured");
     }
 
     const { files, dependencies = {}, projectId, title } = (await request.json()) as {

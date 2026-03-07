@@ -4189,9 +4189,9 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   </button>
 
                   {!isMobileViewport && (
-                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-700 dark:text-violet-400 bg-violet-500/10 px-2.5 rounded-lg border border-violet-500/20 group relative cursor-help">
+                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-700 dark:!text-white bg-violet-500/10 dark:bg-violet-500/35 px-2.5 rounded-lg border border-violet-500/20 dark:border-violet-300/60 group relative cursor-help">
                       <svg
-                        className="w-3 h-3 text-violet-500"
+                        className="w-3 h-3 text-violet-600 dark:!text-white"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -4203,8 +4203,12 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                           d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
                         />
                       </svg>
-                      <span className="font-semibold">App Tokens</span>
-                      <span>{formatTokens(userData?.appTokens || 0)}</span>
+                      <span className="font-semibold text-violet-700 dark:!text-white">
+                        App Tokens
+                      </span>
+                      <span className="font-bold tabular-nums text-violet-800 dark:!text-white">
+                        {formatTokens(userData?.appTokens || 0)}
+                      </span>
                       <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
                         Edits and integrations use app tokens.
                       </span>
@@ -5358,7 +5362,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                           <h3 className="text-base font-semibold text-text-primary leading-tight">
                             Edit Website
                           </h3>
-                          <p className="text-[11px] text-text-muted">0.20 token per edit</p>
+                          <p className="text-[11px] text-text-tertiary dark:text-violet-300">0.20 token per edit</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -7547,7 +7551,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                 setTokenPurchaseAmount(0);
                 setShowTokenPurchaseModal(true);
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-violet-700 bg-violet-100 border border-violet-300 dark:text-violet-200 dark:bg-violet-500/25 dark:border-violet-500/50"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-violet-700 bg-violet-100 border border-violet-300 dark:text-white dark:bg-violet-500/35 dark:border-violet-300/60"
               title="Buy app tokens"
             >
               {formatTokens(userData?.appTokens || 0)}
