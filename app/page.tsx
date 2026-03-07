@@ -1085,6 +1085,17 @@ function ReactGeneratorContent() {
           setIsEditing(false);
           setIsEditMinimized(false);
           setEditProgressMessages([]);
+          setPreviewKey((prev) => prev + 1);
+          setStatus("success");
+          // Save updated project to Firestore after resumed edit completes
+          const projectId = result.savedProjectId ?? session.projectId;
+          if (user && projectId) {
+            try {
+              await updateProjectInFirestore(projectId, projectWithInitialPrompt);
+            } catch (saveErr) {
+              console.error("Failed to save project after resumed edit:", saveErr);
+            }
+          }
         } else {
           setProgressMessages((prev) => [...prev, "Ready to preview!"]);
           setStatus("success");
@@ -2736,6 +2747,10 @@ ${schemaContext}
   };
 
   const startGeneration = async (promptOverride?: string) => {
+    if (isEditing) {
+      setError("An edit is currently in progress. Please wait for it to finish before generating a new app.");
+      return;
+    }
     if (!user?.uid) {
       setPendingGeneration(true);
       setShowSignInModal(true);

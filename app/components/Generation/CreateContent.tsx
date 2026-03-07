@@ -28,11 +28,11 @@ const MOBILE_EXAMPLES = [
       "Create a SaaS dashboard app with billing section, and analytics charts",
   },
   {
-    icon: "✍️",
-    name: "Blog",
-    desc: "Posts, comments & search",
+    icon: "🏠",
+    name: "Real Estate",
+    desc: "Listings, search & filters",
     query:
-      "Create a blog app with MDX support, and full-text search functionality",
+      "Create a real estate listings site with property search, filters, and detail pages",
   },
 ];
 

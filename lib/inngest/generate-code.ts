@@ -3391,7 +3391,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 1. Study the user's request carefully. Identify the business domain, target audience, and brand personality.
 2. Choose a cohesive color palette that fits the domain (e.g., warm earth tones for a bakery, bold blues for fintech, muted greens for wellness).
 3. Select complementary Google Fonts via next/font/google — one for headings (display weight), one for body text.
-4. Build a clear HOME page structure: Hero → Social Proof/Stats → Features/Services → Testimonials → CTA → Footer.
+4. Build a clear HOME page structure: Hero → Social Proof/Stats → Features/Services → Testimonials → CTA → Footer. The Footer is MANDATORY — every generated website MUST have a footer.
 5. MULTI-PAGE: Generate a separate page file (app/{route}/page.tsx) for EVERY navigation link in the navbar/header/footer. If the nav has "About", "Services", "Pricing", "Blog", "Contact" — create app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/blog/page.tsx, app/contact/page.tsx. Each sub-page must have real, meaningful content (hero + 1-2 content sections minimum), not just a placeholder. No dead links.
 6. Every section must have visual interest: alternating backgrounds, icon accents, card grids with hover effects, or image/text split layouts.
 6. Use generous whitespace (py-20 to py-32), large readable headings (text-4xl to text-6xl), and comfortable line heights.
@@ -3403,6 +3403,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
 - Runtime dependency policy: if you generate package.json, set "next": "${GENERATED_NEXT_VERSION}", "react": "${GENERATED_REACT_VERSION}", and "react-dom": "${GENERATED_REACT_VERSION}". Do NOT pin Next 14/15.
+- MANDATORY FOOTER COMPONENT: Always generate components/Footer.tsx as a standalone shared component. Import and render it at the bottom of app/page.tsx AND on every sub-page. The footer must include: logo/brand name, grouped navigation links, copyright notice, and optionally social links or tagline. Never skip this file.
 - Return a complete runnable project with app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
 - Generate app/not-found.tsx — a styled 404 page that matches the site's design (colors, fonts, layout). Include the site's navbar/header so auth state stays visible if auth is enabled. Must have a link back to the home page.
 - EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
