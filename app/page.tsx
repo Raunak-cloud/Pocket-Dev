@@ -1177,30 +1177,8 @@ function ReactGeneratorContent() {
     readActiveGenerationSession,
   ]);
 
-  // Restore the last opened saved project after refresh.
-  useEffect(() => {
-    if (authLoading || !user) return;
-    if (status === "loading") return;
-    if (currentProjectId) return;
-    if (loadingProjects) return;
-    if (restoreLastProjectCheckedRef.current) return;
-    restoreLastProjectCheckedRef.current = true;
-
-    const lastOpenedProjectId = readLastOpenedProjectId();
-    if (!lastOpenedProjectId) return;
-
-    const target = savedProjects.find((p) => p.id === lastOpenedProjectId);
-    if (!target) return;
-    openSavedProject(target, { skipPreviewStart: true });
-  }, [
-    authLoading,
-    user,
-    status,
-    currentProjectId,
-    loadingProjects,
-    savedProjects,
-    readLastOpenedProjectId,
-  ]);
+  // Auto-restore of last opened project on refresh is intentionally disabled.
+  // On refresh the user always starts from the home/create screen.
 
   // Auto-collapse sidebar when project is being previewed
   useEffect(() => {
