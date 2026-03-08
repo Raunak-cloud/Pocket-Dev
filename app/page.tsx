@@ -1136,6 +1136,7 @@ function ReactGeneratorContent() {
           }
         } else {
           setProgressMessages((prev) => [...prev, "Ready to preview!"]);
+          setPreviewKey((prev) => prev + 1);
           setStatus("success");
         }
         setCurrentGenerationProjectId(null);
@@ -3026,6 +3027,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       }
 
       setProgressMessages((prev) => [...prev, "Ready to preview!"]);
+      setPreviewKey((prev) => prev + 1);
       setStatus("success");
       if (result.aiFeedback) { setAiFeedback(result.aiFeedback); setAiFeedbackIsNewGen(true); }
       setCurrentGenerationProjectId(null); // Clear projectId after successful completion

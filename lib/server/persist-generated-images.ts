@@ -156,6 +156,8 @@ function shouldReplaceSource(
 ): boolean {
   if (!source) return false;
   if (PLACEHOLDER_RE.test(source)) return true;
+  // Treat /api/placeholder/... as a replaceable placeholder (AI sometimes generates these)
+  if (source.startsWith("/api/placeholder")) return true;
   if (
     source.startsWith("/") ||
     source.startsWith("./") ||

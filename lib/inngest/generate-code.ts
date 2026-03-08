@@ -3275,6 +3275,64 @@ async function lintAllFiles(files: GeneratedFile[]): Promise<{
   };
 }
 
+/**
+ * Ensure Footer.tsx (if generated) is imported and rendered in app/layout.tsx.
+ * The AI occasionally generates components/Footer.tsx but forgets to wire it up.
+ */
+function ensureFooterInLayout(
+  files: Array<{ path: string; content: string }>,
+): Array<{ path: string; content: string }> {
+  const normalize = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+
+  const footerFile = files.find((f) =>
+    /components\/footer\.tsx?$/i.test(normalize(f.path)),
+  );
+  if (!footerFile) return files; // no Footer component generated
+
+  const layoutIndex = files.findIndex((f) =>
+    /app\/layout\.tsx?$/i.test(normalize(f.path)),
+  );
+  if (layoutIndex === -1) return files; // no layout file
+
+  const layout = files[layoutIndex];
+
+  // Already imported — nothing to do
+  if (/import\s+Footer\b/i.test(layout.content)) return files;
+
+  // Determine import alias from footer file path
+  // e.g. "components/Footer.tsx" → "@/components/Footer"
+  const importPath = footerFile.path
+    .replace(/\\/g, "/")
+    .replace(/^(src\/)?/, "@/")
+    .replace(/\.tsx?$/, "");
+
+  // Inject import after the last existing import statement
+  let newContent = layout.content;
+  const lastImportMatch = [...newContent.matchAll(/^import\s.+;?\s*$/gm)].pop();
+  if (lastImportMatch && typeof lastImportMatch.index === "number") {
+    const insertAt = lastImportMatch.index + lastImportMatch[0].length;
+    newContent =
+      newContent.slice(0, insertAt) +
+      `\nimport Footer from "${importPath}";` +
+      newContent.slice(insertAt);
+  } else {
+    // No imports found — prepend
+    newContent = `import Footer from "${importPath}";\n` + newContent;
+  }
+
+  // Inject <Footer /> before </body>
+  if (/<\/body>/i.test(newContent)) {
+    newContent = newContent.replace(/<\/body>/i, "      <Footer />\n      </body>");
+  } else {
+    // Fallback: inject after {children}
+    newContent = newContent.replace(/(\{children\})/g, "$1\n        <Footer />");
+  }
+
+  const updated = [...files];
+  updated[layoutIndex] = { ...layout, content: newContent };
+  return updated;
+}
+
 export const generateCodeFunction = inngest.createFunction(
   {
     id: "generate-code",
@@ -3475,7 +3533,7 @@ PAYMENT RULES (PROXY PATTERN):
   * When payments ARE requested: Do NOT add "stripe" dependency. Do NOT generate app/api/checkout/route.ts or any server-side Stripe code. Buy/Subscribe buttons POST to the platform proxy: \`\${process.env.NEXT_PUBLIC_POCKET_DEV_URL}/api/stripe/connect/create-checkout\` with body { projectId: process.env.NEXT_PUBLIC_POCKET_PROJECT_ID, lineItems: [{ name, amount (cents), currency?, quantity? }], successUrl: \`\${window.location.origin}/payment/success\`, cancelUrl: \`\${window.location.origin}/payment/cancel\`, customerEmail? }. Redirect to the returned { url }. Generate static app/payment/success/page.tsx and app/payment/cancel/page.tsx. No custom card forms. If auth is enabled, pass customer_email.
 
 IMAGE REQUIREMENTS — THIS DETERMINES IMAGE QUALITY:
-- Use REPLICATE_IMG_N placeholders only (no Unsplash, Picsum, or stock-image URLs).
+- Use REPLICATE_IMG_N placeholders ONLY (e.g. REPLICATE_IMG_1, REPLICATE_IMG_2). NEVER use /api/placeholder, placehold.co, picsum.photos, Unsplash, or any other image URL — they will NOT be replaced with real images.
 - NEW GENERATION IMAGE BUDGET: You may use a maximum of 10 unique image sources/placeholders across the entire app. Plan sections accordingly.
 - If the design would exceed 10 images, prioritize high-impact sections (hero + key cards) and convert remaining sections to icon/typography/gradient-driven layouts that do NOT require additional images.
 - Alt text IS the image generation prompt. Write each alt text as a detailed photographer's brief (20-40 words).
@@ -4560,6 +4618,11 @@ const data = await res.json();`;
         "[8/9] Image generation unavailable, continuing with placeholder visuals...",
       );
     }
+
+    // Step 8.1: Ensure Footer is wired up in layout.tsx if the AI generated it
+    filesWithImages = await step.run("ensure-footer-in-layout", async () => {
+      return ensureFooterInLayout(filesWithImages);
+    });
 
     // Step 8.5: Persist final project in DB so generation can complete in background
     // even when the user closes/reloads the page.
