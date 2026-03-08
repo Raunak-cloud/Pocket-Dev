@@ -3358,56 +3358,11 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
     const candidates = uniqueCandidates(from);
     const normalizedFrom = normalizeText(from);
-    let seen = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (!mutableExt.test(file.path)) continue;
-
-      for (const candidate of candidates) {
-        let searchStart = 0;
-        while (searchStart <= file.content.length) {
-          const idx = file.content.indexOf(candidate, searchStart);
-          if (idx === -1) break;
-          seen += 1;
-          if (seen === targetOccurrence) {
-            files[i] = {
-              ...file,
-              content: `${file.content.slice(0, idx)}${to}${file.content.slice(idx + candidate.length)}`,
-            };
-            return { ...sourceProject, files };
-          }
-          searchStart = idx + candidate.length;
-        }
-      }
-    }
-
-    // Fallback: whitespace-tolerant matching (helps with newlines/spacing differences).
-    const seenFallback = { count: 0 };
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (!mutableExt.test(file.path)) continue;
-
-      for (const candidate of candidates) {
-        const pattern = escapeRe(candidate).replace(/\s+/g, "\\s+");
-        const re = new RegExp(pattern, "g");
-        const nextContent = file.content.replace(re, (match) => {
-          seenFallback.count += 1;
-          return seenFallback.count === targetOccurrence ? to : match;
-        });
-
-        if (nextContent !== file.content) {
-          files[i] = { ...file, content: nextContent };
-          if (seenFallback.count >= targetOccurrence) {
-            return { ...sourceProject, files };
-          }
-        }
-      }
-    }
-
-    // Fallback: normalize JSX text nodes like <h1> ... </h1>.
-    // This catches cases where source has line breaks/spacing or encoded entities.
-    // Also handles multi-child elements by joining adjacent text segments.
+    // Pass 1: JSX text node match — run FIRST to prioritize visible JSX text over
+    // metadata string literals (e.g. title: "Brand" in layout.tsx).
+    // The bridge's occurrence counter only sees visible DOM elements, so we must
+    // count JSX text occurrences the same way here.
     const jsxTextRe = />([^<>{}][^<>]*?)</g;
     let seenJsx = 0;
     for (let i = 0; i < files.length; i++) {
@@ -3433,23 +3388,20 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       }
     }
 
-    // Fallback: match text spanning multiple child elements.
-    // For elements like <h1><span>Hello</span> World</h1>, the rendered
-    // textContent is "Hello World" but the source has tags in between.
-    // Strip tags from block-level element inner HTML and compare normalized text.
+    // Pass 2: Block-level element match — handles compound elements where text
+    // spans multiple child tags (e.g. <h1><span>Hello</span> World</h1>).
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!mutableExt.test(file.path)) continue;
 
       const blockOpenRe =
-        /<(h[1-6]|p|li|td|th|dt|dd|figcaption|blockquote|button|label|a)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi;
+        /<(h[1-6]|p|li|td|th|dt|dd|figcaption|blockquote|button|label|a|span|div|link)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi;
       let blockMatch;
       while ((blockMatch = blockOpenRe.exec(file.content)) !== null) {
         const fullMatch = blockMatch[0];
         const openTagEnd = fullMatch.indexOf(">") + 1;
         const closeTagStart = fullMatch.lastIndexOf("<");
         const innerHtml = fullMatch.slice(openTagEnd, closeTagStart);
-        // Strip all tags to get the combined text content
         const combinedText = innerHtml.replace(/<[^>]*>/g, "");
         if (normalizeText(combinedText) === normalizedFrom) {
           const openTag = fullMatch.slice(0, openTagEnd);
@@ -3467,8 +3419,57 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       }
     }
 
-    // Fallback: replace matching string literal values in JS/TS source.
+    // Pass 3: Simple substring match — catches exact occurrences including
+    // string literals, constants, and any exact match.
+    let seen = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      for (const candidate of candidates) {
+        let searchStart = 0;
+        while (searchStart <= file.content.length) {
+          const idx = file.content.indexOf(candidate, searchStart);
+          if (idx === -1) break;
+          seen += 1;
+          if (seen === targetOccurrence) {
+            files[i] = {
+              ...file,
+              content: `${file.content.slice(0, idx)}${to}${file.content.slice(idx + candidate.length)}`,
+            };
+            return { ...sourceProject, files };
+          }
+          searchStart = idx + candidate.length;
+        }
+      }
+    }
+
+    // Pass 4: Whitespace-tolerant matching (helps with newlines/spacing differences).
+    const seenFallback = { count: 0 };
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!mutableExt.test(file.path)) continue;
+
+      for (const candidate of candidates) {
+        const pattern = escapeRe(candidate).replace(/\s+/g, "\\s+");
+        const re = new RegExp(pattern, "g");
+        const nextContent = file.content.replace(re, (match) => {
+          seenFallback.count += 1;
+          return seenFallback.count === targetOccurrence ? to : match;
+        });
+
+        if (nextContent !== file.content) {
+          files[i] = { ...file, content: nextContent };
+          if (seenFallback.count >= targetOccurrence) {
+            return { ...sourceProject, files };
+          }
+        }
+      }
+    }
+
+    // Pass 5: String literal regex — last resort for values in JS/TS object literals.
     const stringLiteralRe = /(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+    let seenStr = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (!mutableExt.test(file.path)) continue;
@@ -3479,8 +3480,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         (match, quote: string, value: string) => {
           if (replaced) return match;
           if (normalizeText(value) !== normalizedFrom) return match;
-          seen += 1;
-          if (seen !== targetOccurrence) return match;
+          seenStr += 1;
+          if (seenStr !== targetOccurrence) return match;
           replaced = true;
           const safeTo = to.replace(new RegExp(`\\\\${quote}`, "g"), quote);
           return `${quote}${safeTo}${quote}`;

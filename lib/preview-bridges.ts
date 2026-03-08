@@ -412,23 +412,22 @@ export default function PocketTextEditBridge() {
 
       if (!window.__pocketTextEditMode) return;
 
+      // In text edit mode, always intercept clicks to prevent Link/router navigation.
+      // Do this before resolveEditable so even unresolvable clicks don't navigate.
+      event.preventDefault();
+      event.stopPropagation();
+
       const editable = resolveEditable(target);
       if (!editable) return;
 
       // If clicking on the element we're already editing, allow natural cursor
       // interaction without resetting the edit state.
       if (editable === selectedTextRef.current) {
-        // Still prevent link navigation for <a> elements
-        if (target.closest("a")) event.preventDefault();
-        event.stopPropagation();
         return;
       }
 
       const text = (editable.textContent || "").trim();
       if (!text || text.length > 280) return;
-
-      event.preventDefault();
-      event.stopPropagation();
 
       // Commit any in-progress edit before starting a new one (don't discard)
       commitTextEdit(false);

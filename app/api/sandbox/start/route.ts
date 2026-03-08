@@ -186,9 +186,16 @@ async function handleStart(
     });
   } catch (err) {
     console.error("[Sandbox Start] Error:", err);
+    const msg = err instanceof Error ? err.message : "Failed to start sandbox";
+    const isCapacity = /rate.?limit|quota|capacity|limit.?exceeded|too many|throttle|no.?available|429|503/i.test(msg);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to start sandbox" },
-      { status: 500 },
+      {
+        error: isCapacity
+          ? "All sandbox slots are currently in use due to high traffic. Please try again in a few minutes."
+          : msg,
+        isCapacityError: isCapacity,
+      },
+      { status: isCapacity ? 503 : 500 },
     );
   }
 }

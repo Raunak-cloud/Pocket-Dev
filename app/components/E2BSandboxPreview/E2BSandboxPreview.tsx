@@ -42,6 +42,9 @@ const isSessionExpiredError = (message: string): boolean =>
     message,
   );
 
+const isCapacityError = (message: string): boolean =>
+  /all sandbox slots|high traffic|try again in a few minutes|rate.?limit|quota|capacity|too many/i.test(message);
+
 export default function E2BSandboxPreview({
   project,
   sandboxId,
@@ -62,6 +65,7 @@ export default function E2BSandboxPreview({
   >("connecting");
   const [error, setError] = useState<string | null>(null);
   const [isExpiredError, setIsExpiredError] = useState(false);
+  const [isCapacity, setIsCapacity] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const sandboxStartedAtRef = useRef<number | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -115,6 +119,7 @@ export default function E2BSandboxPreview({
         setLoadingState("connecting");
         setError(null);
         setIsExpiredError(false);
+        setIsCapacity(false);
         setSecondsLeft(null);
         setPreviewUrl(null);
         sandboxStartedAtRef.current = null;
@@ -146,6 +151,7 @@ export default function E2BSandboxPreview({
         setLoadingState("error");
         setError(msg);
         setIsExpiredError(isSessionExpiredError(msg));
+        setIsCapacity(isCapacityError(msg));
       }
     };
 
@@ -407,118 +413,39 @@ export default function E2BSandboxPreview({
   }, [project, loadingState, onSyncStateChange]);
 
   return (
-    <div className="relative h-full isolate" style={{ colorScheme: "normal" }}>
-      {/* Image Selection Mode Indicator */}
-      {imageSelectMode && loadingState === "ready" && (
-        <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="mx-auto max-w-md mt-4">
-            <div className="pointer-events-auto bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg shadow-2xl border border-orange-400/50 backdrop-blur-sm">
-              <div className="px-4 py-3 flex items-center gap-3">
-                <div className="flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center animate-pulse">
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
-                    </svg>
-                  </div>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold">Image Selection Mode</p>
-                  <p className="text-xs text-white/90 mt-0.5">
-                    Click any image in the preview to select it for replacement
-                  </p>
-                </div>
-                <div className="flex-shrink-0">
-                  <div className="h-2 w-2 rounded-full bg-white animate-ping" />
-                </div>
-              </div>
-            </div>
-          </div>
+    <div className="flex flex-col h-full isolate" style={{ colorScheme: "normal" }}>
+      <style>{`@keyframes pocket-mode-shimmer{0%{background-position:-200% center}100%{background-position:200% center}}`}</style>
+
+      {/* Mode Banner — renders above the iframe, never blocks preview content */}
+      {(imageSelectMode || textEditMode || linkSelectMode) && loadingState === "ready" && (
+        <div
+          className="flex items-center gap-3 px-4 py-2 text-white text-sm shrink-0 animate-in fade-in slide-in-from-top-2 duration-200"
+          style={{
+            backgroundImage: imageSelectMode
+              ? "linear-gradient(90deg,#c2410c 0%,#f97316 30%,#fb923c 50%,#f97316 70%,#c2410c 100%)"
+              : textEditMode
+                ? "linear-gradient(90deg,#1d4ed8 0%,#3b82f6 30%,#60a5fa 50%,#3b82f6 70%,#1d4ed8 100%)"
+                : "linear-gradient(90deg,#0e7490 0%,#06b6d4 30%,#22d3ee 50%,#06b6d4 70%,#0e7490 100%)",
+            backgroundSize: "200% 100%",
+            animation: "pocket-mode-shimmer 2.5s linear infinite",
+          }}
+        >
+          <div className="h-2 w-2 rounded-full bg-white animate-ping shrink-0" />
+          <span className="font-semibold shrink-0">
+            {imageSelectMode ? "Image Selection Mode" : textEditMode ? "Text Edit Mode" : "Link Selection Mode"}
+          </span>
+          <span className="text-white/80 text-xs truncate">
+            {imageSelectMode
+              ? "Click any image in the preview to select it for replacement"
+              : textEditMode
+                ? "Click any text to edit it directly"
+                : "Click a button or link in the preview to assign a URL"}
+          </span>
         </div>
       )}
 
-      {/* Text Edit Mode Indicator */}
-      {textEditMode && !imageSelectMode && loadingState === "ready" && (
-        <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="mx-auto max-w-md mt-4">
-            <div className="pointer-events-auto bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg shadow-2xl border border-blue-400/50 backdrop-blur-sm">
-              <div className="px-4 py-3 flex items-center gap-3">
-                <div className="flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center animate-pulse">
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                    </svg>
-                  </div>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold">Text Edit Mode</p>
-                  <p className="text-xs text-white/90 mt-0.5">
-                    Click any text to edit it directly
-                  </p>
-                </div>
-                <div className="flex-shrink-0">
-                  <div className="h-2 w-2 rounded-full bg-white animate-ping" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Link Selection Mode Indicator */}
-      {linkSelectMode &&
-        !textEditMode &&
-        !imageSelectMode &&
-        loadingState === "ready" && (
-          <div className="absolute top-0 left-0 right-0 z-30 pointer-events-none animate-in fade-in slide-in-from-top-4 duration-300">
-            <div className="mx-auto max-w-md mt-4">
-              <div className="pointer-events-auto bg-gradient-to-r from-cyan-500 to-cyan-600 text-white rounded-lg shadow-2xl border border-cyan-400/50 backdrop-blur-sm">
-                <div className="px-4 py-3 flex items-center gap-3">
-                  <div className="flex-shrink-0">
-                    <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center animate-pulse">
-                      <svg
-                        className="w-5 h-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.658 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold">Link Selection Mode</p>
-                    <p className="text-xs text-white/90 mt-0.5">
-                      Click a button or link in preview to assign a URL
-                    </p>
-                  </div>
-                  <div className="flex-shrink-0">
-                    <div className="h-2 w-2 rounded-full bg-white animate-ping" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+      {/* Preview area — fills remaining height */}
+      <div className="relative flex-1 min-h-0">
 
       {/* Loading overlay */}
       {loadingState !== "ready" && loadingState !== "error" && (
@@ -585,10 +512,14 @@ export default function E2BSandboxPreview({
       {loadingState === "error" && (
         <div className="absolute inset-0 bg-bg-secondary z-10 flex items-center justify-center p-4">
           <div className="text-center max-w-sm">
-            <div className={`w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center ${isExpiredError ? "bg-amber-500/10" : "bg-red-500/10"}`}>
+            <div className={`w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center ${isExpiredError ? "bg-amber-500/10" : isCapacity ? "bg-orange-500/10" : "bg-red-500/10"}`}>
               {isExpiredError ? (
                 <svg className="w-8 h-8 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              ) : isCapacity ? (
+                <svg className="w-8 h-8 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                 </svg>
               ) : (
                 <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -597,11 +528,13 @@ export default function E2BSandboxPreview({
               )}
             </div>
             <h3 className="text-lg font-semibold text-text-primary mb-2">
-              {isExpiredError ? "Preview Session Expired" : "Cloud Preview Failed"}
+              {isExpiredError ? "Preview Session Expired" : isCapacity ? "Sandboxes Busy" : "Cloud Preview Failed"}
             </h3>
             <p className="text-sm text-text-tertiary mb-5">
               {isExpiredError
                 ? "Your 30-minute preview session has ended. Restart to spin up a fresh sandbox with your current project."
+                : isCapacity
+                ? "All cloud preview slots are currently in use due to high traffic. Please wait a moment and try again."
                 : (error || "There was an issue connecting to the cloud sandbox. Try refreshing the page.")}
             </p>
             {isExpiredError && onExpired && (
@@ -613,6 +546,17 @@ export default function E2BSandboxPreview({
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
                 Restart Preview
+              </button>
+            )}
+            {isCapacity && onExpired && (
+              <button
+                onClick={onExpired}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white text-sm font-medium rounded-xl transition shadow-lg shadow-orange-500/20"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Try Again
               </button>
             )}
           </div>
@@ -632,6 +576,7 @@ export default function E2BSandboxPreview({
           credentialless=""
         />
       )}
+      </div>{/* end preview area */}
     </div>
   );
 }
