@@ -56,7 +56,7 @@ import {
 } from "@/lib/prompts";
 import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 
-const MODEL = "gemini-3-flash-preview";
+const MODEL = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
 const GENERATED_NEXT_VERSION = "^16.1.6";
 const GENERATED_REACT_VERSION = "^19.2.3";

@@ -12,8 +12,10 @@ import { GoogleAICacheManager } from "@google/generative-ai/server";
 
 // Use the stable model prefix required by the caching API.
 // We try the project's primary model first; on failure we fall back to 1.5-flash.
-const CACHE_MODEL_PRIMARY = "models/gemini-3-flash-preview";
-const CACHE_MODEL_FALLBACK = "models/gemini-3-flash-preview";
+const _baseModel = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
+const _cacheModel = _baseModel.startsWith("models/") ? _baseModel : `models/${_baseModel}`;
+const CACHE_MODEL_PRIMARY = _cacheModel;
+const CACHE_MODEL_FALLBACK = _cacheModel;
 const CACHE_TTL_SECONDS = 3600; // 1 hour
 // Skip caching for tiny projects — the overhead isn't worth it.
 const MIN_CACHE_CHARS = 8_000;

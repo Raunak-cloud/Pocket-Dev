@@ -495,7 +495,7 @@ async function generateImagePromptsBatch(
   try {
     const gemini = new GoogleGenerativeAI(apiKey);
     const model = gemini.getGenerativeModel({
-      model: "gemini-3-flash-preview",
+      model: process.env.GEMINI_MODEL ?? "gemini-3-flash-preview",
       generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.7,

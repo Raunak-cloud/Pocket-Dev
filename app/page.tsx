@@ -447,6 +447,8 @@ function ReactGeneratorContent() {
   });
   const [showEditIntegrationsModal, setShowEditIntegrationsModal] =
     useState(false);
+  const [showErrorFixModal, setShowErrorFixModal] = useState(false);
+  const [errorFixText, setErrorFixText] = useState("");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
@@ -488,6 +490,10 @@ function ReactGeneratorContent() {
   const replaceImageInputRef = useRef<HTMLInputElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Holds a prompt override for error-fix flow so proceedWithEdit picks it up
+  const errorFixPromptRef = useRef<string | null>(null);
+  // When true, proceedWithEdit skips token deduction (used for free error-fix)
+  const freeEditRef = useRef(false);
 
   // Voice recording state
   const [recordingTarget, setRecordingTarget] = useState<
@@ -1218,6 +1224,16 @@ function ReactGeneratorContent() {
       setIsMobileToolsDropdownOpen(false);
     }
   }, [isMobileViewport, isMobileToolsDropdownOpen]);
+
+  useEffect(() => {
+    if (isEditing) {
+      setTextEditMode(false);
+      setImageSelectMode(false);
+      setLinkSelectMode(false);
+      setSelectedButton(null);
+      setSelectedPreviewImage(null);
+    }
+  }, [isEditing]);
 
   useEffect(() => {
     if (!isMobileViewport) return;
@@ -2500,8 +2516,11 @@ ${schemaContext}
     setEditProgressMessages([]);
     setIsEditMinimized(false);
 
-    // Deduct app tokens upfront (refundable if cancelled within 10s)
-    if (user) {
+    // Deduct app tokens upfront (refundable if cancelled within 10s).
+    // freeEditRef is set by the error-fix flow which is always free.
+    const isFreeEdit = freeEditRef.current;
+    freeEditRef.current = false; // consume once
+    if (user && !isFreeEdit) {
       try {
         const editCost = getEditAppCost();
         await adjustAppTokens(-editCost, "Edit request token usage");
@@ -2519,13 +2538,18 @@ ${schemaContext}
     // List all existing file paths
     const existingFilePaths = project.files.map((f) => f.path).join(", ");
 
-    // Build the user request text, including backend if selected
+    // Build the user request text, including backend if selected.
+    // errorFixPromptRef holds a pre-formatted prompt from the error-fix flow.
+    const errorFixOverride = errorFixPromptRef.current;
+    errorFixPromptRef.current = null; // consume once
     const backendSelectedForEdit = isEditBackendSelected;
-    const baseUserRequest = editPrompt.trim()
-      ? editPrompt.trim()
-      : backendSelectedForEdit
-        ? "Add a complete backend (authentication + database) to the app"
-        : editPrompt;
+    const baseUserRequest = errorFixOverride
+      ? errorFixOverride
+      : editPrompt.trim()
+        ? editPrompt.trim()
+        : backendSelectedForEdit
+          ? "Add a complete backend (authentication + database) to the app"
+          : editPrompt;
     const userRequest = buildClarifiedEditRequest(
       baseUserRequest,
       clarificationHistoryOverride ?? editClarificationHistory,
@@ -3961,6 +3985,24 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     }
   };
 
+  const handleErrorFix = (rawErrorText: string) => {
+    const trimmed = rawErrorText.trim();
+    if (!trimmed || !project || isEditing) return;
+
+    const formatted =
+      `Fix the following error that is showing in the preview:\n\n\`\`\`\n${trimmed}\n\`\`\`\n\n` +
+      `Identify the root cause in the code and apply a minimal targeted fix. ` +
+      `Do not change unrelated styling, layout, or functionality — only fix what is causing this error.`;
+
+    errorFixPromptRef.current = formatted;
+    freeEditRef.current = true; // error fixing is always free
+    setShowErrorFixModal(false);
+    setErrorFixText("");
+
+    // Always proceed immediately — no token confirmation needed for free fixes
+    void proceedWithEdit([]);
+  };
+
   const handleRegenerateSelectedImage = async () => {
     if (!selectedPreviewImage || !project || !user) return;
 
@@ -4448,7 +4490,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                             return next;
                           })
                         }
-                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                        disabled={isEditing}
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                           textEditMode
                             ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
                             : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
@@ -4486,7 +4529,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                             return next;
                           })
                         }
-                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                        disabled={isEditing}
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                           imageSelectMode
                             ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
                             : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
@@ -4525,7 +4569,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                             return next;
                           })
                         }
-                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition ${
+                        disabled={isEditing}
+                        className={`inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                           linkSelectMode
                             ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
                             : "text-text-secondary bg-bg-tertiary hover:bg-border-secondary"
@@ -4773,7 +4818,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         });
                         setIsMobileToolsDropdownOpen(false);
                       }}
-                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                      disabled={isEditing}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         textEditMode
                           ? "text-emerald-800 bg-emerald-100 border border-emerald-300 dark:text-emerald-200 dark:bg-emerald-600/30 dark:border-emerald-500/40"
                           : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
@@ -4797,7 +4843,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         });
                         setIsMobileToolsDropdownOpen(false);
                       }}
-                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                      disabled={isEditing}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         imageSelectMode
                           ? "text-orange-900 bg-orange-100 border border-orange-300 dark:text-orange-200 dark:bg-orange-600/30 dark:border-orange-500/40"
                           : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
@@ -4822,7 +4869,8 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         });
                         setIsMobileToolsDropdownOpen(false);
                       }}
-                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition ${
+                      disabled={isEditing}
+                      className={`w-full inline-flex items-center h-9 gap-2 px-3 text-xs font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed ${
                         linkSelectMode
                           ? "text-cyan-900 bg-cyan-100 border border-cyan-300 dark:text-cyan-200 dark:bg-cyan-600/30 dark:border-cyan-500/40"
                           : "text-text-secondary bg-bg-secondary/60 hover:bg-border-secondary"
@@ -5926,6 +5974,19 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                     </button>
                     )}
 
+                    {/* Fix an Error Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowErrorFixModal(true)}
+                      disabled={isEditing || !project}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium transition-all bg-red-500/8 text-red-400 border border-red-500/20 hover:bg-red-500/15 hover:border-red-500/40 hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                      </svg>
+                      Seeing an error on screen?
+                    </button>
+
                     {/* Link Selection UI */}
                     {linkSelectMode && selectedButton && (
                       <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/5 p-4 shadow-sm">
@@ -6240,6 +6301,19 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                         )}
                       </button>
                     )}
+
+                    {/* Fix an Error Button — mobile */}
+                    <button
+                      type="button"
+                      onClick={() => setShowErrorFixModal(true)}
+                      disabled={isEditing || !project}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium transition-all bg-red-500/8 text-red-400 border border-red-500/20 hover:bg-red-500/15 hover:border-red-500/40 hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                      </svg>
+                      Seeing an error on screen?
+                    </button>
 
                     {/* Textarea — fills remaining space */}
                     <div className="flex-1 min-h-0 relative overflow-hidden rounded-2xl border border-border-secondary bg-bg-tertiary/40 focus-within:border-blue-500/50 focus-within:ring-2 focus-within:ring-blue-500/15 transition">
@@ -6742,6 +6816,98 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             onCustomApisChange={setCustomApis}
             systemDisabledFeatures={systemDisabledFeatures}
           />
+        )}
+
+        {/* Error Fix Modal */}
+        {showErrorFixModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowErrorFixModal(false)}>
+            <div className="bg-white dark:bg-bg-secondary border border-slate-200 dark:border-border-secondary rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-border-primary">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-red-100 dark:bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-4 h-4 text-red-500 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-primary">Fix an Error</h3>
+                    <p className="text-xs text-slate-500 dark:text-text-muted mt-0.5">AI will diagnose and fix the error in your code</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowErrorFixModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:text-text-muted dark:hover:text-text-primary hover:bg-slate-100 dark:hover:bg-bg-tertiary transition"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-sm text-slate-700 dark:text-text-secondary">
+                  Copy and paste the error message you see on screen. The AI will identify the root cause and apply a targeted fix without changing anything else.
+                </p>
+                <textarea
+                  autoFocus
+                  value={errorFixText}
+                  onChange={(e) => setErrorFixText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      if (errorFixText.trim()) handleErrorFix(errorFixText);
+                    }
+                    if (e.key === "Escape") setShowErrorFixModal(false);
+                  }}
+                  placeholder={"Paste the error message here...\n\nExample:\nTypeError: Cannot read properties of undefined (reading 'map')\n  at Page (app/page.tsx:42:18)"}
+                  className="w-full h-44 px-3.5 py-3 bg-slate-50 dark:bg-black/20 border border-slate-300 dark:border-border-secondary rounded-xl text-sm font-mono text-slate-900 dark:text-text-primary placeholder-slate-400 dark:placeholder-text-muted/60 focus:outline-none focus:border-red-400 dark:focus:border-red-500/40 focus:ring-1 focus:ring-red-400/30 dark:focus:ring-red-500/20 resize-none transition"
+                />
+                <p className="text-xs text-slate-500 dark:text-text-muted">Tip: you can also include console errors from the browser DevTools.</p>
+                {/* Disclaimer */}
+                <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 dark:bg-amber-500/8 border border-amber-200 dark:border-amber-500/20">
+                  <svg className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                    AI can occasionally make mistakes, but our AI is benchmarked for very high accuracy on error fixes. If the first fix doesn&apos;t resolve it, try again with more context.
+                  </p>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-200 dark:border-border-primary bg-slate-50 dark:bg-bg-tertiary/20">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Free — no tokens used
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowErrorFixModal(false)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-text-secondary dark:hover:text-text-primary hover:bg-slate-100 dark:hover:bg-bg-tertiary rounded-lg transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleErrorFix(errorFixText)}
+                    disabled={!errorFixText.trim()}
+                    className="inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-400 hover:to-rose-400 text-white text-sm font-semibold rounded-lg shadow-sm shadow-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.5 3.5 0 01-4.95 0l-.347-.347z" />
+                    </svg>
+                    Fix Error
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Edit History Modal */}

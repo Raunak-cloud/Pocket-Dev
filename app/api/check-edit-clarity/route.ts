@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const MODEL = "gemini-3-flash-preview";
+const MODEL = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
 
 type ClarityResult = {
   needsClarification: boolean;
