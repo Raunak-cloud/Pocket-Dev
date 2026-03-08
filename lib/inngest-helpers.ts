@@ -34,6 +34,10 @@ interface GenerateCodeResult {
   aiFeedback?: string | null;
 }
 
+interface TriggerRunResult {
+  projectId: string;
+}
+
 /**
  * Poll for workflow completion — no client-side timeout.
  * Resolves when Inngest completes, rejects only when Inngest fails or job is cancelled.
@@ -162,9 +166,9 @@ export async function waitForInngestCompletion<T>(
 }
 
 /**
- * Trigger AI code generation workflow
+ * Trigger AI code generation workflow without waiting for completion.
  */
-export async function generateCodeWithInngest(
+export async function triggerCodeGenerationWithInngest(
   prompt: string,
   userId: string,
   onProgress?: (message: string) => void,
@@ -189,7 +193,8 @@ export async function generateCodeWithInngest(
   existingFiles?: Array<{ path: string; content: string }>,
   isEdit?: boolean,
   cachedEditPrompt?: string,
-): Promise<GenerateCodeResult> {
+  sourceProjectId?: string | null,
+): Promise<TriggerRunResult> {
   const projectId =
     fixedProjectId && fixedProjectId.trim().length > 0
       ? fixedProjectId.trim()
@@ -225,9 +230,62 @@ export async function generateCodeWithInngest(
     existingFiles,
     isEdit,
     cachedEditPrompt,
+    sourceProjectId,
   );
 
   onProgress?.("[0/9] Generation started. Waiting for first update...");
+
+  return { projectId };
+}
+
+/**
+ * Trigger AI code generation workflow and wait for completion.
+ */
+export async function generateCodeWithInngest(
+  prompt: string,
+  userId: string,
+  onProgress?: (message: string) => void,
+  onRunStart?: (projectId: string) => void,
+  fixedProjectId?: string,
+  integrationRequirements?: {
+    requiresAuth?: boolean;
+    requiresDatabase?: boolean;
+    requiresGoogleOAuth?: boolean;
+    requiresPasswordAuth?: boolean;
+    requiresPayments?: boolean;
+  },
+  projectType?: "website" | "dashboard",
+  imageOptions?: {
+    preserveExistingImages?: boolean;
+    previousImageUrls?: string[];
+  },
+  customApis?: Array<{ name: string; slug: string; baseUrl: string; description?: string | null }>,
+  userInstruction?: string,
+  pdfAttachments?: Array<{ name: string; url: string }>,
+  cachedContentName?: string,
+  existingFiles?: Array<{ path: string; content: string }>,
+  isEdit?: boolean,
+  cachedEditPrompt?: string,
+  sourceProjectId?: string | null,
+): Promise<GenerateCodeResult> {
+  const { projectId } = await triggerCodeGenerationWithInngest(
+    prompt,
+    userId,
+    onProgress,
+    onRunStart,
+    fixedProjectId,
+    integrationRequirements,
+    projectType,
+    imageOptions,
+    customApis,
+    userInstruction,
+    pdfAttachments,
+    cachedContentName,
+    existingFiles,
+    isEdit,
+    cachedEditPrompt,
+    sourceProjectId,
+  );
 
   // Poll for completion — no timeout, fails only if Inngest fails
   const result = await pollForCompletion<GenerateCodeResult>(

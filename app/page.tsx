@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
-  generateCodeWithInngest,
+  triggerCodeGenerationWithInngest,
   waitForInngestCompletion,
 } from "@/lib/inngest-helpers";
 import CodeViewer from "./components/CodeViewer";
@@ -78,6 +78,9 @@ const EDIT_HISTORY_CONFIG_KEY = "__pocketEditHistory";
 const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
 const INITIAL_GENERATION_PROMPT_CONFIG_KEY = "__pocketInitialGenerationPrompt";
 const ACTIVE_GENERATION_STORAGE_KEY = "__pocketActiveGeneration";
+const ACTIVE_GENERATION_VIEW_PREFERENCE_KEY = "__pocketActiveGenerationView";
+const BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY =
+  "__pocketBackgroundCompletionNotice";
 const LAST_OPEN_PROJECT_STORAGE_KEY = "__pocketLastOpenProjectId";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
 
@@ -90,6 +93,105 @@ type ActiveGenerationSession = {
   paymentsEnabled: boolean;
   startedAt: number;
   projectId?: string | null;
+};
+
+type ActiveGenerationViewPreference = {
+  runId: string;
+  minimized: boolean;
+  updatedAt: number;
+};
+
+const parseActiveGenerationSession = (
+  raw: string | null,
+): ActiveGenerationSession | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ActiveGenerationSession>;
+    if (
+      typeof parsed.runId !== "string" ||
+      !parsed.runId.trim() ||
+      typeof parsed.prompt !== "string" ||
+      typeof parsed.userId !== "string" ||
+      !parsed.userId.trim()
+    ) {
+      return null;
+    }
+    return {
+      mode: parsed.mode === "edit" ? "edit" : "generation",
+      runId: parsed.runId.trim(),
+      prompt: parsed.prompt,
+      userId: parsed.userId.trim(),
+      backendEnabled: parsed.backendEnabled === true,
+      paymentsEnabled: parsed.paymentsEnabled === true,
+      startedAt:
+        typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt)
+          ? parsed.startedAt
+          : Date.now(),
+      projectId:
+        typeof parsed.projectId === "string" && parsed.projectId.trim()
+          ? parsed.projectId.trim()
+          : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const parseActiveGenerationViewPreference = (
+  raw: string | null,
+): ActiveGenerationViewPreference | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ActiveGenerationViewPreference>;
+    if (typeof parsed.runId !== "string" || !parsed.runId.trim()) {
+      return null;
+    }
+    return {
+      runId: parsed.runId.trim(),
+      minimized: parsed.minimized === true,
+      updatedAt:
+        typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
+          ? parsed.updatedAt
+          : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const isUserOnScreen = (): boolean => {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible" || document.hasFocus();
+};
+
+const buildCompletionFeedback = (
+  mode: "generation" | "edit",
+  prompt: string,
+  aiFeedback?: string | null,
+): string => {
+  const raw = typeof aiFeedback === "string" ? aiFeedback.trim() : "";
+  if (raw.length > 0) return raw;
+
+  const safePrompt = prompt.trim();
+  if (mode === "edit") {
+    return [
+      "• Applied your requested updates across the relevant files.",
+      "• Preserved existing project structure and integrations while editing.",
+      "• Verified the updated build is ready for review.",
+      safePrompt ? `Requested change: ${safePrompt}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return [
+    "• Built a complete app from your prompt with production-ready structure.",
+    "• Generated pages, components, and dependencies needed for this build.",
+    "• Prepared the project for immediate preview and iteration.",
+    safePrompt ? `Original request: ${safePrompt}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 };
 
 type SelectedLinkTarget = {
@@ -352,12 +454,8 @@ function ReactGeneratorContent() {
   // auth even resolves — eliminating the 3-second flash of the main page.
   const peekSession = (): ActiveGenerationSession | null => {
     if (typeof window === "undefined") return null;
-    try {
-      const raw = window.localStorage.getItem(ACTIVE_GENERATION_STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as ActiveGenerationSession) : null;
-    } catch {
-      return null;
-    }
+    const raw = window.localStorage.getItem(ACTIVE_GENERATION_STORAGE_KEY);
+    return parseActiveGenerationSession(raw);
   };
   const _initialSession = peekSession();
 
@@ -465,6 +563,9 @@ function ReactGeneratorContent() {
   const [showEditHistory, setShowEditHistory] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [tokenToast, setTokenToast] = useState("");
+  const [backgroundCompletionNotice, setBackgroundCompletionNotice] = useState<
+    string | null
+  >(null);
   // Support ticket state
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [adminTickets, setAdminTickets] = useState<SupportTicket[]>([]);
@@ -511,6 +612,7 @@ function ReactGeneratorContent() {
   const currentGenerationProjectIdRef = useRef<string | null>(null);
   const resumeCheckedRef = useRef(false);
   const restoreLastProjectCheckedRef = useRef(false);
+  const completedRunHandlingRef = useRef<string | null>(null);
   const [authPromptWarning, setAuthPromptWarning] = useState<string | null>(
     null,
   );
@@ -557,43 +659,134 @@ function ReactGeneratorContent() {
     [],
   );
 
+  const persistActiveGenerationViewPreference = useCallback(
+    (preference: ActiveGenerationViewPreference) => {
+      if (typeof window === "undefined") return;
+      localStorage.setItem(
+        ACTIVE_GENERATION_VIEW_PREFERENCE_KEY,
+        JSON.stringify(preference),
+      );
+    },
+    [],
+  );
+
+  const clearActiveGenerationViewPreference = useCallback(() => {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(ACTIVE_GENERATION_VIEW_PREFERENCE_KEY);
+  }, []);
+
   const clearActiveGenerationSession = useCallback(() => {
     if (typeof window === "undefined") return;
     localStorage.removeItem(ACTIVE_GENERATION_STORAGE_KEY);
+    clearActiveGenerationViewPreference();
+  }, [clearActiveGenerationViewPreference]);
+
+  const clearBackgroundCompletionNotice = useCallback(() => {
+    setBackgroundCompletionNotice(null);
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
+  }, []);
+
+  const showBackgroundCompletionNotice = useCallback((message: string) => {
+    const safeMessage = message.trim();
+    if (!safeMessage) return;
+    setBackgroundCompletionNotice(safeMessage);
+    if (typeof window === "undefined") return;
+    localStorage.setItem(
+      BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY,
+      safeMessage,
+    );
   }, []);
 
   const readActiveGenerationSession =
     useCallback((): ActiveGenerationSession | null => {
       if (typeof window === "undefined") return null;
       const raw = localStorage.getItem(ACTIVE_GENERATION_STORAGE_KEY);
-      if (!raw) return null;
+      return parseActiveGenerationSession(raw);
+    }, []);
+
+  const readActiveGenerationViewPreference =
+    useCallback((): ActiveGenerationViewPreference | null => {
+      if (typeof window === "undefined") return null;
+      const raw = localStorage.getItem(ACTIVE_GENERATION_VIEW_PREFERENCE_KEY);
+      return parseActiveGenerationViewPreference(raw);
+    }, []);
+
+  const setRunMinimizedPreference = useCallback(
+    (runId: string, minimized: boolean) => {
+      const safeRunId = runId.trim();
+      if (!safeRunId) return;
+      persistActiveGenerationViewPreference({
+        runId: safeRunId,
+        minimized,
+        updatedAt: Date.now(),
+      });
+    },
+    [persistActiveGenerationViewPreference],
+  );
+
+  const isRunMinimizedPreferred = useCallback(
+    (runId: string) => {
+      const safeRunId = runId.trim();
+      if (!safeRunId) return false;
+      const preference = readActiveGenerationViewPreference();
+      return (
+        preference?.runId === safeRunId && preference.minimized === true
+      );
+    },
+    [readActiveGenerationViewPreference],
+  );
+
+  const fetchServerActiveGenerationSession = useCallback(
+    async (): Promise<ActiveGenerationSession | null> => {
+      if (!user?.uid) return null;
       try {
-        const parsed = JSON.parse(raw) as Partial<ActiveGenerationSession>;
-        if (
-          typeof parsed.runId !== "string" ||
-          typeof parsed.prompt !== "string" ||
-          typeof parsed.userId !== "string"
-        ) {
-          return null;
-        }
+        const response = await fetch("/api/inngest/active-run", {
+          cache: "no-store",
+        });
+        if (!response.ok) return null;
+        const data = (await response.json()) as {
+          activeRun?: ActiveGenerationSession | null;
+        };
+        const activeRun = data.activeRun;
+        if (!activeRun) return null;
+        if (activeRun.userId !== user.uid) return null;
         return {
-          mode: parsed.mode === "edit" ? "edit" : "generation",
-          runId: parsed.runId,
-          prompt: parsed.prompt,
-          userId: parsed.userId,
-          backendEnabled: parsed.backendEnabled === true,
-          paymentsEnabled: parsed.paymentsEnabled === true,
+          ...activeRun,
+          mode: activeRun.mode === "edit" ? "edit" : "generation",
+          runId: String(activeRun.runId || "").trim(),
+          prompt: String(activeRun.prompt || ""),
+          userId: String(activeRun.userId || "").trim(),
+          backendEnabled: activeRun.backendEnabled === true,
+          paymentsEnabled: activeRun.paymentsEnabled === true,
           startedAt:
-            typeof parsed.startedAt === "number"
-              ? parsed.startedAt
+            typeof activeRun.startedAt === "number" &&
+            Number.isFinite(activeRun.startedAt)
+              ? activeRun.startedAt
               : Date.now(),
           projectId:
-            typeof parsed.projectId === "string" ? parsed.projectId : null,
+            typeof activeRun.projectId === "string" && activeRun.projectId.trim()
+              ? activeRun.projectId.trim()
+              : null,
         };
       } catch {
         return null;
       }
-    }, []);
+    },
+    [user?.uid],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = localStorage.getItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
+    if (!stored) return;
+    const message = stored.trim();
+    if (!message) {
+      localStorage.removeItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
+      return;
+    }
+    setBackgroundCompletionNotice(message);
+  }, []);
 
   const persistLastOpenedProjectId = useCallback((projectId: string) => {
     if (typeof window === "undefined") return;
@@ -1038,32 +1231,69 @@ function ReactGeneratorContent() {
   useEffect(() => {
     if (authLoading) return;
     if (resumeCheckedRef.current) return;
-
-    const session = readActiveGenerationSession();
-    if (!session) return;
-    if (user && session.userId !== user.uid) {
-      clearActiveGenerationSession();
-      return;
-    }
+    if (searchParams.get("completed_run")) return;
     resumeCheckedRef.current = true;
 
     let cancelled = false;
 
     const resume = async () => {
+      if (!user) {
+        clearActiveGenerationSession();
+        setCurrentGenerationProjectId(null);
+        setIsEditing(false);
+        setStatus((prev) => (prev === "loading" ? "idle" : prev));
+        return;
+      }
+
+      const localSession = readActiveGenerationSession();
+      if (localSession && localSession.userId !== user.uid) {
+        clearActiveGenerationSession();
+      }
+
+      const serverSession = await fetchServerActiveGenerationSession();
+      if (cancelled) return;
+
+      let session: ActiveGenerationSession | null = serverSession;
+      if (!session && localSession && localSession.userId === user.uid) {
+        // Backward-compat fallback for sessions started before server-backed
+        // tracking was introduced.
+        const isRecentLocalSession =
+          Date.now() - localSession.startedAt < 5 * 60 * 1000;
+        if (isRecentLocalSession) {
+          session = localSession;
+        }
+      }
+
+      if (!session) {
+        clearActiveGenerationSession();
+        setCurrentGenerationProjectId(null);
+        setIsEditing(false);
+        setStatus((prev) => (prev === "loading" ? "idle" : prev));
+        return;
+      }
+
+      persistActiveGenerationSession(session);
+      const resumeInBackground = isRunMinimizedPreferred(session.runId);
+      if (typeof window !== "undefined" && !resumeInBackground) {
+        window.location.replace("/progress");
+        return;
+      }
       setError("");
       setCurrentGenerationProjectId(session.runId);
-      setActiveSection("create");
+      if (!resumeInBackground) {
+        setActiveSection("create");
+      }
 
       if (session.mode === "edit") {
         setIsEditing(true);
-        setIsEditMinimized(false);
+        setIsEditMinimized(resumeInBackground);
         setEditPrompt(session.prompt);
         setEditProgressMessages(["Resuming edit in background..."]);
       } else {
         setStatus("loading");
         setGenerationPrompt(session.prompt);
         setProgressMessages(["Resuming generation in background..."]);
-        setIsGenerationMinimized(false);
+        setIsGenerationMinimized(resumeInBackground);
       }
 
       try {
@@ -1071,6 +1301,7 @@ function ReactGeneratorContent() {
           ReactProject & {
             savedProjectId?: string;
             sandboxId?: string;
+            aiFeedback?: string | null;
           }
         >(session.runId, "generate.completed", (message) => {
           if (cancelled) return;
@@ -1125,25 +1356,59 @@ function ReactGeneratorContent() {
           await loadSavedProjects();
         }
 
-        if (session.mode === "edit") {
-          setIsEditing(false);
-          setIsEditMinimized(false);
-          setEditProgressMessages([]);
-          setPreviewKey((prev) => prev + 1);
-          setStatus("success");
-          // Save updated project to Supabase after resumed edit completes
-          const projectId = result.savedProjectId ?? session.projectId;
-          if (user && projectId) {
-            try {
-              await updateProjectInSupabase(projectId, projectWithInitialPrompt);
-            } catch (saveErr) {
-              console.error("Failed to save project after resumed edit:", saveErr);
+        const completionVisible = isUserOnScreen();
+        const completionFeedback = buildCompletionFeedback(
+          session.mode,
+          session.prompt,
+          result.aiFeedback,
+        );
+
+        if (completionVisible) {
+          clearBackgroundCompletionNotice();
+          setAiFeedback(completionFeedback);
+          setAiFeedbackIsNewGen(session.mode === "generation");
+          setActiveSection("create");
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setIsEditMinimized(false);
+            setEditProgressMessages([]);
+            setPreviewKey((prev) => prev + 1);
+            setStatus("success");
+            // Save updated project to Supabase after resumed edit completes
+            const projectId = result.savedProjectId ?? session.projectId;
+            if (user && projectId) {
+              try {
+                await updateProjectInSupabase(projectId, projectWithInitialPrompt);
+              } catch (saveErr) {
+                console.error("Failed to save project after resumed edit:", saveErr);
+              }
             }
+          } else {
+            setProgressMessages((prev) => [...prev, "Ready to preview!"]);
+            setPreviewKey((prev) => prev + 1);
+            setStatus("success");
           }
         } else {
-          setProgressMessages((prev) => [...prev, "Ready to preview!"]);
-          setPreviewKey((prev) => prev + 1);
-          setStatus("success");
+          setAiFeedback(null);
+          setAiFeedbackIsNewGen(false);
+          setProject(null);
+          setCurrentProjectId(null);
+          setPreviewSandboxId(null);
+          setIsEditing(false);
+          setIsEditMinimized(false);
+          setIsGenerationMinimized(false);
+          setEditProgressMessages([]);
+          setProgressMessages([]);
+          setGenerationPrompt("");
+          setEditPrompt("");
+          setActiveSection("create");
+          setStatus("idle");
+          clearLastOpenedProjectId();
+          showBackgroundCompletionNotice(
+            session.mode === "edit"
+              ? "Your edit is complete. Open My Projects to review the updated preview."
+              : "Your generated app is ready. Open My Projects to preview it.",
+          );
         }
         setCurrentGenerationProjectId(null);
         clearActiveGenerationSession();
@@ -1180,8 +1445,15 @@ function ReactGeneratorContent() {
   }, [
     authLoading,
     user,
+    clearBackgroundCompletionNotice,
+    clearLastOpenedProjectId,
     clearActiveGenerationSession,
+    fetchServerActiveGenerationSession,
+    showBackgroundCompletionNotice,
+    persistActiveGenerationSession,
+    isRunMinimizedPreferred,
     readActiveGenerationSession,
+    searchParams,
   ]);
 
   // Auto-restore of last opened project on refresh is intentionally disabled.
@@ -1425,6 +1697,208 @@ function ReactGeneratorContent() {
       setError("Payment cancelled. You can try again when ready.");
     }
   }, [searchParams, user]);
+
+  // Handle completion handoff from /progress page.
+  useEffect(() => {
+    const completedRunId = searchParams.get("completed_run");
+    if (!completedRunId || authLoading || !user) return;
+    if (completedRunHandlingRef.current === completedRunId) return;
+    completedRunHandlingRef.current = completedRunId;
+
+    let cancelled = false;
+
+    const handleCompletedRun = async () => {
+      const modeParam = searchParams.get("completed_mode");
+      const completionVisibilityParam = searchParams.get("completion_visibility");
+      const mode: "generation" | "edit" =
+        modeParam === "edit" ? "edit" : "generation";
+      const completionVisible = completionVisibilityParam !== "hidden";
+      const localSession = readActiveGenerationSession();
+      const session: ActiveGenerationSession =
+        localSession && localSession.runId === completedRunId
+          ? localSession
+          : {
+              mode,
+              runId: completedRunId,
+              prompt: mode === "edit" ? editPrompt : generationPrompt,
+              userId: user.uid,
+              backendEnabled: false,
+              paymentsEnabled: false,
+              startedAt: Date.now(),
+              projectId: null,
+            };
+
+      setCurrentGenerationProjectId(completedRunId);
+      setError("");
+      if (session.mode === "edit") {
+        setIsEditing(true);
+        setEditProgressMessages((prev) =>
+          prev.length > 0
+            ? prev
+            : ["Finalizing your edit and restoring the editor..."],
+        );
+      } else {
+        setStatus("loading");
+        setGenerationPrompt(session.prompt);
+        setProgressMessages((prev) =>
+          prev.length > 0
+            ? prev
+            : ["Finalizing your generated app and restoring preview..."],
+        );
+      }
+
+      try {
+        const result = await waitForInngestCompletion<
+          ReactProject & {
+            savedProjectId?: string;
+            sandboxId?: string;
+            aiFeedback?: string | null;
+          }
+        >(completedRunId, "generate.completed");
+
+        if (cancelled) return;
+
+        const projectWithIntegrations = withStoredIntegrations(result, {
+          backendEnabled: session.backendEnabled,
+          paymentsEnabled: session.paymentsEnabled,
+        });
+        const projectWithInitialPrompt =
+          session.mode === "generation"
+            ? withInitialGenerationPrompt(projectWithIntegrations, session.prompt)
+            : projectWithIntegrations;
+
+        setProject(projectWithInitialPrompt);
+        syncIntegrationSelectionFromProject(projectWithInitialPrompt);
+        setPreviewSandboxId(result.sandboxId ?? null);
+
+        if (session.projectId) {
+          setCurrentProjectId(session.projectId);
+        }
+
+        if (
+          typeof result.savedProjectId === "string" &&
+          result.savedProjectId
+        ) {
+          setCurrentProjectId(result.savedProjectId);
+          if (session.mode === "generation") {
+            try {
+              await updateProjectInSupabase(
+                result.savedProjectId,
+                projectWithInitialPrompt,
+              );
+            } catch (error) {
+              console.error(
+                "Failed to persist initial generation prompt after progress handoff:",
+                error,
+              );
+            }
+          }
+          await loadSavedProjects();
+        }
+
+        const completionFeedback = buildCompletionFeedback(
+          session.mode,
+          session.prompt,
+          result.aiFeedback,
+        );
+
+        if (completionVisible) {
+          clearBackgroundCompletionNotice();
+          setAiFeedback(completionFeedback);
+          setAiFeedbackIsNewGen(session.mode === "generation");
+          setActiveSection("create");
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setIsEditMinimized(false);
+            setEditProgressMessages([]);
+            setPreviewKey((prev) => prev + 1);
+            setStatus("success");
+            const projectId = result.savedProjectId ?? session.projectId;
+            if (user && projectId) {
+              try {
+                await updateProjectInSupabase(projectId, projectWithInitialPrompt);
+              } catch (saveErr) {
+                console.error(
+                  "Failed to save project after progress handoff edit:",
+                  saveErr,
+                );
+              }
+            }
+          } else {
+            setProgressMessages((prev) => [...prev, "Ready to preview!"]);
+            setPreviewKey((prev) => prev + 1);
+            setStatus("success");
+          }
+        } else {
+          setAiFeedback(null);
+          setAiFeedbackIsNewGen(false);
+          setProject(null);
+          setCurrentProjectId(null);
+          setPreviewSandboxId(null);
+          setIsEditing(false);
+          setIsEditMinimized(false);
+          setIsGenerationMinimized(false);
+          setEditProgressMessages([]);
+          setProgressMessages([]);
+          setGenerationPrompt("");
+          setEditPrompt("");
+          setActiveSection("create");
+          setStatus("idle");
+          clearLastOpenedProjectId();
+          showBackgroundCompletionNotice(
+            session.mode === "edit"
+              ? "Your edit is complete. Open My Projects to review the updated preview."
+              : "Your generated app is ready. Open My Projects to preview it.",
+          );
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.toLowerCase().includes("cancelled")) {
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setEditProgressMessages([]);
+          } else {
+            setStatus("idle");
+          }
+          setError("");
+        } else {
+          if (session.mode === "edit") {
+            setIsEditing(false);
+            setEditProgressMessages([]);
+          } else {
+            setStatus("error");
+          }
+          setError(message);
+        }
+      } finally {
+        completedRunHandlingRef.current = null;
+        setCurrentGenerationProjectId(null);
+        clearActiveGenerationSession();
+        if (typeof window !== "undefined") {
+          window.history.replaceState({}, "", "/");
+        }
+      }
+    };
+
+    void handleCompletedRun();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authLoading,
+    clearBackgroundCompletionNotice,
+    clearLastOpenedProjectId,
+    clearActiveGenerationSession,
+    editPrompt,
+    generationPrompt,
+    readActiveGenerationSession,
+    searchParams,
+    showBackgroundCompletionNotice,
+    syncIntegrationSelectionFromProject,
+    user,
+  ]);
 
   // Save project to Supabase via API
   const saveProjectToSupabase = async (
@@ -2073,9 +2547,33 @@ function ReactGeneratorContent() {
     currentGenerationProjectIdRef.current = currentGenerationProjectId;
   }, [currentGenerationProjectId]);
 
+  useEffect(() => {
+    if (!currentGenerationProjectId) return;
+    if (!(isEditing || status === "loading")) return;
+    const minimized = isEditing ? isEditMinimized : isGenerationMinimized;
+    setRunMinimizedPreference(currentGenerationProjectId, minimized);
+  }, [
+    currentGenerationProjectId,
+    isEditing,
+    isEditMinimized,
+    isGenerationMinimized,
+    setRunMinimizedPreference,
+    status,
+  ]);
+
   const cancelGeneration = () => {
     setShowCancelConfirm("generation");
   };
+
+  const openProgressDetails = useCallback(() => {
+    const runId = currentGenerationProjectIdRef.current;
+    if (runId) {
+      setRunMinimizedPreference(runId, false);
+    }
+    if (typeof window !== "undefined") {
+      window.location.href = "/progress";
+    }
+  }, [setRunMinimizedPreference]);
 
   const confirmCancelGeneration = async () => {
     const projectIdToCancel = currentGenerationProjectIdRef.current;
@@ -2513,8 +3011,11 @@ ${schemaContext}
     setIsMobileEditPanelOpen(false);
     editStartTimeRef.current = Date.now();
     setError("");
+    setAiFeedback(null);
+    setAiFeedbackIsNewGen(false);
+    clearBackgroundCompletionNotice();
     setEditProgressMessages([]);
-    setIsEditMinimized(false);
+    setIsEditMinimized(true);
 
     // Deduct app tokens upfront (refundable if cancelled within 10s).
     // freeEditRef is set by the error-fix flow which is always free.
@@ -2616,15 +3117,7 @@ ${schemaContext}
       if (paymentsEnabledForEdit) cachedEditPrompt += buildPaymentRequirementPrompt("existing");
     }
 
-    // Capture the old project state NOW (before Inngest overwrites it) so we
-    // can build a rollback snapshot after a successful edit.
-    const preEditFiles = project.files;
-    const preEditDependencies = project.dependencies || {};
-    const editPromptText =
-      editPrompt.trim() ||
-      (backendSelectedForEdit ? "Add backend integration" : "Edit");
-    // currentEditHistory starts as the existing history; snapshot is appended only on success
-    const currentEditHistory = editHistory;
+    let handedOffToProgressPage = false;
 
     try {
       const runProjectId =
@@ -2652,8 +3145,9 @@ ${schemaContext}
         startedAt: Date.now(),
         projectId: currentProjectId ?? null,
       });
+      setRunMinimizedPreference(runProjectId, false);
 
-      const result = await generateCodeWithInngest(
+      await triggerCodeGenerationWithInngest(
         editFullPrompt,
         user.uid,
         (message) => {
@@ -2671,6 +3165,7 @@ ${schemaContext}
             startedAt: Date.now(),
             projectId: currentProjectId ?? null,
           });
+          setRunMinimizedPreference(projectId, false);
         },
         runProjectId,
         {
@@ -2699,76 +3194,20 @@ ${schemaContext}
         geminiCacheId ? project.files : undefined, // pass existing files for merge only when using cache
         true, // isEdit
         cachedEditPrompt,
+        currentProjectId ?? null,
       );
 
-      setEditProgressMessages((prev) => [
-        ...prev,
-        "Finalizing and saving edited project files...",
-      ]);
-
-      // Images are now generated in the Inngest pipeline — result.files already has real URLs
-      // Build the rollback snapshot NOW (after successful generation) using the pre-edit files
-      const historyId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const nextHistory = [
-        ...currentEditHistory,
-        {
-          id: historyId,
-          prompt: editPromptText,
-          files: preEditFiles,
-          dependencies: preEditDependencies,
-          timestamp: new Date(),
-        },
-      ].slice(-MAX_EDIT_HISTORY_ENTRIES);
-      setEditHistory(nextHistory);
-
-      const mergedProjectBase = applyEditHistoryToProject(result, nextHistory);
-      const mergedProject = withStoredIntegrations(mergedProjectBase, {
-        backendEnabled:
-          backendSelectedForEdit ||
-          inferProjectIntegrations(project).hasBackend,
-        paymentsEnabled: paymentsEnabledForEdit || false,
-      });
-
-      setProject(mergedProject);
-      syncIntegrationSelectionFromProject(mergedProject);
-      setPreviewSandboxId(result.sandboxId ?? null);
-      // Only do a full container restart if dependencies changed — new packages
-      // require a fresh npm install. For unchanged deps the HMR file-sync
-      // (Effect 2 in WebContainerPreview) handles the update without killing
-      // the running server, which avoids the "Unable to connect to port 3000" flash.
-      const depsChanged =
-        JSON.stringify(project.dependencies ?? {}) !==
-        JSON.stringify(mergedProject.dependencies ?? {});
-      if (depsChanged) {
-        setPreviewKey((prev) => prev + 1);
+      if (typeof window !== "undefined") {
+        handedOffToProgressPage = true;
+        window.location.href = "/progress";
       }
-      setEditPrompt("");
-      clearEditClarificationState();
-      setEditFiles([]); // Clear edit files after successful edit
-
-      // Preview updates via file diff
-
-      // Update project in Supabase if we have a project ID
-      if (currentProjectId && user) {
-        try {
-          await updateProjectInSupabase(currentProjectId, mergedProject);
-          updateSavedProjectCache(currentProjectId, mergedProject);
-
-          // Mark that there are unpublished changes
-          if (publishedUrl) {
-            setHasUnpublishedChanges(true);
-          }
-        } catch (saveError) {
-          console.error("Error updating project:", saveError);
-        }
-      }
-      if (result.aiFeedback) { setAiFeedback(result.aiFeedback); setAiFeedbackIsNewGen(false); }
-      clearActiveGenerationSession();
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Edit failed");
       setCurrentGenerationProjectId(null); // Clear projectId on error
       clearActiveGenerationSession();
     } finally {
+      if (handedOffToProgressPage) return;
       setIsEditing(false);
       setCurrentGenerationProjectId(null); // Clear projectId after edit completes
       setTimeout(() => {
@@ -2797,6 +3236,9 @@ ${schemaContext}
     generationCancelledRef.current = false;
     setStatus("loading");
     setError("");
+    setAiFeedback(null);
+    setAiFeedbackIsNewGen(false);
+    clearBackgroundCompletionNotice();
     setProject(null);
     setProgressMessages([]);
     setGenerationPrompt(generationPrompt);
@@ -2890,8 +3332,9 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         startedAt: Date.now(),
         projectId: null,
       });
-      // Real-time progress from Inngest
-      const result = await generateCodeWithInngest(
+      setRunMinimizedPreference(runProjectId, false);
+      // Trigger Inngest run and move to dedicated progress page.
+      await triggerCodeGenerationWithInngest(
         fullPrompt,
         authUserId,
         (message) => {
@@ -2909,6 +3352,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             startedAt: Date.now(),
             projectId: null,
           });
+          setRunMinimizedPreference(projectId, false);
         },
         runProjectId,
         {
@@ -2932,130 +3376,17 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         pdfFiles.length > 0
           ? pdfFiles.map((f) => ({ name: f.name, url: f.downloadUrl || "" })).filter((f) => f.url)
           : undefined,
+        undefined, // cachedContentName
+        undefined, // existingFiles
+        undefined, // isEdit
+        undefined, // cachedEditPrompt
+        null, // sourceProjectId
       );
 
-      // If user cancelled while awaiting, discard the result
-      if (generationCancelledRef.current) {
-        setCurrentGenerationProjectId(null);
-        clearActiveGenerationSession();
-        return;
+      if (typeof window !== "undefined") {
+        window.location.href = "/progress";
       }
-
-      setProgressMessages((prev) => [
-        ...prev,
-        "Finalizing and saving generated project...",
-      ]);
-
-      // Images are now generated in the Inngest pipeline — result.files already has real URLs
-      const projectWithIntegrations = withStoredIntegrations(result, {
-        backendEnabled: isGenerationBackendSelected,
-        paymentsEnabled,
-      });
-      const projectWithInitialPrompt = withInitialGenerationPrompt(
-        projectWithIntegrations,
-        generationPrompt,
-      );
-      setProject(projectWithInitialPrompt);
-      syncIntegrationSelectionFromProject(projectWithInitialPrompt);
-      setPreviewSandboxId(result.sandboxId ?? null);
-
-      // Save project to Supabase
-      if (user && result.savedProjectId) {
-        setCurrentProjectId(result.savedProjectId);
-        try {
-          await updateProjectInSupabase(
-            result.savedProjectId,
-            projectWithInitialPrompt,
-          );
-        } catch (saveError) {
-          console.error(
-            "Error persisting initial generation prompt config:",
-            saveError,
-          );
-        }
-        // Save any pending custom APIs to DB now that we have a projectId
-        if (pendingCustomApis.length > 0) {
-          const savedApis: CustomApiConfig[] = [];
-          for (const api of pendingCustomApis) {
-            try {
-              const res = await fetch("/api/user-apis", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  projectId: result.savedProjectId,
-                  name: api.name,
-                  baseUrl: api.baseUrl,
-                  description: api.description || undefined,
-                  authType: api.authType,
-                  authHeaderName: api.authHeaderName || undefined,
-                  authParamName: api.authParamName || undefined,
-                  apiKey: api.apiKey || undefined,
-                }),
-              });
-              if (res.ok) {
-                const data = await res.json();
-                savedApis.push(data.api as CustomApiConfig);
-              }
-            } catch {
-              console.error("Error saving pending API:", api.name);
-            }
-          }
-          setCustomApis(savedApis);
-          setPendingCustomApis([]);
-        }
-        loadSavedProjects();
-      } else if (user) {
-        try {
-          const authCost = getAuthAppCost(currentAppAuth);
-          const projectId = await saveProjectToSupabase(
-            projectWithInitialPrompt,
-            generationPrompt,
-            authCost,
-          );
-          setCurrentProjectId(projectId);
-          // Save any pending custom APIs to DB now that we have a projectId
-          if (pendingCustomApis.length > 0) {
-            const savedApis: CustomApiConfig[] = [];
-            for (const api of pendingCustomApis) {
-              try {
-                const res = await fetch("/api/user-apis", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    projectId,
-                    name: api.name,
-                    baseUrl: api.baseUrl,
-                    description: api.description || undefined,
-                    authType: api.authType,
-                    authHeaderName: api.authHeaderName || undefined,
-                    authParamName: api.authParamName || undefined,
-                    apiKey: api.apiKey || undefined,
-                  }),
-                });
-                if (res.ok) {
-                  const data = await res.json();
-                  savedApis.push(data.api as CustomApiConfig);
-                }
-              } catch {
-                console.error("Error saving pending API:", api.name);
-              }
-            }
-            setCustomApis(savedApis);
-            setPendingCustomApis([]);
-          }
-          // Refresh projects list
-          loadSavedProjects();
-        } catch (saveError) {
-          console.error("Error saving project:", saveError);
-        }
-      }
-
-      setProgressMessages((prev) => [...prev, "Ready to preview!"]);
-      setPreviewKey((prev) => prev + 1);
-      setStatus("success");
-      if (result.aiFeedback) { setAiFeedback(result.aiFeedback); setAiFeedbackIsNewGen(true); }
-      setCurrentGenerationProjectId(null); // Clear projectId after successful completion
-      clearActiveGenerationSession();
+      return;
     } catch (err) {
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);
@@ -3083,6 +3414,14 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
   // Handle generation submission
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isEditing) {
+      setAuthPromptWarning(
+        "An edit is currently in progress. Please wait for it to finish before generating a new website.",
+      );
+      setBlockedPromptWords([]);
+      return;
+    }
 
     if (
       !prompt.trim() ||
@@ -4228,28 +4567,12 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                   </button>
 
                   {!isMobileViewport && (
-                    <span className="inline-flex items-center h-8 gap-1.5 text-xs text-violet-700 dark:!text-white bg-violet-500/10 dark:bg-violet-500/35 px-2.5 rounded-lg border border-violet-500/20 dark:border-violet-300/60 group relative cursor-help">
-                      <svg
-                        className="w-3 h-3 text-violet-600 dark:!text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
-                        />
-                      </svg>
-                      <span className="font-semibold text-violet-700 dark:!text-white">
+                    <span className="inline-flex items-center h-8 gap-1.5 text-xs bg-violet-500/10 dark:bg-violet-500/35 px-2.5 rounded-lg border border-violet-500/20 dark:border-violet-300/60">
+                      <span className="app-tokens-text font-semibold text-violet-900">
                         App Tokens
                       </span>
-                      <span className="font-bold tabular-nums text-violet-800 dark:!text-white">
+                      <span className="app-tokens-text font-bold tabular-nums text-violet-900">
                         {formatTokens(userData?.appTokens || 0)}
-                      </span>
-                      <span className="hidden group-hover:block absolute top-full left-0 mt-2 w-52 p-2 bg-border-secondary text-text-secondary text-xs rounded-lg shadow-xl z-50">
-                        Edits and integrations use app tokens.
                       </span>
                     </span>
                   )}
@@ -4349,7 +4672,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                             <button
                               onClick={() => setShowDomainModal(true)}
                               aria-label="Published"
-                              className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                              className="inline-flex items-center h-8 gap-1.5 px-3 max-[380px]:px-2.5 text-xs font-medium published-btn-text text-emerald-700 bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 rounded-lg transition"
                             >
                               <svg
                                 className="w-3.5 h-3.5"
@@ -4725,7 +5048,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                       ) : (
                         <button
                           onClick={() => setShowDomainModal(true)}
-                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium text-emerald-300 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 rounded-lg transition"
+                          className="inline-flex items-center h-8 gap-1.5 px-3 text-xs font-medium published-btn-text text-emerald-700 bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 rounded-lg transition"
                         >
                           <svg
                             className="w-3.5 h-3.5"
@@ -5000,7 +5323,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
                     {isEditing && isEditMinimized && (
                       <button
-                        onClick={() => setIsEditMinimized(false)}
+                        onClick={openProgressDetails}
                         className="relative inline-flex items-center gap-2.5 px-4 py-2 rounded-lg bg-blue-500/15 border border-blue-500/30 hover:bg-blue-500/25 hover:border-blue-500/50 transition-all duration-200 overflow-hidden"
                         style={{ animation: "editPillGlow 2s ease-in-out infinite" }}
                       >
@@ -5263,22 +5586,6 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
             {/* Preview Area */}
             <div className="flex-1 overflow-hidden relative min-h-0 bg-slate-950/95">
-              {/* Editing overlay */}
-              {isEditing && !isEditMinimized && (
-                <div className="absolute inset-0 bg-bg-primary/95 backdrop-blur-sm z-50">
-                  <GenerationProgress
-                    prompt={`Editing: ${editPrompt}`}
-                    progressMessages={editProgressMessages}
-                    onCancel={() => {
-                      setShowCancelConfirm("edit");
-                    }}
-                    isMinimized={false}
-                    onToggleMinimize={() => setIsEditMinimized(true)}
-                  />
-                </div>
-              )}
-
-
               {/* Device Frame Container */}
               <div
                 className={`h-full flex items-center justify-center ${
@@ -6598,13 +6905,9 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
 
         {/* AI Feedback Modal */}
         {aiFeedback && (
-          <div
-            className="fixed inset-x-0 bottom-0 z-50 flex items-end justify-center"
-            onClick={() => setAiFeedback(null)}
-          >
+          <div className="fixed inset-x-0 bottom-0 z-50 flex items-end justify-center">
             <div
               className="bg-bg-secondary border border-border-primary border-b-0 rounded-t-2xl shadow-2xl w-full h-[100dvh] flex flex-col overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-border-primary shrink-0">
@@ -6621,14 +6924,6 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
                     <p className="text-xs text-text-tertiary">Here's a summary of what the AI did</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setAiFeedback(null)}
-                  className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
               {/* Integration warnings — shown only after new generation */}
               {aiFeedbackIsNewGen && (() => {
@@ -7163,9 +7458,9 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       <CreateContentComponent
         user={user}
         status={status}
+        isEditing={isEditing}
         isGenerationMinimized={isGenerationMinimized}
         generationPrompt={generationPrompt}
-        progressMessages={progressMessages}
         error={error}
         prompt={prompt}
         uploadedFiles={uploadedFiles}
@@ -7177,8 +7472,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         authPromptWarning={authPromptWarning}
         blockedPromptWords={blockedPromptWords}
         checkingAuthIntent={checkingAuthIntent}
-        setIsGenerationMinimized={setIsGenerationMinimized}
-        cancelGeneration={cancelGeneration}
+        onViewGenerationProgress={openProgressDetails}
         setShowSignInModal={setShowSignInModal}
         setPrompt={setPrompt}
         handleFileUpload={handleFileUpload}
@@ -7613,11 +7907,6 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
     }
   };
 
-  const isGenerationFullScreenProgress =
-    activeSection === "create" &&
-    status === "loading" &&
-    !isGenerationMinimized;
-
   // Show loading screen while auth state is being resolved
   if (authLoading) {
     return <LoadingScreen />;
@@ -7727,14 +8016,60 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           className={`flex-1 flex flex-col relative z-10 min-w-0 ${
             activeSection === "support" || activeSection === "admin" || activeSection === "analytics"
               ? "overflow-hidden"
-              : isGenerationFullScreenProgress
-                ? "items-stretch justify-stretch px-0 py-0 sm:px-2 sm:py-2 overflow-hidden"
-                : "items-center justify-center px-4 py-12"
+              : "items-center justify-center px-4 py-12"
           }`}
         >
           {renderContent()}
         </main>
       </div>
+
+      {backgroundCompletionNotice && (
+        <div className="fixed top-6 right-6 z-50 anim-fade-up max-w-sm">
+          <div className="flex items-start gap-3 px-5 py-4 bg-bg-secondary border border-border-primary rounded-xl shadow-2xl shadow-black/20">
+            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500/15 flex items-center justify-center mt-0.5">
+              <svg
+                className="w-4.5 h-4.5 text-blue-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.3}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-text-primary mb-0.5">
+                Run Completed
+              </p>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                {backgroundCompletionNotice}
+              </p>
+            </div>
+            <button
+              onClick={clearBackgroundCompletionNotice}
+              className="flex-shrink-0 p-1 text-text-muted hover:text-text-primary rounded-lg hover:bg-bg-tertiary transition"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Sign In Modal */}
       <SignInModal
@@ -8111,10 +8446,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
             progressMessages={progressMessages}
             onCancel={cancelGeneration}
             isMinimized={true}
-            onToggleMinimize={() => {
-              setActiveSection("create");
-              setIsGenerationMinimized(false);
-            }}
+            onToggleMinimize={openProgressDetails}
           />
         )}
 
@@ -8128,10 +8460,7 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
           }}
           isMinimized={true}
           minimizedPositionClass="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
-          onToggleMinimize={() => {
-            setActiveSection("create");
-            setIsEditMinimized(false);
-          }}
+          onToggleMinimize={openProgressDetails}
         />
       )}
 

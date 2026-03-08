@@ -9,6 +9,10 @@
 import { INNGEST_APP_ID, inngest } from "@/lib/inngest-client";
 import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 import { prisma } from "@/lib/prisma";
+import {
+  clearActiveRunByRunId,
+  upsertActiveRun,
+} from "@/lib/server/inngest-active-runs";
 
 /**
  * Trigger AI code generation workflow
@@ -36,6 +40,7 @@ export async function triggerCodeGeneration(
   existingFiles?: Array<{ path: string; content: string }>,
   isEdit?: boolean,
   cachedEditPrompt?: string,
+  sourceProjectId?: string | null,
 ) {
   // Enforce per-user ban and system-level feature restrictions
   const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || "";
@@ -71,28 +76,59 @@ export async function triggerCodeGeneration(
     effectiveIntegrations = { ...effectiveIntegrations, requiresPayments: false };
   }
   const effectiveCustomApis = (!isAdmin && systemConfig?.apisDisabled) ? [] : customApis;
+  const activeRunPrompt = (
+    typeof userInstruction === "string" && userInstruction.trim().length > 0
+      ? userInstruction.trim()
+      : String(prompt || "")
+  ).slice(0, 2000);
 
-  const sendResult = await inngest.send({
-    name: "app/generate.code",
-    data: {
-      prompt,
-      userId,
-      projectId,
-      integrationRequirements: effectiveIntegrations,
-      projectType,
-      preserveExistingImages: imageOptions?.preserveExistingImages,
-      previousImageUrls: imageOptions?.previousImageUrls,
-      customApis: effectiveCustomApis,
-      userInstruction,
-      pdfAttachments,
-      cachedContentName,
-      existingFiles,
-      isEdit,
-      cachedEditPrompt,
-    },
-  });
+  try {
+    await upsertActiveRun({
+      authUserId: userId,
+      runId: projectId,
+      mode: isEdit ? "edit" : "generation",
+      prompt: activeRunPrompt,
+      backendEnabled:
+        effectiveIntegrations?.requiresAuth === true ||
+        effectiveIntegrations?.requiresDatabase === true,
+      paymentsEnabled: effectiveIntegrations?.requiresPayments === true,
+      sourceProjectId,
+    });
+  } catch (error) {
+    console.warn("Failed to persist active run metadata:", error);
+  }
 
-  return { success: true, projectId, eventIds: sendResult.ids ?? [] };
+  try {
+    const sendResult = await inngest.send({
+      name: "app/generate.code",
+      data: {
+        prompt,
+        userId,
+        projectId,
+        integrationRequirements: effectiveIntegrations,
+        projectType,
+        preserveExistingImages: imageOptions?.preserveExistingImages,
+        previousImageUrls: imageOptions?.previousImageUrls,
+        customApis: effectiveCustomApis,
+        userInstruction,
+        pdfAttachments,
+        cachedContentName,
+        existingFiles,
+        isEdit,
+        cachedEditPrompt,
+      },
+    });
+
+    return { success: true, projectId, eventIds: sendResult.ids ?? [] };
+  } catch (error) {
+    await clearActiveRunByRunId(projectId).catch((clearErr) => {
+      console.warn(
+        "Failed to clear active run after trigger failure:",
+        clearErr,
+      );
+    });
+    throw error;
+  }
 }
 
 /**
@@ -102,6 +138,10 @@ export async function cancelGenerationJob(projectId: string) {
   let localCancelled = false;
   let eventCancelled = false;
   let remoteCancelled = false;
+
+  await clearActiveRunByRunId(projectId).catch((error) => {
+    console.warn("Failed to clear active run during cancellation:", error);
+  });
 
   try {
     const response = await fetch(getInngestStatusApiUrl(), {

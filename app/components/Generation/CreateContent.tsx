@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import Logo from "../Logo";
-import GenerationProgress from "../GenerationProgress";
 import LaunchAnimation from "../LaunchAnimation";
 import { CustomAPIsSection, type CustomApiConfig } from "@/app/components/Integrations/CustomAPIsSection";
 import type { CompatibleUser } from "@/app/contexts/AuthContext";
@@ -51,11 +50,11 @@ const DESKTOP_ONLY_EXAMPLES = [
       "Create a fitness studio website with trainers, class schedules, and pricing",
   },
   {
-    icon: "🏠",
-    name: "Real Estate",
-    desc: "Listings, agents & inquiry",
+    icon: "🎓",
+    name: "E-Learning",
+    desc: "Courses, instructors & pricing",
     query:
-      "Create a real estate website with property listings, agent profiles, and contact forms",
+      "Create an e-learning platform with course listings, instructor profiles, and pricing plans",
   },
   {
     icon: "💡",
@@ -69,9 +68,9 @@ const DESKTOP_ONLY_EXAMPLES = [
 interface CreateContentProps {
   user: CompatibleUser | null;
   status: string;
+  isEditing: boolean;
   isGenerationMinimized: boolean;
   generationPrompt: string;
-  progressMessages: string[];
   error: string;
   prompt: string;
   uploadedFiles: UploadedFile[];
@@ -83,8 +82,7 @@ interface CreateContentProps {
   authPromptWarning: string | null;
   blockedPromptWords: string[];
   checkingAuthIntent: boolean;
-  setIsGenerationMinimized: (val: boolean) => void;
-  cancelGeneration: () => void;
+  onViewGenerationProgress: () => void;
   setShowSignInModal: (val: boolean) => void;
   setPrompt: (val: string) => void;
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -110,9 +108,9 @@ interface CreateContentProps {
 export default function CreateContent({
   user,
   status,
+  isEditing,
   isGenerationMinimized,
   generationPrompt,
-  progressMessages,
   error,
   prompt,
   uploadedFiles,
@@ -124,8 +122,7 @@ export default function CreateContent({
   authPromptWarning,
   blockedPromptWords,
   checkingAuthIntent,
-  setIsGenerationMinimized,
-  cancelGeneration,
+  onViewGenerationProgress,
   setShowSignInModal,
   setPrompt,
   handleFileUpload,
@@ -148,29 +145,26 @@ export default function CreateContent({
   systemDisabledFeatures = { backend: false, payments: false, apis: false },
 }: CreateContentProps) {
   const [showCustomApisPanel, setShowCustomApisPanel] = useState(false);
+  const [blockedGenerateMessage, setBlockedGenerateMessage] = useState<
+    string | null
+  >(null);
+
+  const showGenerateBlockedFeedback = () => {
+    setBlockedGenerateMessage(
+      "An edit is currently in progress. Please wait for it to finish before generating a new website.",
+    );
+  };
 
   if (isLaunching) {
     return <LaunchAnimation prompt={generationPrompt || prompt} />;
   }
 
-  if (status === "loading" && !isGenerationMinimized) {
-    return (
-      <GenerationProgress
-        prompt={generationPrompt}
-        progressMessages={progressMessages}
-        onCancel={cancelGeneration}
-        isMinimized={false}
-        onToggleMinimize={() => setIsGenerationMinimized(true)}
-      />
-    );
-  }
-
   return (
     <>
-      {status === "loading" && isGenerationMinimized && (
+      {status === "loading" && (
         <div className="w-full max-w-2xl mb-6">
           <button
-            onClick={() => setIsGenerationMinimized(false)}
+            onClick={onViewGenerationProgress}
             className="w-full flex items-center justify-between p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/15 transition group"
           >
             <div className="flex items-center gap-3">
@@ -181,16 +175,16 @@ export default function CreateContent({
                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse" />
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-blue-300">
+                <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
                   Building your app...
                 </p>
-                <p className="text-xs text-blue-400/70">
+                <p className="text-xs text-blue-600/90 dark:text-blue-300/80">
                   Click to view progress
                 </p>
               </div>
             </div>
             <svg
-              className="w-5 h-5 text-blue-400 group-hover:translate-x-1 transition-transform"
+              className="w-5 h-5 text-blue-600 dark:text-blue-400 group-hover:translate-x-1 transition-transform"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -483,6 +477,46 @@ export default function CreateContent({
         </div>
       )}
 
+      {isEditing && blockedGenerateMessage && (
+        <div className="mb-3 p-4 bg-blue-50 border border-blue-300 rounded-xl flex items-start gap-3 dark:bg-blue-500/10 dark:border-blue-500/30">
+          <svg
+            className="w-5 h-5 text-blue-700 dark:text-blue-300 flex-shrink-0 mt-0.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <p className="text-sm text-blue-800 dark:text-blue-200 font-medium">
+            {blockedGenerateMessage}
+          </p>
+          <button
+            onClick={() => setBlockedGenerateMessage(null)}
+            className="text-blue-700 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200 transition"
+            aria-label="Dismiss message"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {authPromptWarning && (
         <div className="mb-3 p-4 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-3 dark:bg-amber-500/10 dark:border-amber-500/30">
           <svg
@@ -542,7 +576,17 @@ export default function CreateContent({
         </div>
       )}
 
-      <form onSubmit={handleGenerate} className="w-full max-w-3xl">
+      <form
+        onSubmit={(e) => {
+          if (isEditing) {
+            e.preventDefault();
+            showGenerateBlockedFeedback();
+            return;
+          }
+          handleGenerate(e);
+        }}
+        className="w-full max-w-3xl"
+      >
         <div className="bg-bg-secondary/80 backdrop-blur-xl border border-border-primary rounded-2xl shadow-2xl shadow-black/30 overflow-hidden focus-within:border-border-secondary transition-colors w-full">
           <textarea
             ref={textareaRef}
@@ -552,6 +596,10 @@ export default function CreateContent({
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 if (prompt.trim()) {
+                  if (isEditing) {
+                    showGenerateBlockedFeedback();
+                    return;
+                  }
                   handleGenerate(e as unknown as React.FormEvent);
                 }
               }
@@ -728,52 +776,67 @@ export default function CreateContent({
                 )}
               </div>
             </div>
-            <button
-              type="submit"
-              disabled={!prompt.trim() || checkingAuthIntent || isUploadingFiles}
-              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {checkingAuthIntent || isUploadingFiles ? (
-                <svg
-                  className="w-4 h-4 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
+            <div className="relative w-full sm:w-auto">
+              <button
+                type="submit"
+                disabled={
+                  !prompt.trim() || checkingAuthIntent || isUploadingFiles || isEditing
+                }
+                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {checkingAuthIntent || isUploadingFiles ? (
+                  <svg
+                    className="w-4 h-4 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
                     stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-              ) : (
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M13 10V3L4 14h7v7l9-11h-7z"
-                  />
-                </svg>
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+                  </svg>
+                )}
+                {isUploadingFiles
+                  ? "Uploading files..."
+                  : checkingAuthIntent
+                    ? "Checking..."
+                    : isEditing
+                      ? "Edit in progress"
+                      : "Generate"}
+              </button>
+              {isEditing && (
+                <button
+                  type="button"
+                  onClick={showGenerateBlockedFeedback}
+                  className="absolute inset-0 z-10 cursor-not-allowed rounded-lg bg-transparent"
+                  aria-label="Generation is disabled while edit is in progress"
+                  title="Generation is disabled while edit is in progress"
+                />
               )}
-              {isUploadingFiles
-                ? "Uploading files..."
-                : checkingAuthIntent
-                  ? "Checking..."
-                  : "Generate"}
-            </button>
+            </div>
           </div>
         </div>
       </form>

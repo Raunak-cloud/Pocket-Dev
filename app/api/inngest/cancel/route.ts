@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { INNGEST_APP_ID, inngest } from "@/lib/inngest-client";
+import { clearActiveRunByRunId } from "@/lib/server/inngest-active-runs";
 
 type CancelRequestBody = {
   projectId?: string;
@@ -70,6 +71,10 @@ export async function POST(request: NextRequest) {
   let eventCancelled = false;
   let remoteCancelled = false;
   const remoteAttempts: RemoteAttemptResult[] = [];
+
+  await clearActiveRunByRunId(projectId).catch((error) => {
+    console.warn("[Inngest Cancel API] Failed to clear active run:", error);
+  });
 
   // Local cancellation marker for client polling.
   try {

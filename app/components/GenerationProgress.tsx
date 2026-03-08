@@ -245,32 +245,35 @@ export default function GenerationProgress({
     return (
       <button
         onClick={onToggleMinimize}
-        className={`${minimizedPositionClass} flex items-center gap-3 px-5 py-3.5 bg-bg-secondary/90 backdrop-blur-xl border border-border-secondary/50 rounded-2xl shadow-2xl shadow-blue-500/10 hover:border-blue-500/30 hover:shadow-blue-500/20 transition-all duration-300 group`}
+        className={`${minimizedPositionClass} w-[min(30rem,calc(100vw-2rem))] flex items-center gap-4 px-5 py-4 bg-gradient-to-r from-bg-secondary/95 to-bg-tertiary/90 backdrop-blur-xl border-2 border-blue-500/25 rounded-2xl shadow-2xl shadow-blue-500/20 hover:border-blue-400/45 hover:shadow-blue-500/30 transition-all duration-300 group`}
       >
         <div className="relative">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 flex items-center justify-center ring-1 ring-white/5">
-            <Logo size={24} animate />
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500/25 to-violet-500/25 flex items-center justify-center ring-1 ring-white/10">
+            <Logo size={28} animate />
           </div>
-          <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full animate-pulse ring-2 ring-bg-secondary" />
+          <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-blue-500 rounded-full animate-pulse ring-2 ring-bg-secondary" />
         </div>
-        <div className="text-left">
-          <p className="text-sm font-medium text-text-primary">
+        <div className="text-left min-w-0 flex-1">
+          <p className="text-base font-semibold text-text-primary truncate">
             {isEditMode ? "Editing App" : `Building ${getAppType()}`}
           </p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <div className="w-24 h-1.5 bg-border-secondary/50 rounded-full overflow-hidden">
+          <p className="text-[12px] text-blue-300/90 font-medium mt-0.5">
+            Click to view live progress
+          </p>
+          <div className="flex items-center gap-2.5 mt-2">
+            <div className="w-40 h-2 bg-border-secondary/60 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-blue-500 to-violet-500 rounded-full transition-all duration-500"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <span className="text-xs text-text-tertiary tabular-nums">
+            <span className="text-xs font-semibold text-text-secondary tabular-nums min-w-[2.5rem] text-right">
               {Math.round(progress)}%
             </span>
           </div>
         </div>
         <svg
-          className="w-4 h-4 text-text-muted group-hover:text-blue-400 transition-colors ml-1"
+          className="w-5 h-5 text-blue-300/80 group-hover:text-blue-300 transition-colors ml-1 flex-shrink-0"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"

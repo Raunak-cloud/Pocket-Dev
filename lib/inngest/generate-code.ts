@@ -7,7 +7,6 @@
 
 import { inngest } from "@/lib/inngest-client";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { GoogleAICacheManager } from "@google/generative-ai/server";
 import { lintCode } from "@/lib/eslint-lint";
 import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
 import { generateImagesFunction } from "@/lib/inngest/generate-images";
@@ -55,6 +54,7 @@ import {
   SUPABASE_API_REFERENCE,
 } from "@/lib/prompts";
 import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
+import { clearActiveRunByAuthUserId } from "@/lib/server/inngest-active-runs";
 
 const MODEL = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
@@ -422,44 +422,6 @@ async function generateWithGemini(
   });
 
   return result.response.text();
-}
-
-/** Generate using a Gemini context cache — no need to resend existing files in the prompt. */
-async function generateWithGeminiCached(
-  cacheName: string,
-  systemPrompt: string,
-  userPrompt: string,
-): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY not found");
-
-  const cacheManager = new GoogleAICacheManager(apiKey);
-  const cachedContent = await cacheManager.get(cacheName);
-
-  const gemini = new GoogleGenerativeAI(apiKey);
-  const model = gemini.getGenerativeModelFromCachedContent(cachedContent, {
-    systemInstruction: systemPrompt,
-    generationConfig: {
-      maxOutputTokens: MAX_TOKENS,
-      temperature: 0.7,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const result = await model.generateContent(userPrompt);
-  return result.response.text();
-}
-
-/** Merge partial AI output (changed files only) with the full existing file set. */
-function mergeWithExistingFiles(
-  existingFiles: Array<{ path: string; content: string }>,
-  returnedFiles: Array<{ path: string; content: string }>,
-): Array<{ path: string; content: string }> {
-  const returnedPaths = new Set(returnedFiles.map((f) => f.path));
-  return [
-    ...existingFiles.filter((f) => !returnedPaths.has(f.path)),
-    ...returnedFiles,
-  ];
 }
 
 async function sendProgress(projectId: string, message: string) {
@@ -3301,8 +3263,8 @@ function ensureFooterInLayout(
 
   const layout = files[layoutIndex];
 
-  // Already imported — nothing to do
-  if (/import\s+Footer\b/i.test(layout.content)) return files;
+  // Already imported (default or named) — nothing to do
+  if (/import\s+(?:Footer\b|\{[^}]*\bFooter\b)/i.test(layout.content)) return files;
 
   // Determine import alias from footer file path
   // e.g. "components/Footer.tsx" → "@/components/Footer"
@@ -3492,7 +3454,7 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
 - Runtime dependency policy: if you generate package.json, set "next": "${GENERATED_NEXT_VERSION}", "react": "${GENERATED_REACT_VERSION}", and "react-dom": "${GENERATED_REACT_VERSION}". Do NOT pin Next 14/15.
-- MANDATORY FOOTER COMPONENT: Always generate components/Footer.tsx as a standalone shared component. Import and render it inside app/layout.tsx directly below {children} (alongside Navbar) so it appears on every page automatically — do NOT add it individually to each page file. The footer must include: logo/brand name, grouped navigation links, copyright notice, and optionally social links or tagline. Never skip this file.
+- MANDATORY FOOTER COMPONENT: Always generate components/Footer.tsx as a standalone shared component using a DEFAULT export (export default function Footer()). Import it in app/layout.tsx as a default import: import Footer from "@/components/Footer". Never use named exports for Footer. Render it directly below {children} (alongside Navbar) so it appears on every page automatically — do NOT add it individually to each page file. The footer must include: logo/brand name, grouped navigation links, copyright notice, and optionally social links or tagline. Never skip this file.
 - Return a complete runnable project with app/layout.tsx, app/page.tsx, app/not-found.tsx, app/loading.tsx, app/globals.css, AND a separate app/{route}/page.tsx for every navigation link.
 - Generate app/not-found.tsx — a styled 404 page that matches the site's design (colors, fonts, layout). Include the site's navbar/header so auth state stays visible if auth is enabled. Must have a link back to the home page.
 - EVERY internal link in the navbar/header/footer (e.g., "About", "Services", "Pricing", "Contact", "Blog") MUST have a real corresponding page file. No dead links.
@@ -3561,6 +3523,7 @@ NAV + MOBILE RULES:
 - Prevent horizontal scrolling.
 - Keep header/navbar pinned at top using "fixed top-0 left-0 right-0 w-full z-50". Never use "sticky" alone — use "fixed" so it stays on screen during scroll on all devices including iOS Safari.
 - CRITICAL LAYOUT RULE: When the navbar is fixed/sticky, the FIRST content section (hero, main content, page body) MUST have top padding equal to the navbar height to prevent content rendering underneath the nav. Use "pt-16" for a 64px navbar, "pt-20" for an 80px navbar, or "pt-[navHeight]" matching the actual rendered height. Apply this padding to the wrapper element directly below the navbar (e.g., <main className="pt-16 md:pt-20">). This is mandatory — never let hero headlines, images, or content start at y=0 when the navbar is fixed.
+- HERO SPACING RULE: The gap between the bottom of the navbar and the start of the hero section content must be tight and professional — only enough to clear the nav (pt-16 or pt-20). Do NOT add extra top margin/padding on the hero section itself (no mt-8, mt-12, mt-16, py-24 at the top, etc.). The hero must start immediately below the navbar with no visible dead whitespace. Keep hero internal padding to py-16 md:py-20 maximum — never py-32, py-40, or larger values that create excessive blank space above the headline.
 - Navbar height must be consistent and predictable: use a fixed height class like "h-16" or "h-20" on the nav element itself so the matching pt-* on main is always correct.
 - Mobile menu must render above ALL content with clear background contrast and FULL viewport height.
 - CRITICAL MOBILE MENU OVERLAY: When the mobile menu is open, it MUST use "fixed inset-0 z-[200]" (top-0 right-0 bottom-0 left-0) so it covers the ENTIRE viewport — no page content should be visible underneath or below the menu. The menu panel itself must ALSO fill the full height using "h-full" or "min-h-screen". Use a fully opaque background (e.g., "bg-white" or "bg-gray-900") — NOT semi-transparent (no bg-opacity-*, no bg-white/80). The structure must be: outer div with classes "fixed inset-0 z-[200] bg-[solidColor] flex flex-col" → header row → scrollable nav links list filling remaining height. Any remaining vertical space after links must be filled or use flex-1 so no page content peeks through at the bottom.
@@ -3631,11 +3594,7 @@ const data = await res.json();`;
       },
     );
 
-    const cachedContentName = (event.data as Record<string, unknown>)?.cachedContentName as string | undefined;
-    const cachedEditPrompt = (event.data as Record<string, unknown>)?.cachedEditPrompt as string | undefined;
-    const existingFilesRaw = (event.data as Record<string, unknown>)?.existingFiles as Array<{ path: string; content: string }> | undefined;
-
-    // Step 2: Generate with Gemini (cached fast path for edits, standard path otherwise)
+    // Step 2: Generate with Gemini
     const generatedText = await step.run("generate-with-gemini", async () => {
       await sendProgress(projectId, "[2/9] Generating your app...");
       if (await checkIfCancelled(projectId)) {
@@ -3653,28 +3612,6 @@ const data = await res.json();`;
           generationSystemPrompt += "\n" + SUPABASE_API_REFERENCE;
         }
 
-        // Fast path: use Gemini context cache — no need to resend all files
-        if (isEditRequest && cachedContentName) {
-          console.log(`[CachedEdit] Using context cache: ${cachedContentName}`);
-          await sendProgress(projectId, "[2/9] Applying edit with cached context...");
-          try {
-            // Use the minimal cached prompt (no file contents) when available;
-            // fall back to the full prompt if not provided.
-            const promptForCache = cachedEditPrompt ?? String(finalUserPrompt);
-            const text = await generateWithGeminiCached(
-              cachedContentName,
-              String(generationSystemPrompt),
-              promptForCache,
-            );
-            console.log("[CachedEdit] Response length:", text.length, "chars");
-            return text;
-          } catch (cacheErr) {
-            console.warn("[CachedEdit] Cache miss or expired — falling back to standard generation:", cacheErr);
-            // Fall through to standard generation below
-          }
-        }
-
-        // Standard path
         console.log("Using Gemini 3 Flash Preview...");
         const text = await generateWithGemini(String(generationSystemPrompt), String(finalUserPrompt), pdfAttachments);
         console.log("Gemini response length:", text.length, "chars");
@@ -3744,13 +3681,8 @@ const data = await res.json();`;
         throw new Error(`Unable to parse and normalize AI response: ${reason}`);
       }
 
-      // Merge partial output with existing files when the cached edit path returned only changed files
-      const mergedFiles = (isEditRequest && existingFilesRaw && existingFilesRaw.length > 0)
-        ? mergeWithExistingFiles(existingFilesRaw, normalizedProject.files)
-        : normalizedProject.files;
-
       let files = ensureRequiredFiles(
-        mergedFiles,
+        normalizedProject.files,
         normalizedProject.dependencies,
         integrationRequirements,
         managedAuthConfig,
@@ -4834,6 +4766,19 @@ const data = await res.json();`;
       return result;
     });
 
+    if (userId && userId !== "anonymous") {
+      await step.run("clear-active-run", async () => {
+        try {
+          await clearActiveRunByAuthUserId(String(userId), projectId);
+        } catch (clearErr) {
+          console.warn(
+            "[Inngest] Failed to clear active run after completion:",
+            clearErr,
+          );
+        }
+      });
+    }
+
     await sendProgress(projectId, "Ready to preview!");
 
     return {
@@ -4855,6 +4800,16 @@ const data = await res.json();`;
         projectId,
         err instanceof Error ? err.message : String(err),
       );
+      if (userId && userId !== "anonymous") {
+        await clearActiveRunByAuthUserId(String(userId), projectId).catch(
+          (clearErr) => {
+            console.warn(
+              "[Inngest] Failed to clear active run after failure:",
+              clearErr,
+            );
+          },
+        );
+      }
       throw err; // Re-throw so Inngest marks the run as failed
     }
   },
