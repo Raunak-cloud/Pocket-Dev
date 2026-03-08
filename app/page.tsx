@@ -3909,9 +3909,10 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
       }
 
       const replacementUrl = uploaded[0].url;
+      const oldSrc = selectedPreviewImage.resolvedSrc || selectedPreviewImage.src;
       const updatedProject = replaceNthImageSrcInProject(
         project,
-        selectedPreviewImage.resolvedSrc || selectedPreviewImage.src,
+        oldSrc,
         replacementUrl,
         selectedPreviewImage.occurrence,
       );
@@ -3929,6 +3930,13 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         await updateProjectInSupabase(currentProjectId, updatedProject);
         if (publishedUrl) setHasUnpublishedChanges(true);
       }
+
+      // Best-effort: delete the old image from storage now that it's been replaced
+      fetch("/api/images/delete-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: oldSrc }),
+      }).catch(() => {});
 
       // Show success feedback
       setTokenToast(
@@ -4017,9 +4025,10 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         throw new Error("AI regeneration did not produce a valid image URL");
       }
 
+      const oldSrcRegen = selectedPreviewImage.resolvedSrc || selectedPreviewImage.src;
       const updatedProject = replaceNthImageSrcInProject(
         project,
-        selectedPreviewImage.resolvedSrc || selectedPreviewImage.src,
+        oldSrcRegen,
         regeneratedUrl,
         selectedPreviewImage.occurrence,
       );
@@ -4032,6 +4041,13 @@ OVERRIDE: If the user explicitly requested a different behavior (e.g. "just link
         await updateProjectInSupabase(currentProjectId, updatedProject);
         if (publishedUrl) setHasUnpublishedChanges(true);
       }
+
+      // Best-effort: delete the old image from storage now that it's been replaced
+      fetch("/api/images/delete-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: oldSrcRegen }),
+      }).catch(() => {});
 
       // Show success feedback
       setTokenToast(

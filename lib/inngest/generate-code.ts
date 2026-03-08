@@ -13,6 +13,11 @@ import { ensureProviderGuardsForGeneratedFiles } from "@/lib/provider-guards";
 import { generateImagesFunction } from "@/lib/inngest/generate-images";
 import { prisma, withPrismaRetry } from "@/lib/prisma";
 import {
+  collectGeneratedStorageUrlsFromProjectData,
+  deleteGeneratedStorageUrls,
+  parseGeneratedFiles,
+} from "@/lib/server/image-storage-cleanup";
+import {
   acquireAuthConfigForBindingKey,
   applySqlToManagedProject,
   rebindAuthConfigBindingKey,
@@ -4691,6 +4696,24 @@ const data = await res.json();`;
             },
           }),
         );
+
+        // Best-effort: delete images from the old project that are no longer
+        // referenced in the newly generated files.
+        try {
+          const oldFiles = parseGeneratedFiles(existing.files);
+          const oldUrls = collectGeneratedStorageUrlsFromProjectData(oldFiles, existing.imageCache);
+          const newUrls = collectGeneratedStorageUrlsFromProjectData(filesWithImages, existing.imageCache);
+          const orphaned = new Set<string>();
+          for (const url of oldUrls) {
+            if (!newUrls.has(url)) orphaned.add(url);
+          }
+          if (orphaned.size > 0) {
+            await deleteGeneratedStorageUrls(orphaned);
+          }
+        } catch (cleanupErr) {
+          console.warn("[Inngest] Could not clean up orphaned images:", cleanupErr);
+        }
+
         return existing.id;
       }
 
