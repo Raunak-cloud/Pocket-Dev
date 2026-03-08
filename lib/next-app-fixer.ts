@@ -1123,6 +1123,32 @@ export function collectResponsiveAndNavIssues(files: GeneratedFile[]): LintIssue
           message: "Fixed navbar detected but no top-padding found on <main> or layout wrapper. Add pt-16 (or matching navbar height) to <main> so hero content is not hidden underneath the navbar.",
         });
       }
+
+      // Detect oversized first-fold spacing (blank band under fixed navbar).
+      const homePageFile = sourceFiles.find((f) =>
+        /^app\/page\.(?:tsx|jsx|ts|js)$/i.test(f.path.replace(/\\/g, "/")),
+      );
+      if (homePageFile && (mainHasPaddingTop || layoutHasPaddingTop)) {
+        const topChunk = homePageFile.content.split("\n").slice(0, 260).join("\n");
+        const hasOversizedHeroTopSpacing =
+          /<section[\s\S]{0,260}className\s*=\s*["'\x60][^"'\x60]*(?:\bmt-(?:1[0-9]|[2-9]\d)\b|\bpt-(?:1[2-9]|[2-9]\d)\b|\bpy-(?:2[0-9]|[3-9]\d)\b)[^"'\x60]*["'\x60]/i.test(
+            topChunk,
+          ) ||
+          /<(?:main|section)[\s\S]{0,320}className\s*=\s*["'\x60][^"'\x60]*\bhero\b[^"'\x60]*(?:\bmt-(?:1[0-9]|[2-9]\d)\b|\bpt-(?:1[2-9]|[2-9]\d)\b|\bpy-(?:2[0-9]|[3-9]\d)\b)[^"'\x60]*["'\x60]/i.test(
+            topChunk,
+          );
+
+        if (hasOversizedHeroTopSpacing) {
+          issues.push({
+            path: homePageFile.path,
+            line: 1,
+            column: 1,
+            rule: "ux/navbar-hero-gap",
+            message:
+              "Fixed navbar offset is present, but the hero/first section has oversized top spacing (mt/pt/py) causing a large blank gap below the navbar. Reduce first-section top spacing and remove hero margin-top.",
+          });
+        }
+      }
     }
   }
 
@@ -1398,5 +1424,64 @@ export function applyDeterministicUseClientFixes(
     if (SERVER_COMPONENT_MARKERS_RE.test(file.content)) return file;
     console.log(`[UseClientFix] Adding "use client" to ${file.path}`);
     return { ...file, content: `"use client";\n\n${file.content}` };
+  });
+}
+
+/**
+ * Tightens oversized first-fold hero spacing when a fixed navbar offset already exists.
+ * This prevents large blank gaps between navbar and hero headline.
+ */
+export function applyDeterministicNavbarHeroGapFixes(
+  files: GeneratedFile[],
+  issues: LintIssue[],
+): GeneratedFile[] {
+  const hasHeroGapIssue = issues.some((i) => i.rule === "ux/navbar-hero-gap");
+  if (!hasHeroGapIssue) return files;
+
+  const targetPaths = new Set(
+    issues
+      .filter((i) => i.rule === "ux/navbar-hero-gap")
+      .map((i) => i.path.replace(/\\/g, "/")),
+  );
+
+  const tightenClassList = (classList: string): string => {
+    let next = classList;
+
+    // Remove large hero top margins and collapse to zero.
+    next = next.replace(/\b(?:md:)?mt-(?:1[0-9]|[2-9]\d)\b/g, "mt-0");
+
+    // Clamp top padding for first fold.
+    next = next.replace(/\bpt-(?:1[2-9]|[2-9]\d)\b/g, "pt-6");
+    next = next.replace(/\bmd:pt-(?:1[2-9]|[2-9]\d)\b/g, "md:pt-8");
+
+    // Clamp oversized symmetric vertical padding.
+    next = next.replace(/\bpy-(?:2[0-9]|[3-9]\d)\b/g, "py-12");
+    next = next.replace(/\bmd:py-(?:2[0-9]|[3-9]\d)\b/g, "md:py-16");
+
+    return next.replace(/\s+/g, " ").trim();
+  };
+
+  return files.map((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    if (!targetPaths.has(normalizedPath)) return file;
+    if (!/\.(tsx|jsx|ts|js)$/i.test(file.path)) return file;
+
+    const sectionClassRegex =
+      /<section([^>]*?)className\s*=\s*(["'\x60])([^"'\x60]*)(\2)([^>]*)>/i;
+    const match = sectionClassRegex.exec(file.content);
+    if (!match) return file;
+
+    const originalClasses = match[3];
+    const updatedClasses = tightenClassList(originalClasses);
+    if (updatedClasses === originalClasses) return file;
+
+    const updatedTag = `<section${match[1]}className=${match[2]}${updatedClasses}${match[4]}${match[5]}>`;
+    const updatedContent =
+      file.content.slice(0, match.index) +
+      updatedTag +
+      file.content.slice(match.index + match[0].length);
+
+    console.log(`[HeroGapFix] Tightened first-fold spacing in ${file.path}`);
+    return { ...file, content: updatedContent };
   });
 }

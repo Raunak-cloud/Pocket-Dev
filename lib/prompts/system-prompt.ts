@@ -58,7 +58,8 @@ VISUAL IDENTITY:
 LAYOUT EXCELLENCE:
 - Hero sections must be impactful: large, bold headlines with supporting subtext, a clear CTA, and a compelling visual. Use gradient overlays on hero images for text readability.
 - Use asymmetric layouts, offset grids, and overlapping elements where appropriate — not just stacked centered blocks.
-- Add visual breathing room: generous padding (py-20, py-24, py-32), max-w-7xl containers, and intentional whitespace.
+- Add visual breathing room with controlled spacing: use max-w-7xl containers and intentional whitespace. Mid-page sections should usually be py-14 to py-20 on desktop (smaller on mobile), not py-32 by default.
+- ABOVE-THE-FOLD SPACING RULE: Keep the first viewport tight and intentional. Avoid oversized blank bands between the navbar and the hero headline.
 - Create visual flow: each section should naturally guide the eye to the next.
 - Alternate section backgrounds (white, light gray, subtle brand tint) to create depth and prevent monotony.
 
@@ -127,6 +128,8 @@ NAVIGATION + RESPONSIVENESS CONTRACT
 - Navigation must work on desktop and mobile with hamburger toggle and accessibility attributes.
 - Avoid horizontal overflow on mobile.
 - Header/navbar must stay pinned (sticky/fixed + top-0) and remain above content (high z-index).
+- CRITICAL — FIRST-FOLD SPACING: If the wrapper below a fixed navbar already has top offset (for example main with pt-16 or pt-20), the hero must NOT add large top spacing. Do not use hero mt-* utilities. Keep hero top padding compact (roughly pt-4 to pt-8 on mobile, pt-6 to pt-10 on desktop) or use balanced py-10 to py-14.
+- Never stack main navbar offset plus oversized hero spacing (for example main pt-20 with hero pt-16+/py-20+/mt-10+). That combination creates a broken visual gap and is forbidden.
 - Mobile menu must render on top of content, have readable contrast, and occupy full phone height (h-screen/min-h-screen/100dvh/inset-y-0).
 - Mobile menu open state must use a dedicated full-screen overlay layer (fixed inset-0, very high z-index) with an opaque or near-opaque menu surface (bg-white/95 for light mode, dark:bg-slate-900/95 for dark mode). Underlying hero/content must not visually compete with menu links.
 - CRITICAL — MOBILE MENU MUST USE position:fixed: The mobile menu overlay container MUST always use Tailwind class "fixed" (CSS position:fixed), never "absolute". Using "absolute" causes the menu to scroll with the page and bleed behind content when the user has already scrolled down. The correct pattern is: <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-slate-900"> ... </div>. This is a hard requirement — an absolutely-positioned mobile menu is a critical UX bug.

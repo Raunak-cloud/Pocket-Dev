@@ -64,7 +64,7 @@ export function buildLintRepairPrompt(args: {
   const { originalPrompt, files, dependencies, lintIssues } = args;
 
   const hasNavigationUxIssue = lintIssues.some((issue) =>
-    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|mobile-menu-partial|mobile-menu-no-close|navbar-hero-overlap|navbar-invisible-text|badge-above-navbar|dashboard-blank-mobile|responsive-breakpoints|mobile-overflow-guard)$/.test(
+    /^ux\/(?:mobile-navbar|navigation-required|navbar-stacking|navbar-nested-scroll|mobile-menu-overlay|mobile-menu-visibility|mobile-menu-height|mobile-menu-partial|mobile-menu-no-close|navbar-hero-overlap|navbar-hero-gap|navbar-invisible-text|badge-above-navbar|dashboard-blank-mobile|responsive-breakpoints|mobile-overflow-guard)$/.test(
       issue.rule ?? "",
     ),
   );
@@ -84,11 +84,14 @@ export function buildLintRepairPrompt(args: {
   // Gemini from rewriting unrelated files.
   const affectedPaths = new Set(lintIssues.map((i) => i.path));
 
-  // Cross-file nav fixes: navbar-hero-overlap fix requires layout/page; invisible-text fix may need layout too
+  // Cross-file nav fixes: navbar overlap/gap fixes require layout/page; invisible-text fix may need layout too
   const hasHeroOverlapIssue = lintIssues.some(
     (i) => i.rule === "ux/navbar-hero-overlap",
   );
-  if (hasHeroOverlapIssue) {
+  const hasHeroGapIssue = lintIssues.some(
+    (i) => i.rule === "ux/navbar-hero-gap",
+  );
+  if (hasHeroOverlapIssue || hasHeroGapIssue) {
     affectedPaths.add("app/layout.tsx");
     affectedPaths.add("app/page.tsx");
   }
@@ -124,6 +127,7 @@ ${
     ? `- Navigation quality constraints:
   - Header/navbar must stay visible and pinned at top on mobile using "fixed top-0 left-0 right-0 w-full z-50" with a consistent height (h-16 or h-20).
   - HERO OVERLAP FIX: If the navbar is fixed, the first content element after the navbar (main, section, or layout wrapper) MUST have pt-16 or pt-20 matching the navbar height. If the issue is in app/layout.tsx or app/page.tsx, include that file in your response and add the padding there.
+  - HERO GAP FIX: If main/layout already has navbar offset padding, do NOT stack large hero top spacing on top of it. Remove hero mt-* and reduce first-section top spacing (avoid hero pt-12+, py-20+, mt-10+). Keep first-fold spacing compact so the headline starts shortly below the navbar.
   - Mobile menu must open/close cleanly, anchored from the top layer.
   - FULL SCREEN OVERLAY: Mobile menu panel must use "fixed inset-0 z-[200]" (covers all 4 edges — top, right, bottom, left). Do NOT use only top-0 without bottom-0. The outer wrapper must be "fixed inset-0 z-[200] bg-[solidColor] flex flex-col". Inner panel must be h-full so no page content shows through at the bottom.
   - Mobile menu panel must use a FULLY OPAQUE background (bg-white, bg-gray-900, etc.) — no bg-opacity-*, no bg-white/80.

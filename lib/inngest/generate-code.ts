@@ -38,6 +38,7 @@ import {
   collectResponsiveAndNavIssues,
   applyKnownImportSpecifierFixups,
   applyDeterministicUndefinedReferenceImportFixes,
+  applyDeterministicNavbarHeroGapFixes,
   applyDeterministicProviderFixes,
   applyDeterministicUseClientFixes,
 } from "@/lib/next-app-fixer";
@@ -55,6 +56,7 @@ import {
 } from "@/lib/prompts";
 import { getInngestStatusApiUrl } from "@/lib/server/app-base-url";
 import { clearActiveRunByAuthUserId } from "@/lib/server/inngest-active-runs";
+import { upsertCompletionNotice } from "@/lib/server/inngest-completion-notices";
 
 const MODEL = process.env.GEMINI_MODEL ?? "gemini-3-flash-preview";
 const MAX_TOKENS = 65536;
@@ -3445,11 +3447,12 @@ DESIGN MANDATE — THE WEBSITE MUST LOOK PREMIUM:
 4. Build a clear HOME page structure: Hero → Social Proof/Stats → Features/Services → Testimonials → CTA → Footer. The Footer is MANDATORY — every generated website MUST have a footer.
 5. MULTI-PAGE: Generate a separate page file (app/{route}/page.tsx) for EVERY navigation link in the navbar/header/footer. If the nav has "About", "Services", "Pricing", "Blog", "Contact" — create app/about/page.tsx, app/services/page.tsx, app/pricing/page.tsx, app/blog/page.tsx, app/contact/page.tsx. Each sub-page must have real, meaningful content (hero + 1-2 content sections minimum), not just a placeholder. No dead links.
 6. Every section must have visual interest: alternating backgrounds, icon accents, card grids with hover effects, or image/text split layouts.
-6. Use generous whitespace (py-20 to py-32), large readable headings (text-4xl to text-6xl), and comfortable line heights.
-7. Add micro-interactions: hover:scale-105 on cards, transition-all duration-300, hover color shifts on buttons and links.
-8. Use Lucide React icons (from "lucide-react") for features, benefits, and UI elements.
-9. Write realistic, compelling copy that matches the business — no lorem ipsum or generic placeholder text.
-10. Ensure ALL text has strong contrast against its background — never place light text on light backgrounds or dark text on dark backgrounds.
+7. Use intentional whitespace with controlled spacing: mid-page sections (features, testimonials, CTA, etc.) should usually be py-14 to py-20 on desktop (smaller on mobile), not py-32 by default.
+8. ABOVE-THE-FOLD RULE: Keep the hero tight to the navbar. If <main> already has navbar offset padding (pt-16/pt-20), the hero must not add large top margin/padding. Keep hero top spacing compact (about pt-4 to pt-8 mobile, pt-6 to pt-10 desktop) or use balanced py-10 to py-14.
+9. Add micro-interactions: hover:scale-105 on cards, transition-all duration-300, hover color shifts on buttons and links.
+10. Use Lucide React icons (from "lucide-react") for features, benefits, and UI elements.
+11. Write realistic, compelling copy that matches the business — no lorem ipsum or generic placeholder text.
+12. Ensure ALL text has strong contrast against its background — never place light text on light backgrounds or dark text on dark backgrounds.
 
 CORE IMPLEMENTATION RULES:
 - Use Next.js App Router + TypeScript + Tailwind utility classes.
@@ -3523,7 +3526,8 @@ NAV + MOBILE RULES:
 - Prevent horizontal scrolling.
 - Keep header/navbar pinned at top using "fixed top-0 left-0 right-0 w-full z-50". Never use "sticky" alone — use "fixed" so it stays on screen during scroll on all devices including iOS Safari.
 - CRITICAL LAYOUT RULE: When the navbar is fixed/sticky, the FIRST content section (hero, main content, page body) MUST have top padding equal to the navbar height to prevent content rendering underneath the nav. Use "pt-16" for a 64px navbar, "pt-20" for an 80px navbar, or "pt-[navHeight]" matching the actual rendered height. Apply this padding to the wrapper element directly below the navbar (e.g., <main className="pt-16 md:pt-20">). This is mandatory — never let hero headlines, images, or content start at y=0 when the navbar is fixed.
-- HERO SPACING RULE: The gap between the bottom of the navbar and the start of the hero section content must be tight and professional — only enough to clear the nav (pt-16 or pt-20). Do NOT add extra top margin/padding on the hero section itself (no mt-8, mt-12, mt-16, py-24 at the top, etc.). The hero must start immediately below the navbar with no visible dead whitespace. Keep hero internal padding to py-16 md:py-20 maximum — never py-32, py-40, or larger values that create excessive blank space above the headline.
+- HERO SPACING (STRICT): The <main> offset padding (pt-16/pt-20) already pushes content below the fixed navbar. Do NOT add hero margin-top (mt-*) and do NOT add large hero top padding on top of this offset (forbidden: hero pt-12+, py-20+, mt-10+). Keep hero top spacing compact (pt-4 to pt-8 on mobile, pt-6 to pt-10 on desktop) with larger bottom padding if needed.
+- FIRST-FOLD ACCEPTANCE CHECK: On both mobile and desktop, the hero headline must start shortly below the navbar rather than after a large blank band.
 - Navbar height must be consistent and predictable: use a fixed height class like "h-16" or "h-20" on the nav element itself so the matching pt-* on main is always correct.
 - Mobile menu must render above ALL content with clear background contrast and FULL viewport height.
 - CRITICAL MOBILE MENU OVERLAY: When the mobile menu is open, it MUST use "fixed inset-0 z-[200]" (top-0 right-0 bottom-0 left-0) so it covers the ENTIRE viewport — no page content should be visible underneath or below the menu. The menu panel itself must ALSO fill the full height using "h-full" or "min-h-screen". Use a fully opaque background (e.g., "bg-white" or "bg-gray-900") — NOT semi-transparent (no bg-opacity-*, no bg-white/80). The structure must be: outer div with classes "fixed inset-0 z-[200] bg-[solidColor] flex flex-col" → header row → scrollable nav links list filling remaining height. Any remaining vertical space after links must be filled or use flex-1 so no page content peeks through at the bottom.
@@ -3823,7 +3827,15 @@ const data = await res.json();`;
       dependencies = repaired.dependencies;
     }
     {
-      const remainingUx = collectResponsiveAndNavIssues(files);
+      let remainingUx = collectResponsiveAndNavIssues(files);
+      const heroGapIssues = remainingUx.filter(
+        (issue) => issue.rule === "ux/navbar-hero-gap",
+      );
+      if (heroGapIssues.length > 0) {
+        files = applyDeterministicNavbarHeroGapFixes(files, heroGapIssues);
+        remainingUx = collectResponsiveAndNavIssues(files);
+      }
+
       if (remainingUx.length > 0) {
         const first = remainingUx[0];
         console.warn(
@@ -4767,6 +4779,24 @@ const data = await res.json();`;
     });
 
     if (userId && userId !== "anonymous") {
+      await step.run("queue-completion-notice", async () => {
+        try {
+          await upsertCompletionNotice({
+            authUserId: String(userId),
+            runId: projectId,
+            mode: isEditRequest ? "edit" : "generation",
+            message: isEditRequest
+              ? "Your edit is complete. Open My Projects to review the updated preview."
+              : "Your generated app is ready. Open My Projects to preview it.",
+          });
+        } catch (noticeErr) {
+          console.warn(
+            "[Inngest] Failed to queue completion notice:",
+            noticeErr,
+          );
+        }
+      });
+
       await step.run("clear-active-run", async () => {
         try {
           await clearActiveRunByAuthUserId(String(userId), projectId);

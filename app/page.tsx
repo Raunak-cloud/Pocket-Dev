@@ -79,8 +79,6 @@ const INTEGRATIONS_CONFIG_KEY = "__pocketIntegrations";
 const INITIAL_GENERATION_PROMPT_CONFIG_KEY = "__pocketInitialGenerationPrompt";
 const ACTIVE_GENERATION_STORAGE_KEY = "__pocketActiveGeneration";
 const ACTIVE_GENERATION_VIEW_PREFERENCE_KEY = "__pocketActiveGenerationView";
-const BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY =
-  "__pocketBackgroundCompletionNotice";
 const LAST_OPEN_PROJECT_STORAGE_KEY = "__pocketLastOpenProjectId";
 const MAX_EDIT_HISTORY_ENTRIES = 10;
 
@@ -610,6 +608,7 @@ function ReactGeneratorContent() {
   const editStartTimeRef = useRef<number>(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const currentGenerationProjectIdRef = useRef<string | null>(null);
+  const completionNoticeFetchInFlightRef = useRef(false);
   const resumeCheckedRef = useRef(false);
   const restoreLastProjectCheckedRef = useRef(false);
   const completedRunHandlingRef = useRef<string | null>(null);
@@ -683,19 +682,12 @@ function ReactGeneratorContent() {
 
   const clearBackgroundCompletionNotice = useCallback(() => {
     setBackgroundCompletionNotice(null);
-    if (typeof window === "undefined") return;
-    localStorage.removeItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
   }, []);
 
   const showBackgroundCompletionNotice = useCallback((message: string) => {
     const safeMessage = message.trim();
     if (!safeMessage) return;
     setBackgroundCompletionNotice(safeMessage);
-    if (typeof window === "undefined") return;
-    localStorage.setItem(
-      BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY,
-      safeMessage,
-    );
   }, []);
 
   const readActiveGenerationSession =
@@ -776,17 +768,63 @@ function ReactGeneratorContent() {
     [user?.uid],
   );
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = localStorage.getItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
-    if (!stored) return;
-    const message = stored.trim();
-    if (!message) {
-      localStorage.removeItem(BACKGROUND_COMPLETION_NOTICE_STORAGE_KEY);
-      return;
+  const markCompletionNoticeViewedForRun = useCallback(
+    async (runId: string) => {
+      const safeRunId = runId.trim();
+      if (!safeRunId || !user?.uid) return;
+      try {
+        await fetch("/api/inngest/completion-notice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId: safeRunId }),
+        });
+      } catch {
+        // Best-effort consumption only.
+      }
+    },
+    [user?.uid],
+  );
+
+  const fetchServerCompletionNotice = useCallback(async () => {
+    if (!user?.uid || authLoading) return;
+    if (searchParams.get("completed_run")) return;
+    if (isEditing || status === "loading") return;
+    if (aiFeedback) return;
+    if (backgroundCompletionNotice) return;
+    if (!isUserOnScreen()) return;
+    if (completionNoticeFetchInFlightRef.current) return;
+
+    completionNoticeFetchInFlightRef.current = true;
+    try {
+      const response = await fetch("/api/inngest/completion-notice", {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        notice?: { message?: string } | null;
+      };
+      const message =
+        typeof data.notice?.message === "string"
+          ? data.notice.message.trim()
+          : "";
+      if (message) {
+        showBackgroundCompletionNotice(message);
+      }
+    } catch {
+      // Best-effort background notice fetch.
+    } finally {
+      completionNoticeFetchInFlightRef.current = false;
     }
-    setBackgroundCompletionNotice(message);
-  }, []);
+  }, [
+    aiFeedback,
+    authLoading,
+    backgroundCompletionNotice,
+    isEditing,
+    searchParams,
+    showBackgroundCompletionNotice,
+    status,
+    user?.uid,
+  ]);
 
   const persistLastOpenedProjectId = useCallback((projectId: string) => {
     if (typeof window === "undefined") return;
@@ -1365,6 +1403,7 @@ function ReactGeneratorContent() {
 
         if (completionVisible) {
           clearBackgroundCompletionNotice();
+          void markCompletionNoticeViewedForRun(session.runId);
           setAiFeedback(completionFeedback);
           setAiFeedbackIsNewGen(session.mode === "generation");
           setActiveSection("create");
@@ -1404,11 +1443,7 @@ function ReactGeneratorContent() {
           setActiveSection("create");
           setStatus("idle");
           clearLastOpenedProjectId();
-          showBackgroundCompletionNotice(
-            session.mode === "edit"
-              ? "Your edit is complete. Open My Projects to review the updated preview."
-              : "Your generated app is ready. Open My Projects to preview it.",
-          );
+          clearBackgroundCompletionNotice();
         }
         setCurrentGenerationProjectId(null);
         clearActiveGenerationSession();
@@ -1449,7 +1484,7 @@ function ReactGeneratorContent() {
     clearLastOpenedProjectId,
     clearActiveGenerationSession,
     fetchServerActiveGenerationSession,
-    showBackgroundCompletionNotice,
+    markCompletionNoticeViewedForRun,
     persistActiveGenerationSession,
     isRunMinimizedPreferred,
     readActiveGenerationSession,
@@ -1496,6 +1531,51 @@ function ReactGeneratorContent() {
       setIsMobileToolsDropdownOpen(false);
     }
   }, [isMobileViewport, isMobileToolsDropdownOpen]);
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+    void fetchServerCompletionNotice();
+  }, [authLoading, fetchServerCompletionNotice, user]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const handleVisibility = () => {
+      if (!isUserOnScreen()) return;
+      void fetchServerCompletionNotice();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    };
+  }, [fetchServerCompletionNotice]);
+
+  useEffect(() => {
+    if (!backgroundCompletionNotice) return;
+
+    let timer: number | null = null;
+    const scheduleAutoDismiss = () => {
+      if (timer) window.clearTimeout(timer);
+      if (!isUserOnScreen()) return;
+      timer = window.setTimeout(() => {
+        clearBackgroundCompletionNotice();
+      }, 7000);
+    };
+
+    scheduleAutoDismiss();
+    document.addEventListener("visibilitychange", scheduleAutoDismiss);
+    window.addEventListener("focus", scheduleAutoDismiss);
+
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", scheduleAutoDismiss);
+      window.removeEventListener("focus", scheduleAutoDismiss);
+    };
+  }, [backgroundCompletionNotice, clearBackgroundCompletionNotice]);
 
   useEffect(() => {
     if (isEditing) {
@@ -1804,6 +1884,7 @@ function ReactGeneratorContent() {
 
         if (completionVisible) {
           clearBackgroundCompletionNotice();
+          void markCompletionNoticeViewedForRun(session.runId);
           setAiFeedback(completionFeedback);
           setAiFeedbackIsNewGen(session.mode === "generation");
           setActiveSection("create");
@@ -1845,11 +1926,7 @@ function ReactGeneratorContent() {
           setActiveSection("create");
           setStatus("idle");
           clearLastOpenedProjectId();
-          showBackgroundCompletionNotice(
-            session.mode === "edit"
-              ? "Your edit is complete. Open My Projects to review the updated preview."
-              : "Your generated app is ready. Open My Projects to preview it.",
-          );
+          clearBackgroundCompletionNotice();
         }
       } catch (err) {
         if (cancelled) return;
@@ -1893,9 +1970,9 @@ function ReactGeneratorContent() {
     clearActiveGenerationSession,
     editPrompt,
     generationPrompt,
+    markCompletionNoticeViewedForRun,
     readActiveGenerationSession,
     searchParams,
-    showBackgroundCompletionNotice,
     syncIntegrationSelectionFromProject,
     user,
   ]);
